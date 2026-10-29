@@ -98,14 +98,33 @@ Before nontrivial tasks, explain intended behaviour, design and affected files. 
 
 Do not commit, push, create or modify GitHub issues, or change dependencies without explicit approval.
 
-## 10. Releases and infrastructure
+## 10. Documentation — Mandatory
+
+- Keep `README.md` as the concise entry point for purpose, status, installation, running and links to further guidance.
+- Document implemented user workflows as needed; do not present planned features as implemented.
+- Keep protocol constraints and hardware-safety reasoning close to relevant code, with references where useful.
+- Document API contracts where defined without duplicating clear type hints or docstrings.
+- Update user documentation when observable behaviour changes, but do not generate documentation mechanically for every code edit.
+- Avoid duplication and remove obsolete explanations.
+
+### Architecture documentation
+
+Maintain `docs/development.md` as a concise guide to major responsibilities, execution flows, component interactions and significant design decisions.
+
+**Think before editing this document.** Ask whether a change materially affects the architecture, adds rationale useful for understanding or maintenance, or makes existing explanations inaccurate. Check whether the information is already explained elsewhere.
+
+Only update it when doing so adds meaningful architectural understanding or corrects an inaccuracy. Do not automatically catalogue new files, classes, functions or routine implementation changes. Prefer refining existing explanations over accumulating sections.
+
+The document should help the developer understand and modify the application, not inventory its code.
+
+## 11. Releases and infrastructure
 
 - Keep packaging and GitHub Actions minimal; prefer built-in GitHub release features.
 - Do not build custom issue-to-release tracking, release databases or release-note generators.
 - Automate only work that demonstrably benefits from automation.
 - Apply the same simplicity rules to scripts, CI and test infrastructure.
 
-## 11. Stop and ask
+## 12. Stop and ask
 
 Stop and consult when requirements are ambiguous, complexity or scope grows, new abstractions/dependencies seem necessary, protocol safety is uncertain, or stronger model/reasoning effort is needed.
 
