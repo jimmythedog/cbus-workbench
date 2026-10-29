@@ -3,11 +3,13 @@
 }:
 
 pkgs.mkShell {
-  packages = with pkgs; [
-    python3
-    uv
+  packages = [
+    (pkgs.python3.withPackages (ps: [
+      ps.pyside6
+    ]))
+    pkgs.uv
+    pkgs.ruff
   ];
 
-  # Use the Python interpreter provided by Nix.
   UV_PYTHON_DOWNLOADS = "never";
 }

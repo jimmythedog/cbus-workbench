@@ -1,0 +1,7 @@
+[project]
+name = "cbus-workbench"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "pyside6>=6.12.0",
+]
