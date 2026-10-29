@@ -1,0 +1,32 @@
+
+#!/bin/sh
+
+set -e
+
+echo "Running pre-commit checks..."
+
+git diff --staged --check
+
+python_files=$(
+    git diff --staged --name-only --diff-filter=ACMR |
+        grep '\.py$' || true
+)
+
+if [ -n "$python_files" ]; then
+    if command -v ruff >/dev/null 2>&1; then
+        set -- ruff
+    elif command -v uvx >/dev/null 2>&1; then
+        set -- uvx ruff@0.17.2
+    else
+        echo "ERROR: Ruff or uvx is required." >&2
+        exit 1
+    fi
+
+    echo "Linting Python files..."
+    echo "$python_files" | xargs "$@" check
+
+    echo "Checking Python formatting..."
+    echo "$python_files" | xargs "$@" format --check
+fi
+
+echo "Pre-commit checks passed."
