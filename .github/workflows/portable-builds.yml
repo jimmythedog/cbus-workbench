@@ -1,0 +1,58 @@
+name: Portable application builds
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - issue-11-portable-builds
+
+jobs:
+  package:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            runner: windows-2025
+            artifact: cbus-workbench-windows-x64
+            bundle: dist/CBUS Workbench
+            executable: dist/CBUS Workbench/CBUS Workbench.exe
+          - name: macOS Intel
+            runner: macos-15-intel
+            artifact: cbus-workbench-macos-x64
+            bundle: dist/CBUS Workbench.app
+            executable: dist/CBUS Workbench.app
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install build dependencies
+        run: uv sync --no-dev
+      - name: Install PyInstaller
+        run: uv pip install --python .venv pyinstaller
+      - name: Bundle application
+        run: uv run --no-sync pyinstaller --noconfirm --clean --windowed --onedir --name "CBUS Workbench" main.py
+      - name: Verify bundle exists
+        shell: bash
+        run: test -e "${{ matrix.executable }}"
+      - name: Archive macOS application
+        if: runner.os == 'macOS'
+        shell: bash
+        run: ditto -c -k --sequesterRsrc --keepParent "dist/CBUS Workbench.app" "cbus-workbench-macos-x64.zip"
+      - name: Upload macOS archive
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: cbus-workbench-macos-x64.zip
+          if-no-files-found: error
+      - name: Upload portable bundle
+        if: runner.os != 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.bundle }}
+          if-no-files-found: error
