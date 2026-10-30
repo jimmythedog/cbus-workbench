@@ -26,6 +26,15 @@ class NodeView(QSplitter):
                     5: 1,
                 },
             )
+            node.consumed_events = {
+                "300:12": "Signal clear",
+                "300:13": "Signal danger",
+                "0:24": "Yard lighting",
+            }
+
+            node.ev_values = {
+                event: {1: 3, 2: 1, 3: 0} for event in node.consumed_events
+            }
 
             item = QListWidgetItem(f"{node.number} - {node.module_type}")
             item.setData(Qt.ItemDataRole.UserRole, node)

@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .node_events import NodeEvents
 from .node_variables import MdfNodeVariables, RawNodeVariables
 
 DEFAULT_NODE_TITLE = "Node details"
@@ -55,8 +56,8 @@ class NodeDetails(QWidget):
         self.variables.addWidget(self.raw_values)
         self.variables.addWidget(self.mdf_values)
 
-        variables_page = QWidget()
-        variables_layout = QVBoxLayout(variables_page)
+        self.variables_page = QWidget()
+        variables_layout = QVBoxLayout(self.variables_page)
 
         buttons = QStackedLayout()
 
@@ -86,15 +87,63 @@ class NodeDetails(QWidget):
 
         self.buttons = buttons
 
-        variables_layout.addLayout(buttons, 0)
+        # Node Variables page
         variables_layout.addWidget(self.variables, 1)
 
-        self.tabs.addTab(variables_page, "Node Variables")
+        variables_actions = QWidget()
+        variables_actions.setLayout(buttons)
 
-        self.tabs.addTab(QLabel("Consumed events will go here"), "Events")
+        # Events action buttons
+        events_actions = QWidget()
+        events_layout = QHBoxLayout(events_actions)
+
+        events_buttons = QStackedLayout()
+
+        self.events_edit_button = QPushButton("Edit")
+        self.events_edit_button.setEnabled(False)
+        self.events_edit_button.clicked.connect(self.start_events_editing)
+
+        view_buttons = QWidget()
+        view_layout = QHBoxLayout(view_buttons)
+        view_layout.addStretch()
+        view_layout.addWidget(self.events_edit_button)
+
+        self.events_save_button = QPushButton("Save")
+        self.events_save_button.clicked.connect(self.save_events_editing)
+
+        self.events_cancel_button = QPushButton("Cancel")
+        self.events_cancel_button.clicked.connect(self.cancel_events_editing)
+
+        edit_buttons = QWidget()
+        edit_layout = QHBoxLayout(edit_buttons)
+        edit_layout.addStretch()
+        edit_layout.addWidget(self.events_save_button)
+        edit_layout.addWidget(self.events_cancel_button)
+
+        events_buttons.addWidget(view_buttons)
+        events_buttons.addWidget(edit_buttons)
+
+        self.events_buttons = events_buttons
+        events_layout.addLayout(events_buttons)
+
+        # Tabs
+        self.tabs.addTab(self.variables_page, "Node Variables")
+
+        self.node_events = NodeEvents()
+        self.tabs.addTab(self.node_events, "Events")
+
         self.tabs.addTab(QLabel("Node backups will go here"), "Backups")
 
-        layout.addWidget(self.tabs)
+        # Shared bottom action area
+        self.action_area = QStackedWidget()
+        self.action_area.addWidget(variables_actions)
+        self.action_area.addWidget(events_actions)
+        self.action_area.addWidget(QWidget())  # Backups placeholder
+
+        self.tabs.currentChanged.connect(self.action_area.setCurrentIndex)
+
+        layout.addWidget(self.tabs, 1)
+        layout.addWidget(self.action_area)
 
     def save_editing(self):
         self.node.nv_values = self.editing_values
@@ -140,9 +189,35 @@ class NodeDetails(QWidget):
         self.tabs.setTabEnabled(1, not editing)  # Events
         self.tabs.setTabEnabled(2, not editing)  # Backups
 
+    def start_events_editing(self):
+        self.node_events.begin_edit()
+        self.events_buttons.setCurrentIndex(1)
+
+        self.tabs.setTabEnabled(0, False)  # Node Variables
+        self.tabs.setTabEnabled(2, False)  # Backups
+        self.editing_changed.emit(True)
+
+    def cancel_events_editing(self):
+        self.node_events.cancel_edit()
+        self.finish_events_editing()
+
+    def finish_events_editing(self):
+        self.events_buttons.setCurrentIndex(0)
+        self.tabs.setTabEnabled(0, True)
+        self.tabs.setTabEnabled(2, True)
+        self.editing_changed.emit(False)
+
+    def save_events_editing(self):
+        self.node_events.save_edit()
+        self.finish_events_editing()
+
     def show_node(self, current):
         self.node = current.data(Qt.ItemDataRole.UserRole) if current else None
-        self.edit_button.setEnabled(current is not None)
+        self.node_events.show_node(self.node)
+
+        enabled = current is not None
+        self.edit_button.setEnabled(enabled)
+        self.events_edit_button.setEnabled(enabled)
 
         if current is None:
             self.group.setTitle(DEFAULT_NODE_TITLE)
