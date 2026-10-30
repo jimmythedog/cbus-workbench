@@ -9,9 +9,16 @@ class LayoutView(QWidget):
 
         layout = QVBoxLayout(self)
 
-        tabs = QTabWidget()
-        tabs.addTab(NodeView(), "Nodes")
-        tabs.addTab(QLabel("Events will go here"), "Events")
-        tabs.addTab(QLabel("Backups will go here"), "Backups")
+        self.tabs = QTabWidget()
+        self.node_view = NodeView()
+        self.tabs.addTab(self.node_view, "Nodes")
+        self.tabs.addTab(QLabel("Events will go here"), "Events")
+        self.tabs.addTab(QLabel("Backups will go here"), "Backups")
 
-        layout.addWidget(tabs)
+        layout.addWidget(self.tabs)
+
+        self.node_view.details.editing_changed.connect(self.on_editing_changed)
+
+    def on_editing_changed(self, editing):
+        self.tabs.setTabEnabled(1, not editing)  # Events
+        self.tabs.setTabEnabled(2, not editing)  # Backups

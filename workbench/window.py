@@ -11,7 +11,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("CBUS Workbench")
         self.resize(1000, 700)
 
-        self.setCentralWidget(LayoutView())
+        self.layout_view = LayoutView()
+        self.setCentralWidget(self.layout_view)
 
         self.layout_status = QLabel("Home")
         self.connection_status = QLabel("Disconnected")
@@ -37,6 +38,10 @@ class MainWindow(QMainWindow):
 
             if name == "Home":
                 action.setChecked(True)
+
+        self.layout_view.node_view.details.editing_changed.connect(
+            lambda editing: layout_group.setEnabled(not editing)
+        )
 
     def select_layout(self, action):
         self.layout_status.setText(action.text())

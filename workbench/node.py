@@ -9,3 +9,4 @@ class Node:
     firmware: str
     has_mdf: bool
     nv_values: dict[int, int] = field(default_factory=dict)
+    nv_descriptions: dict[int, str] = field(default_factory=dict)

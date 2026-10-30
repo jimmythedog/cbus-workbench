@@ -24,18 +24,61 @@ class RawNodeVariables(QTableWidget):
 
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
-    def show_node(self, node):
+        self.values = None
+        self.itemChanged.connect(self.update_value)
+
+    def show_node(self, node, values=None, descriptions=None):
+        self.values = values if values is not None else node.nv_values
+        self.descriptions = (
+            descriptions if descriptions is not None else node.nv_descriptions
+        )
         self.setRowCount(len(node.nv_values))
 
-        for row, (number, value) in enumerate(sorted(node.nv_values.items())):
-            self.setItem(row, 0, QTableWidgetItem(str(number)))
+        self.blockSignals(True)
+        for row, (number, value) in enumerate(sorted(self.values.items())):
+            number_item = QTableWidgetItem(str(number))
+            number_item.setFlags(number_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.setItem(row, 0, number_item)
             self.setItem(row, 1, QTableWidgetItem(str(value)))
-            self.setItem(row, 2, QTableWidgetItem(""))
+            self.setItem(row, 2, QTableWidgetItem(self.descriptions.get(number, "")))
+        self.blockSignals(False)
+
+    def set_editing(self, editing):
+        triggers = (
+            QTableWidget.EditTrigger.DoubleClicked
+            | QTableWidget.EditTrigger.EditKeyPressed
+            if editing
+            else QTableWidget.EditTrigger.NoEditTriggers
+        )
+        self.setEditTriggers(triggers)
+
+    def update_value(self, item):
+        if self.values is None:
+            return
+
+        number = int(self.item(item.row(), 0).text())
+
+        if item.column() == 2:
+            self.descriptions[number] = item.text()
+            return
+
+        if item.column() == 1:
+            try:
+                value = int(item.text())
+            except ValueError:
+                value = -1
+
+            if 0 <= value <= 255:
+                self.values[number] = value
+            else:
+                item.setText(str(self.values[number]))
 
 
 class GlobalSettings(QWidget):
     def __init__(self):
         super().__init__()
+
+        self.values = None
 
         layout = QFormLayout(self)
         layout.setFormAlignment(Qt.AlignmentFlag.AlignTop)
@@ -57,13 +100,17 @@ class GlobalSettings(QWidget):
 
         self.node = None
 
-    def show_node(self, node):
+    def show_node(self, node, values=None):
         self.node = node
-        self.startup_delay.setValue(node.nv_values.get(2, 0))
+        self.values = values if values is not None else node.nv_values
+
+        self.startup_delay.blockSignals(True)
+        self.startup_delay.setValue(self.values.get(2, 0))
+        self.startup_delay.blockSignals(False)
 
     def update_startup_delay(self, value):
-        if self.node is not None:
-            self.node.nv_values[2] = value
+        if self.values is not None:
+            self.values[2] = value
 
 
 class ChannelSettings(QWidget):
@@ -121,7 +168,11 @@ class MdfNodeVariables(QSplitter):
     def __init__(self):
         super().__init__(Qt.Orientation.Horizontal)
 
+        self.node = None
+        self.values = None
+
         self.global_settings = GlobalSettings()
+        self.channel_settings = ChannelSettings()
 
         navigation = QListWidget()
         pages = QStackedWidget()
@@ -130,7 +181,7 @@ class MdfNodeVariables(QSplitter):
         sections = [
             ("Raw Values", self.raw_values),
             ("Globals", self.global_settings),
-            ("Channel 1", ChannelSettings()),
+            ("Channel 1", self.channel_settings),
             ("Channel 2", QLabel("Channel 2 settings will go here")),
         ]
 
@@ -146,10 +197,26 @@ class MdfNodeVariables(QSplitter):
         self.addWidget(pages)
         self.setSizes([200, 800])
 
-    def show_node(self, node):
-        self.raw_values.show_node(node)
-        self.global_settings.show_node(node)
+    def show_node(self, node, values=None, descriptions=None):
+        self.node = node
+        self.values = values if values is not None else node.nv_values
+        self.descriptions = (
+            descriptions if descriptions is not None else node.nv_descriptions
+        )
+
+        self.raw_values.show_node(node, self.values, self.descriptions)
+        self.global_settings.show_node(node, self.values)
 
     def refresh_raw_values(self, index):
-        if index == 0 and self.global_settings.node is not None:
-            self.raw_values.show_node(self.global_settings.node)
+        if self.node is None:
+            return
+
+        if index == 0:
+            self.raw_values.show_node(self.node, self.values, self.descriptions)
+        elif index == 1:
+            self.global_settings.show_node(self.node, self.values)
+
+    def set_editing(self, editing):
+        self.global_settings.setEnabled(editing)
+        self.channel_settings.setEnabled(editing)
+        self.raw_values.set_editing(editing)

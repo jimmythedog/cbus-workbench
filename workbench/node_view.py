@@ -9,7 +9,7 @@ class NodeView(QSplitter):
     def __init__(self):
         super().__init__(Qt.Orientation.Horizontal)
 
-        node_list = QListWidget()
+        self.node_list = QListWidget()
 
         for number in range(256, 356):
             node = Node(
@@ -29,12 +29,16 @@ class NodeView(QSplitter):
 
             item = QListWidgetItem(f"{node.number} - {node.module_type}")
             item.setData(Qt.ItemDataRole.UserRole, node)
-            node_list.addItem(item)
+            self.node_list.addItem(item)
 
-        details = NodeDetails()
+        self.details = NodeDetails()
 
-        node_list.currentItemChanged.connect(details.show_node)
+        self.node_list.currentItemChanged.connect(self.details.show_node)
 
-        self.addWidget(node_list)
-        self.addWidget(details)
+        self.details.editing_changed.connect(
+            lambda editing: self.node_list.setEnabled(not editing)
+        )
+
+        self.addWidget(self.node_list)
+        self.addWidget(self.details)
         self.setSizes([250, 750])
