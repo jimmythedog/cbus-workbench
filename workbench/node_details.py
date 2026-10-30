@@ -21,7 +21,7 @@ DEFAULT_NODE_TITLE = "Node details"
 class NodeDetails(QWidget):
     editing_changed = Signal(bool)
 
-    def __init__(self):
+    def __init__(self, events):
         super().__init__()
 
         self.node = None
@@ -129,7 +129,7 @@ class NodeDetails(QWidget):
         # Tabs
         self.tabs.addTab(self.variables_page, "Node Variables")
 
-        self.node_events = NodeEvents()
+        self.node_events = NodeEvents(events)
         self.tabs.addTab(self.node_events, "Events")
 
         self.tabs.addTab(QLabel("Node backups will go here"), "Backups")

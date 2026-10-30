@@ -6,7 +6,7 @@ from .node_details import NodeDetails
 
 
 class NodeView(QSplitter):
-    def __init__(self):
+    def __init__(self, events):
         super().__init__(Qt.Orientation.Horizontal)
 
         self.node_list = QListWidget()
@@ -26,11 +26,16 @@ class NodeView(QSplitter):
                     5: 1,
                 },
             )
-            node.consumed_events = {
-                "300:12": "Signal clear",
-                "300:13": "Signal danger",
-                "0:24": "Yard lighting",
-            }
+
+            node.consumed_events = (
+                {
+                    "256:1": "Main line signal",
+                    "256:302": "Turnout reached midpoint",
+                    "0:30001": "Yard lighting",
+                }
+                if number in (256, 261)
+                else {}
+            )
 
             node.ev_values = {
                 event: {1: 3, 2: 1, 3: 0} for event in node.consumed_events
@@ -40,7 +45,7 @@ class NodeView(QSplitter):
             item.setData(Qt.ItemDataRole.UserRole, node)
             self.node_list.addItem(item)
 
-        self.details = NodeDetails()
+        self.details = NodeDetails(events)
 
         self.node_list.currentItemChanged.connect(self.details.show_node)
 

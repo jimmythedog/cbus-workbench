@@ -60,9 +60,10 @@ class RawEvDelegate(NoHoverDelegate):
 
 
 class NodeEvents(QSplitter):
-    def __init__(self):
+    def __init__(self, events=None):
         super().__init__(Qt.Orientation.Horizontal)
 
+        self.events = events if events is not None else {}
         self.node = None
         self.editing_descriptions = None
         self.editing_values = None
@@ -109,8 +110,8 @@ class NodeEvents(QSplitter):
             return
 
         produced = [
-            (f"{node.number}:1", "Main line signal"),
-            (f"{node.number}:2", "Goods yard turnout"),
+            (f"{node.number}:{number}", details.get("description", ""))
+            for number, details in self.events.get(node.number, {}).items()
         ]
 
         self.produced_table.setRowCount(len(produced))
