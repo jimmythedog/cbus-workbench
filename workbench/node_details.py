@@ -1,9 +1,15 @@
+from copy import deepcopy
+from datetime import datetime
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
+    QMainWindow,
+    QMessageBox,
     QPushButton,
     QStackedLayout,
     QStackedWidget,
@@ -12,7 +18,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .backup_compare import BackupCompare
+from .backup_view import BackupView, backup_contents
+from .node_backups import NodeBackups
 from .node_events import NodeEvents
+from .node_snapshot import create_node_snapshot
 from .node_variables import MdfNodeVariables, RawNodeVariables
 
 DEFAULT_NODE_TITLE = "Node details"
@@ -132,13 +142,35 @@ class NodeDetails(QWidget):
         self.node_events = NodeEvents(events)
         self.tabs.addTab(self.node_events, "Events")
 
-        self.tabs.addTab(QLabel("Node backups will go here"), "Backups")
+        self.node_backups = NodeBackups()
+        self.node_backups.itemSelectionChanged.connect(self.update_backup_buttons)
+        self.tabs.addTab(self.node_backups, "Backups")
 
         # Shared bottom action area
         self.action_area = QStackedWidget()
         self.action_area.addWidget(variables_actions)
         self.action_area.addWidget(events_actions)
-        self.action_area.addWidget(QWidget())  # Backups placeholder
+
+        # Backups action buttons
+        backups_actions = QWidget()
+        backups_layout = QHBoxLayout(backups_actions)
+        backups_layout.addStretch()
+
+        self.backup_buttons = {}
+
+        for name in ("New", "View", "Compare", "Restore", "Delete"):
+            button = QPushButton(name)
+            button.setEnabled(False)
+            backups_layout.addWidget(button)
+            self.backup_buttons[name] = button
+
+        self.backup_buttons["View"].clicked.connect(self.view_backup)
+        self.backup_buttons["Compare"].clicked.connect(self.compare_backup)
+        self.backup_buttons["New"].clicked.connect(self.new_backup)
+        self.backup_buttons["Restore"].clicked.connect(self.restore_backup)
+        self.backup_buttons["Delete"].clicked.connect(self.delete_backup)
+
+        self.action_area.addWidget(backups_actions)
 
         self.tabs.currentChanged.connect(self.action_area.setCurrentIndex)
 
@@ -214,6 +246,9 @@ class NodeDetails(QWidget):
     def show_node(self, current):
         self.node = current.data(Qt.ItemDataRole.UserRole) if current else None
         self.node_events.show_node(self.node)
+        self.node_backups.show_node(self.node)
+        self.backup_buttons["New"].setEnabled(self.node is not None)
+        self.update_backup_buttons()
 
         enabled = current is not None
         self.edit_button.setEnabled(enabled)
@@ -244,3 +279,148 @@ class NodeDetails(QWidget):
         self.module_type.setText("CANMIO")
         self.firmware.setText("3d")
         self.status.setText("Online")
+
+    def update_backup_buttons(self):
+        selected = bool(self.node_backups.selectedItems())
+
+        for name, button in self.backup_buttons.items():
+            if name != "New":
+                button.setEnabled(selected)
+
+    def view_backup(self):
+        if self.node is None:
+            return
+
+        selected = self.node_backups.selectedItems()
+        if not selected:
+            return
+
+        backup = selected[0].data(0, Qt.ItemDataRole.UserRole)
+
+        dialog = BackupView(self.node, backup, self)
+        dialog.exec()
+
+    def compare_backup(self):
+        if self.node is None:
+            return
+
+        selected = self.node_backups.selectedItems()
+        if not selected:
+            return
+
+        backup = selected[0].data(0, Qt.ItemDataRole.UserRole)
+
+        dialog = BackupCompare(self.node, backup, self)
+        dialog.exec()
+
+    def new_backup(self):
+        if self.node is None:
+            return
+
+        description, accepted = QInputDialog.getText(
+            self,
+            "New node backup",
+            "Description (optional):",
+        )
+
+        if not accepted:
+            return
+
+        backup = create_node_snapshot(self.node)
+        backup["created"] = datetime.now().strftime("%d %b %Y, %H:%M")
+        backup["description"] = description.strip()
+
+        self.node_backups.add_backup(self.node, backup)
+
+        window = self.window()
+        if isinstance(window, QMainWindow):
+            window.statusBar().showMessage("Node backup created", 5000)
+
+    def restore_backup(self):
+        if self.node is None:
+            return
+
+        selected = self.node_backups.selectedItems()
+        if not selected:
+            return
+
+        backup = selected[0].data(0, Qt.ItemDataRole.UserRole)
+
+        is_layout_backup = (
+            backup.get("partOfLayoutBackup", False)
+            or backup.get("description") == "Layout backup"
+        )
+
+        if is_layout_backup:
+            message = (
+                "This backup is part of a layout backup.\n\n"
+                f"Restoring node {self.node.number} independently may leave "
+                "its configuration inconsistent with other nodes.\n\n"
+                "Do you want to continue?"
+            )
+        else:
+            message = f"Restore '{backup['description']}' to node {self.node.number}?"
+
+        answer = QMessageBox.question(
+            self,
+            "Restore node backup",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        contents = backup_contents(backup)
+
+        self.node.nv_values = deepcopy(contents["nv_values"])
+        self.node.nv_descriptions = deepcopy(contents["nv_descriptions"])
+        self.node.consumed_events = deepcopy(contents["consumed_events"])
+        self.node.ev_values = deepcopy(contents["ev_values"])
+
+        # Refresh the node configuration displays.
+        self.raw_values.show_node(self.node)
+        self.mdf_values.show_node(self.node)
+        self.node_events.show_node(self.node)
+
+        window = self.window()
+        if isinstance(window, QMainWindow):
+            window.statusBar().showMessage("Node backup restored successfully", 5000)
+
+    def delete_backup(self):
+        if self.node is None:
+            return
+
+        selected = self.node_backups.selectedItems()
+        if not selected:
+            return
+
+        backup = selected[0].data(0, Qt.ItemDataRole.UserRole)
+
+        if (
+            backup.get("partOfLayoutBackup", False)
+            or backup.get("description") == "Layout backup"
+        ):
+            QMessageBox.information(
+                self,
+                "Delete node backup",
+                "This backup belongs to a layout backup and cannot be deleted individually.",
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Delete node backup",
+            f"Delete '{backup['description']}' for node {self.node.number}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self.node_backups.delete_backup(self.node, backup)
+        window = self.window()
+        if isinstance(window, QMainWindow):
+            window.statusBar().showMessage("Node backup deleted", 5000)

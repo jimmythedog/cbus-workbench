@@ -215,7 +215,8 @@ class NodeEvents(QSplitter):
                 output = form.findChild(QSpinBox, "output")
                 invert = form.findChild(QCheckBox, "invert")
 
-                self.editing_values[event][1] = action.currentIndex()
+                if action.currentIndex() >= 0:
+                    self.editing_values[event][1] = action.currentIndex()
                 self.editing_values[event][2] = output.value()
                 self.editing_values[event][3] = int(invert.isChecked())
 

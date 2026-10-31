@@ -45,28 +45,7 @@ class LayoutEvents(QWidget):
             self.table, 1
         )  # 1 = the table tree widget should receive the avail. extra space
 
-        for node_number, node_events in self.events.items():
-            for event_number, details in node_events.items():
-                identifier = (
-                    str(event_number)
-                    if node_number == 0
-                    else f"{node_number}:{event_number}"
-                )
-
-                event_item = QTreeWidgetItem(
-                    self.table,
-                    [identifier, details.get("description", "")],
-                )
-                event_item.setFlags(event_item.flags() | Qt.ItemFlag.ItemIsEditable)
-
-                consumer_identifier = f"{node_number}:{event_number}"
-
-                for node in self.nodes:
-                    if consumer_identifier in node.consumed_events:
-                        QTreeWidgetItem(
-                            event_item,
-                            [f"{node.module_type} ({node.number})"],
-                        )
+        self.refresh()
         self.actions = QStackedWidget()
 
         view_actions = QWidget()
@@ -95,6 +74,32 @@ class LayoutEvents(QWidget):
         layout.addWidget(
             self.actions, 0
         )  # 0 = the actions stacked widget should NOT receive their share of any avail. extra space
+
+    def refresh(self):
+        self.table.clear()
+
+        for node_number, node_events in self.events.items():
+            for event_number, details in node_events.items():
+                identifier = (
+                    str(event_number)
+                    if node_number == 0
+                    else f"{node_number}:{event_number}"
+                )
+
+                event_item = QTreeWidgetItem(
+                    self.table,
+                    [identifier, details.get("description", "")],
+                )
+                event_item.setFlags(event_item.flags() | Qt.ItemFlag.ItemIsEditable)
+
+                consumer_identifier = f"{node_number}:{event_number}"
+
+                for node in self.nodes:
+                    if consumer_identifier in node.consumed_events:
+                        QTreeWidgetItem(
+                            event_item,
+                            [f"{node.module_type} ({node.number})"],
+                        )
 
     def set_editing(self, editing):
         self.table.setEditTriggers(

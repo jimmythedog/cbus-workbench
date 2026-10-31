@@ -38,7 +38,7 @@ class NodeView(QSplitter):
             )
 
             node.ev_values = {
-                event: {1: 3, 2: 1, 3: 0} for event in node.consumed_events
+                event: {1: 0, 2: 1, 3: 0} for event in node.consumed_events
             }
 
             item = QListWidgetItem(f"{node.number} - {node.module_type}")
