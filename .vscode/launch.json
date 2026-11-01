@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "CBUS Workbench",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "/nix/store/az15lcnbrs05jrka5603rcp0na5aplgy-python3-3.14.8-env/bin/python",
+      "program": "${workspaceFolder}/main.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}
