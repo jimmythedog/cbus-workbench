@@ -179,6 +179,25 @@ class MainWindow(QMainWindow):
         self.layout_status.setText(name)
         self.update_connection_actions()
 
+    def validate_layout_settings(self, settings, current_name=None):
+        name = settings["name"]
+
+        if not name or not settings["logical_layout"]:
+            self.statusBar().showMessage(
+                "Layout name and logical layout are required", 5000
+            )
+            return False
+
+        if any(
+            existing.casefold() == name.casefold()
+            for existing in self.layouts
+            if existing != current_name
+        ):
+            self.statusBar().showMessage("A layout with that name already exists", 5000)
+            return False
+
+        return True
+
     def new_layout(self):
         dialog = LayoutSettingsDialog(
             self,
@@ -196,14 +215,7 @@ class MainWindow(QMainWindow):
         settings = dialog.settings()
         name = settings["name"]
 
-        if not name or not settings["logical_layout"]:
-            self.statusBar().showMessage(
-                "Layout name and logical layout are required", 5000
-            )
-            return
-
-        if any(existing.casefold() == name.casefold() for existing in self.layouts):
-            self.statusBar().showMessage("A layout with that name already exists", 5000)
+        if not self.validate_layout_settings(settings):
             return
 
         view = LayoutView(empty=True)
@@ -249,22 +261,12 @@ class MainWindow(QMainWindow):
         settings = dialog.settings()
         name = settings["name"]
 
-        if not name or not settings["logical_layout"]:
-            self.statusBar().showMessage(
-                "Layout name and logical layout are required", 5000
-            )
-            return
-
-        if any(
-            existing.casefold() == name.casefold()
-            for existing in self.layouts
-            if existing != old_name
-        ):
-            self.statusBar().showMessage("A layout with that name already exists", 5000)
+        if not self.validate_layout_settings(settings, old_name):
             return
 
         if name != old_name:
             self.layouts[name] = self.layouts.pop(old_name)
+            self.connection_states[name] = self.connection_states.pop(old_name)
             action.setText(name)
             self.layout_status.setText(name)
 
@@ -301,6 +303,7 @@ class MainWindow(QMainWindow):
         self.layout_menu.removeAction(action)
         action.deleteLater()
 
+        # removeWidget keeps the page parented; deleteLater frees it on event loop return.
         self.layout_stack.removeWidget(view)
         view.deleteLater()
 

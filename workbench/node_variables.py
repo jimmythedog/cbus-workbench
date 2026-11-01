@@ -34,6 +34,7 @@ class RawNodeVariables(QTableWidget):
         )
         self.setRowCount(len(node.nv_values))
 
+        # setItem() emits itemChanged; rows must be complete before update_value runs.
         self.blockSignals(True)
         for row, (number, value) in enumerate(sorted(self.values.items())):
             number_item = QTableWidgetItem(str(number))

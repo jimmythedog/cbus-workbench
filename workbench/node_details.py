@@ -1,4 +1,3 @@
-from copy import deepcopy
 from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
@@ -22,7 +21,7 @@ from .backup_compare import BackupCompare
 from .backup_view import BackupView, backup_contents
 from .node_backups import NodeBackups
 from .node_events import NodeEvents
-from .node_snapshot import create_node_snapshot
+from .node_snapshot import create_node_snapshot, restore_node_snapshot
 from .node_variables import MdfNodeVariables, RawNodeVariables
 
 DEFAULT_NODE_TITLE = "Node details"
@@ -206,7 +205,7 @@ class NodeDetails(QWidget):
         self.node_backups.itemSelectionChanged.connect(self.update_backup_buttons)
         self.tabs.addTab(self.node_backups, "Backups")
 
-        # Shared bottom action area
+        # Pages must match the tab order: currentChanged passes its index to this stack.
         self.action_area = QStackedWidget()
         self.action_area.addWidget(QWidget())  # Node Details
         self.action_area.addWidget(variables_actions)
@@ -255,6 +254,7 @@ class NodeDetails(QWidget):
     def start_editing(self):
         self.set_editing(True)
         self.editing_changed.emit(True)
+        # Both views edit these copies; Save replaces the node data, Cancel discards them.
         self.editing_values = self.node.nv_values.copy()
         self.editing_descriptions = self.node.nv_descriptions.copy()
         self.raw_values.show_node(
@@ -279,17 +279,17 @@ class NodeDetails(QWidget):
         self.editing_changed.emit(False)
 
     def set_editing(self, editing):
-        self.tabs.setTabEnabled(0, not editing)  # Node Details
-        self.tabs.setTabEnabled(2, not editing)  # Events
-        self.tabs.setTabEnabled(3, not editing)  # Backups
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.group), not editing)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.node_events), not editing)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.node_backups), not editing)
 
     def start_events_editing(self):
         self.node_events.begin_edit()
         self.events_buttons.setCurrentIndex(1)
 
-        self.tabs.setTabEnabled(0, False)  # Node Details
-        self.tabs.setTabEnabled(1, False)  # Node Variables
-        self.tabs.setTabEnabled(3, False)  # Backups
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.group), False)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.variables_page), False)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.node_backups), False)
 
         self.editing_changed.emit(True)
 
@@ -299,9 +299,9 @@ class NodeDetails(QWidget):
 
     def finish_events_editing(self):
         self.events_buttons.setCurrentIndex(0)
-        self.tabs.setTabEnabled(0, True)
-        self.tabs.setTabEnabled(1, True)
-        self.tabs.setTabEnabled(3, True)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.group), True)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.variables_page), True)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.node_backups), True)
 
         self.editing_changed.emit(False)
 
@@ -490,10 +490,7 @@ class NodeDetails(QWidget):
 
         contents = backup_contents(backup)
 
-        self.node.nv_values = deepcopy(contents["nv_values"])
-        self.node.nv_descriptions = deepcopy(contents["nv_descriptions"])
-        self.node.consumed_events = deepcopy(contents["consumed_events"])
-        self.node.ev_values = deepcopy(contents["ev_values"])
+        restore_node_snapshot(self.node, contents)
 
         # Refresh the node configuration displays.
         self.raw_values.show_node(self.node)

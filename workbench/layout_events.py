@@ -90,6 +90,9 @@ class LayoutEvents(QWidget):
                     self.table,
                     [identifier, details.get("description", "")],
                 )
+                event_item.setData(
+                    0, Qt.ItemDataRole.UserRole, (node_number, event_number)
+                )
                 event_item.setFlags(event_item.flags() | Qt.ItemFlag.ItemIsEditable)
 
                 consumer_identifier = f"{node_number}:{event_number}"
@@ -125,36 +128,18 @@ class LayoutEvents(QWidget):
     def save_edit(self):
         for index in range(self.table.topLevelItemCount()):
             item = self.table.topLevelItem(index)
-            identifier = item.text(0)
-
-            for node_number, node_events in self.events.items():
-                for event_number, details in node_events.items():
-                    expected = (
-                        str(event_number)
-                        if node_number == 0
-                        else f"{node_number}:{event_number}"
-                    )
-
-                    if identifier == expected:
-                        details["description"] = item.text(1)
+            node_number, event_number = item.data(0, Qt.ItemDataRole.UserRole)
+            self.events[node_number][event_number]["description"] = item.text(1)
 
         self.finish_edit()
 
     def cancel_edit(self):
         for index in range(self.table.topLevelItemCount()):
             item = self.table.topLevelItem(index)
-            identifier = item.text(0)
-
-            for node_number, node_events in self.events.items():
-                for event_number, details in node_events.items():
-                    expected = (
-                        str(event_number)
-                        if node_number == 0
-                        else f"{node_number}:{event_number}"
-                    )
-
-                    if identifier == expected:
-                        item.setText(1, details.get("description", ""))
+            node_number, event_number = item.data(0, Qt.ItemDataRole.UserRole)
+            item.setText(
+                1, self.events[node_number][event_number].get("description", "")
+            )
 
         self.finish_edit()
 

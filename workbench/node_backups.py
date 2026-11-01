@@ -132,3 +132,24 @@ class NodeBackups(QTreeWidget):
         backups = self.backups_by_node[node.number]
         backups.remove(backup)
         self.show_node(node)
+
+    def layout_snapshot(self, node_number, timestamp):
+        for snapshot in self.backups_by_node.get(node_number, []):
+            if (
+                snapshot.get("partOfLayoutBackup")
+                and snapshot.get("timestamp") == timestamp
+            ):
+                return snapshot
+
+        return None
+
+    def delete_layout_snapshots(self, timestamp):
+        for backups in self.backups_by_node.values():
+            backups[:] = [
+                snapshot
+                for snapshot in backups
+                if not (
+                    snapshot.get("partOfLayoutBackup")
+                    and snapshot.get("timestamp") == timestamp
+                )
+            ]

@@ -1,6 +1,15 @@
 from copy import deepcopy
 
 
+def restore_node_snapshot(node, contents):
+    """Apply saved configuration values from normalized backup contents."""
+
+    node.nv_values = deepcopy(contents["nv_values"])
+    node.nv_descriptions = deepcopy(contents["nv_descriptions"])
+    node.consumed_events = deepcopy(contents["consumed_events"])
+    node.ev_values = deepcopy(contents["ev_values"])
+
+
 def create_node_snapshot(node):
     """Capture the current node configuration in CW-OLD backup format."""
 

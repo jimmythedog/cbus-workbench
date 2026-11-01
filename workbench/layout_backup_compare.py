@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from .backup_diff_tree import add_node_differences
 from .node_backup_diff import compare_node
 
 
@@ -58,17 +59,7 @@ class LayoutBackupCompare(QDialog):
                 if node.number not in saved_nodes:
                     continue
 
-                snapshots = node_backups.backups_by_node.get(node.number, [])
-
-                snapshot = next(
-                    (
-                        item
-                        for item in snapshots
-                        if item.get("partOfLayoutBackup")
-                        and item.get("timestamp") == timestamp
-                    ),
-                    None,
-                )
+                snapshot = node_backups.layout_snapshot(node.number, timestamp)
 
                 if snapshot is None:
                     continue
@@ -82,41 +73,7 @@ class LayoutBackupCompare(QDialog):
                 configuration_section.addChild(node_item)
                 node_item.setExpanded(True)
 
-                sections = {}
-
-                for section_name, item_name, old, new in differences:
-                    if section_name.startswith("Consumed events/"):
-                        event_id = section_name.split("/", 1)[1]
-
-                        parent = sections.get("Consumed events")
-                        if parent is None:
-                            parent = QTreeWidgetItem(node_item, ["Consumed events"])
-                            sections["Consumed events"] = parent
-                            parent.setExpanded(True)
-
-                        event_key = f"event:{event_id}"
-                        section = sections.get(event_key)
-
-                        if section is None:
-                            section = QTreeWidgetItem(parent, [event_id])
-                            sections[event_key] = section
-                            section.setExpanded(True)
-                    else:
-                        section = sections.get(section_name)
-
-                        if section is None:
-                            section = QTreeWidgetItem(node_item, [section_name])
-                            sections[section_name] = section
-                            section.setExpanded(True)
-
-                    QTreeWidgetItem(
-                        section,
-                        [
-                            item_name,
-                            str(old) if old is not None else "—",
-                            str(new) if new is not None else "—",
-                        ],
-                    )
+                add_node_differences(node_item, differences)
 
         if configuration_section.childCount():
             tree.addTopLevelItem(configuration_section)

@@ -161,6 +161,7 @@ class NodeEvents(QSplitter):
             invert.setChecked(bool(node.ev_values.get(event, {}).get(3, 0)))
             layout.addRow("Invert:", invert)
 
+            # The tree takes ownership of form and its child controls.
             self.consumed_table.setItemWidget(details, 1, form)
             details.setSizeHint(1, form.sizeHint())
 

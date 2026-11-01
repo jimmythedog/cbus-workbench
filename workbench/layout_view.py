@@ -1,4 +1,3 @@
-from copy import deepcopy
 from datetime import datetime
 
 from PySide6.QtCore import Qt
@@ -20,7 +19,7 @@ from .layout_backup_view import LayoutBackupView
 from .layout_backups import LayoutBackups
 from .layout_events import LayoutEvents
 from .layout_restore_dialog import LayoutRestoreDialog
-from .node_snapshot import create_node_snapshot
+from .node_snapshot import create_node_snapshot, restore_node_snapshot
 from .node_view import NodeView
 
 
@@ -53,20 +52,15 @@ class LayoutView(QWidget):
         self.node_view = NodeView(self.events, empty=empty)
         self.tabs.addTab(self.node_view, "Nodes")
 
-        nodes = [
-            self.node_view.node_list.item(index).data(Qt.ItemDataRole.UserRole)
-            for index in range(self.node_view.node_list.count())
-        ]
-
-        self.layout_events = LayoutEvents(nodes, self.events)
+        self.layout_events = LayoutEvents(self.nodes(), self.events)
 
         self.tabs.addTab(self.layout_events, "Events")
 
         self.layout_backups = LayoutBackups(empty=empty)
         self.node_view.details.node_backups.layout_backups = self.layout_backups
 
-        backups_page = QWidget()
-        backups_layout = QVBoxLayout(backups_page)
+        self.backups_page = QWidget()
+        backups_layout = QVBoxLayout(self.backups_page)
         backups_layout.addWidget(self.layout_backups, 1)
 
         actions = QHBoxLayout()
@@ -90,25 +84,31 @@ class LayoutView(QWidget):
 
         self.layout_backups.itemSelectionChanged.connect(self.update_backup_buttons)
 
-        self.tabs.addTab(backups_page, "Backups")
+        self.tabs.addTab(self.backups_page, "Backups")
 
         layout.addWidget(self.tabs)
 
         self.node_view.details.editing_changed.connect(self.on_editing_changed)
         self.layout_events.editing_changed.connect(self.on_layout_events_editing)
 
+    def nodes(self):
+        return [
+            self.node_view.node_list.item(index).data(Qt.ItemDataRole.UserRole)
+            for index in range(self.node_view.node_list.count())
+        ]
+
     def on_tab_changed(self, index):
-        if index == 0:  # Nodes tab
+        if index == self.tabs.indexOf(self.node_view):
             node_events = self.node_view.details.node_events
             node_events.show_node(node_events.node)
 
     def on_editing_changed(self, editing):
-        self.tabs.setTabEnabled(1, not editing)  # Events
-        self.tabs.setTabEnabled(2, not editing)  # Backups
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.layout_events), not editing)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.backups_page), not editing)
 
     def on_layout_events_editing(self, editing):
-        self.tabs.setTabEnabled(0, not editing)  # Nodes
-        self.tabs.setTabEnabled(2, not editing)  # Backups
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.node_view), not editing)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.backups_page), not editing)
 
     def update_backup_buttons(self):
         selected = bool(self.layout_backups.selectedItems())
@@ -134,14 +134,9 @@ class LayoutView(QWidget):
 
         backup = selected[0].data(0, Qt.ItemDataRole.UserRole)
 
-        nodes = [
-            self.node_view.node_list.item(index).data(Qt.ItemDataRole.UserRole)
-            for index in range(self.node_view.node_list.count())
-        ]
-
         dialog = LayoutBackupCompare(
             backup,
-            nodes,
+            self.nodes(),
             self.events,
             self.node_view.details.node_backups,
             self,
@@ -158,10 +153,7 @@ class LayoutView(QWidget):
         if not accepted:
             return
 
-        nodes = [
-            self.node_view.node_list.item(index).data(Qt.ItemDataRole.UserRole)
-            for index in range(self.node_view.node_list.count())
-        ]
+        nodes = self.nodes()
 
         now = datetime.now()
         timestamp = now.strftime("%Y%m%dT%H%M%S%f")
@@ -218,15 +210,7 @@ class LayoutView(QWidget):
         node_backups = self.node_view.details.node_backups
 
         if timestamp is not None:
-            for backups in node_backups.backups_by_node.values():
-                backups[:] = [
-                    snapshot
-                    for snapshot in backups
-                    if not (
-                        snapshot.get("partOfLayoutBackup")
-                        and snapshot.get("timestamp") == timestamp
-                    )
-                ]
+            node_backups.delete_layout_snapshots(timestamp)
 
         self.layout_backups.delete_backup(backup)
         node_backups.show_node(self.node_view.details.node)
@@ -261,10 +245,7 @@ class LayoutView(QWidget):
 
         node_backups = self.node_view.details.node_backups
 
-        nodes = [
-            self.node_view.node_list.item(index).data(Qt.ItemDataRole.UserRole)
-            for index in range(self.node_view.node_list.count())
-        ]
+        nodes = self.nodes()
 
         # Locate snapshots only for the selected nodes.
         snapshots = {}
@@ -273,13 +254,9 @@ class LayoutView(QWidget):
             if node.number not in selected_nodes:
                 continue
 
-            for snapshot in node_backups.backups_by_node.get(node.number, []):
-                if (
-                    snapshot.get("partOfLayoutBackup")
-                    and snapshot.get("timestamp") == timestamp
-                ):
-                    snapshots[node.number] = snapshot
-                    break
+            snapshot = node_backups.layout_snapshot(node.number, timestamp)
+            if snapshot is not None:
+                snapshots[node.number] = snapshot
 
         if set(snapshots) != selected_nodes:
             QMessageBox.warning(
@@ -297,10 +274,7 @@ class LayoutView(QWidget):
 
             contents = backup_contents(snapshot)
 
-            node.nv_values = deepcopy(contents["nv_values"])
-            node.nv_descriptions = deepcopy(contents["nv_descriptions"])
-            node.consumed_events = deepcopy(contents["consumed_events"])
-            node.ev_values = deepcopy(contents["ev_values"])
+            restore_node_snapshot(node, contents)
 
         # Restore produced events independently.
         if restore_events:
