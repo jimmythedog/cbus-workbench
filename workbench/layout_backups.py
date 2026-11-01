@@ -3,7 +3,7 @@ from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
 
 
 class LayoutBackups(QTreeWidget):
-    def __init__(self):
+    def __init__(self, empty=False):
         super().__init__()
 
         self.setHeaderLabels(["Created", "Description"])
@@ -69,9 +69,10 @@ class LayoutBackups(QTreeWidget):
             },
         ]
 
-        for backup in backups:
-            item = QTreeWidgetItem(self, [backup["created"], backup["description"]])
-            item.setData(0, Qt.ItemDataRole.UserRole, backup)
+        if not empty:
+            for backup in backups:
+                item = QTreeWidgetItem(self, [backup["created"], backup["description"]])
+                item.setData(0, Qt.ItemDataRole.UserRole, backup)
 
     def add_backup(self, backup):
         item = QTreeWidgetItem(

@@ -25,29 +25,32 @@ from .node_view import NodeView
 
 
 class LayoutView(QWidget):
-    def __init__(self):
+    def __init__(self, empty=False):
         super().__init__()
 
         layout = QVBoxLayout(self)
 
-        self.events = {
-            0: {
-                30001: {},
-                30002: {},
-            },
-            256: {
-                1: {},
-                2: {},
-                302: {"description": "turnout1 reached mid point"},
-            },
-            259: {
-                1: {},
-            },
-        }
+        if not empty:
+            self.events = {
+                0: {
+                    30001: {},
+                    30002: {},
+                },
+                256: {
+                    1: {},
+                    2: {},
+                    302: {"description": "turnout1 reached mid point"},
+                },
+                259: {
+                    1: {},
+                },
+            }
+        else:
+            self.events = {}
 
         self.tabs = QTabWidget()
         self.tabs.currentChanged.connect(self.on_tab_changed)
-        self.node_view = NodeView(self.events)
+        self.node_view = NodeView(self.events, empty=empty)
         self.tabs.addTab(self.node_view, "Nodes")
 
         nodes = [
@@ -59,7 +62,7 @@ class LayoutView(QWidget):
 
         self.tabs.addTab(self.layout_events, "Events")
 
-        self.layout_backups = LayoutBackups()
+        self.layout_backups = LayoutBackups(empty=empty)
         self.node_view.details.node_backups.layout_backups = self.layout_backups
 
         backups_page = QWidget()
