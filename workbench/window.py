@@ -1,9 +1,10 @@
 import sys
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
+    QDockWidget,
     QFrame,
     QLabel,
     QMainWindow,
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
 )
 
+from .diagnostics import Diagnostics
 from .layout_settings import LayoutSettingsDialog
 from .layout_view import LayoutView
 
@@ -115,6 +117,18 @@ class MainWindow(QMainWindow):
                 action.setChecked(True)
 
         self.connection_states = {name: "Disconnected" for name in self.layouts}
+
+        self.diagnostics_dock = QDockWidget("Messages / Diagnostics", self)
+        self.diagnostics_dock.setObjectName("DiagnosticsDock")
+        self.diagnostics_dock.setWidget(Diagnostics())
+
+        self.addDockWidget(
+            Qt.DockWidgetArea.BottomDockWidgetArea,
+            self.diagnostics_dock,
+        )
+
+        view_menu = self.menuBar().addMenu("&View")
+        view_menu.addAction(self.diagnostics_dock.toggleViewAction())
 
         help_menu = self.menuBar().addMenu("&Help")
 
