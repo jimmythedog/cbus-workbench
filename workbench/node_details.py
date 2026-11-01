@@ -40,24 +40,84 @@ class NodeDetails(QWidget):
 
         layout = QVBoxLayout(self)
 
-        self.group = QGroupBox(DEFAULT_NODE_TITLE)
+        # Compact summary, always visible above the tabs.
+        self.summary = QGroupBox(DEFAULT_NODE_TITLE)
+        summary_layout = QHBoxLayout(self.summary)
+        summary_layout.setSpacing(24)
+
+        self.summary_can_id = QLabel()
+        self.summary_firmware = QLabel()
+        self.summary_mode = QLabel()
+        self.summary_status = QLabel()
+
+        summary_layout.addWidget(self.summary_can_id)
+        summary_layout.addWidget(self.summary_firmware)
+        summary_layout.addWidget(self.summary_mode)
+        summary_layout.addWidget(self.summary_status)
+        summary_layout.addStretch()
+
+        layout.addWidget(self.summary)
+
+        self.group = QWidget()
+
         form = QFormLayout(self.group)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
 
         self.node_number = QLabel("-")
+        self.node_name = QLabel("-")
         self.can_id = QLabel("-")
         self.module_type = QLabel("-")
         self.firmware = QLabel("-")
         self.status = QLabel("-")
+        self.manufacturer = QLabel("-")
+        self.module_identifier = QLabel("-")
+        self.node_mode = QLabel("-")
+        self.vlcb = QLabel("-")
+        self.nv_count = QLabel("-")
+        self.event_count = QLabel("-")
+        self.ev_count = QLabel("-")
+        self.cpu_name = QLabel("-")
+        self.interface = QLabel("-")
+        self.module_descriptor = QLabel("-")
+        self.producer = QLabel("-")
+        self.consumer = QLabel("-")
+        self.consumes_own_events = QLabel("-")
+        self.supports_bootloading = QLabel("-")
+        self.stored_events = QLabel("-")
 
+        # Identity
         form.addRow("Node number:", self.node_number)
+        form.addRow("Name:", self.node_name)
         form.addRow("CAN ID:", self.can_id)
-        form.addRow("Module type:", self.module_type)
-        form.addRow("Firmware:", self.firmware)
         form.addRow("Status:", self.status)
 
-        layout.addWidget(self.group)
+        # Module
+        form.addRow("Manufacturer:", self.manufacturer)
+        form.addRow("Module type:", self.module_type)
+        form.addRow("Module identifier:", self.module_identifier)
+        form.addRow("Firmware:", self.firmware)
+
+        # Capabilities
+        form.addRow("Node mode:", self.node_mode)
+        form.addRow("VLCB:", self.vlcb)
+        form.addRow("Producer:", self.producer)
+        form.addRow("Consumer:", self.consumer)
+        form.addRow("Consumes own events:", self.consumes_own_events)
+        form.addRow("Supports bootloading:", self.supports_bootloading)
+        form.addRow("Node variables:", self.nv_count)
+        form.addRow("Events currently stored:", self.stored_events)
+        form.addRow("Events supported:", self.event_count)
+        form.addRow("Event variables:", self.ev_count)
+
+        # Hardware
+        form.addRow("CPU name:", self.cpu_name)
+        form.addRow("Interface:", self.interface)
+
+        # Definition
+        form.addRow("Module descriptor:", self.module_descriptor)
 
         self.tabs = QTabWidget()
+        self.tabs.addTab(self.group, "Node Details")
         self.raw_values = RawNodeVariables()
         self.mdf_values = MdfNodeVariables()
         self.mdf_values.set_editing(False)
@@ -148,6 +208,7 @@ class NodeDetails(QWidget):
 
         # Shared bottom action area
         self.action_area = QStackedWidget()
+        self.action_area.addWidget(QWidget())  # Node Details
         self.action_area.addWidget(variables_actions)
         self.action_area.addWidget(events_actions)
 
@@ -218,15 +279,18 @@ class NodeDetails(QWidget):
         self.editing_changed.emit(False)
 
     def set_editing(self, editing):
-        self.tabs.setTabEnabled(1, not editing)  # Events
-        self.tabs.setTabEnabled(2, not editing)  # Backups
+        self.tabs.setTabEnabled(0, not editing)  # Node Details
+        self.tabs.setTabEnabled(2, not editing)  # Events
+        self.tabs.setTabEnabled(3, not editing)  # Backups
 
     def start_events_editing(self):
         self.node_events.begin_edit()
         self.events_buttons.setCurrentIndex(1)
 
-        self.tabs.setTabEnabled(0, False)  # Node Variables
-        self.tabs.setTabEnabled(2, False)  # Backups
+        self.tabs.setTabEnabled(0, False)  # Node Details
+        self.tabs.setTabEnabled(1, False)  # Node Variables
+        self.tabs.setTabEnabled(3, False)  # Backups
+
         self.editing_changed.emit(True)
 
     def cancel_events_editing(self):
@@ -236,7 +300,9 @@ class NodeDetails(QWidget):
     def finish_events_editing(self):
         self.events_buttons.setCurrentIndex(0)
         self.tabs.setTabEnabled(0, True)
-        self.tabs.setTabEnabled(2, True)
+        self.tabs.setTabEnabled(1, True)
+        self.tabs.setTabEnabled(3, True)
+
         self.editing_changed.emit(False)
 
     def save_events_editing(self):
@@ -255,13 +321,38 @@ class NodeDetails(QWidget):
         self.events_edit_button.setEnabled(enabled)
 
         if current is None:
-            self.group.setTitle(DEFAULT_NODE_TITLE)
             self.node_number.setText("-")
+            self.node_name.setText("-")
             self.can_id.setText("-")
             self.module_type.setText("-")
             self.firmware.setText("-")
             self.status.setText("-")
             self.variables.setCurrentIndex(0)
+            for label in (
+                self.manufacturer,
+                self.module_identifier,
+                self.node_mode,
+                self.vlcb,
+                self.producer,
+                self.consumer,
+                self.consumes_own_events,
+                self.supports_bootloading,
+                self.nv_count,
+                self.stored_events,
+                self.event_count,
+                self.ev_count,
+                self.cpu_name,
+                self.interface,
+                self.module_descriptor,
+            ):
+                label.setText("-")
+
+            self.summary.setTitle(DEFAULT_NODE_TITLE)
+            self.summary_can_id.setText("CAN ID: -")
+            self.summary_firmware.setText("Firmware: -")
+            self.summary_mode.setText("Mode: -")
+            self.summary_status.setText("Status: -")
+
             return
 
         node = current.data(Qt.ItemDataRole.UserRole)
@@ -273,12 +364,37 @@ class NodeDetails(QWidget):
         has_mdf = node.has_mdf
 
         self.variables.setCurrentIndex(1 if has_mdf else 0)
-        self.group.setTitle(f"Node {number} — CANMIO")
         self.node_number.setText(str(number))
+        self.node_name.setText(node.name or "-")
         self.can_id.setText("126")
         self.module_type.setText("CANMIO")
         self.firmware.setText("3d")
         self.status.setText("Online")
+        self.manufacturer.setText("MERG")
+        self.module_identifier.setText("A520")
+        self.node_mode.setText("FLiM")
+        self.vlcb.setText("No")
+        self.producer.setText("Yes")
+        self.consumer.setText("Yes")
+        self.consumes_own_events.setText("Yes")
+        self.supports_bootloading.setText("Yes")
+        self.nv_count.setText("127")
+        self.stored_events.setText(str(len(node.consumed_events)))
+        self.event_count.setText("255")
+        self.ev_count.setText("20")
+        self.cpu_name.setText("P18F25K80")
+        self.interface.setText("CAN")
+        self.module_descriptor.setText("CANMIO-A520-3d.json (System definitions)")
+
+        title = f"Node {number} — {node.module_type}"
+        if node.name:
+            title += f" — {node.name}"
+
+        self.summary.setTitle(title)
+        self.summary_can_id.setText(f"CAN ID: {node.can_id}")
+        self.summary_firmware.setText(f"Firmware: {node.firmware}")
+        self.summary_mode.setText("Mode: FLiM")
+        self.summary_status.setText("Status: Online")
 
     def update_backup_buttons(self):
         selected = bool(self.node_backups.selectedItems())

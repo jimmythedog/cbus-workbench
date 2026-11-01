@@ -16,3 +16,4 @@ class Node:
     module_id: int | None = None
     parameters: list[int] = field(default_factory=list)
     annotations: dict = field(default_factory=dict)
+    name: str = ""

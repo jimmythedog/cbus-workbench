@@ -28,6 +28,9 @@ class NodeView(QSplitter):
                     },
                 )
 
+                if number == 256:
+                    node.name = "East Junction Relays"
+
                 node.consumed_events = (
                     {
                         "256:1": "Main line signal",
