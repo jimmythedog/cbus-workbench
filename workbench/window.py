@@ -116,6 +116,12 @@ class MainWindow(QMainWindow):
 
         self.connection_states = {name: "Disconnected" for name in self.layouts}
 
+        help_menu = self.menuBar().addMenu("&Help")
+
+        about_action = QAction("&About CBUS Workbench…", self)
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
+
         self.update_connection_actions()
         self.update_layout_actions()
 
@@ -313,3 +319,13 @@ class MainWindow(QMainWindow):
             self.set_connection_state("Connected")
         elif state in ("Connected", "Connecting"):
             self.set_connection_state("Disconnected")
+
+    def show_about(self):
+        QMessageBox.about(
+            self,
+            "About CBUS Workbench",
+            "<h3>CBUS Workbench</h3>"
+            "<p>A desktop application for configuring and managing "
+            "CBUS/VLCB model railway networks.</p>"
+            "<p>Built with Python and PySide6.</p>",
+        )
