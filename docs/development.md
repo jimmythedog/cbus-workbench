@@ -52,6 +52,20 @@ ruff format --check .
 
 On systems where Ruff is installed through uv as a development dependency, use `uv run ruff` instead. Add test instructions when the first tests are introduced.
 
+## Logs
+
+The application configures standard Python logging before constructing the Qt UI. Development runs start at TRACE; PyInstaller packaged releases start at INFO. Logs go to a rotating plain-text file (5 MiB per file, three backups). The first `configure_logging()` call sets the initial level and log destination; the View → Logging Level menu can change the `workbench` logger's level for the current session.
+
+The file is `cbus-workbench.log` in the per-user log directory:
+
+- Windows: `%LOCALAPPDATA%\CBUS Workbench\Logs`
+- macOS: `~/Library/Logs/CBUS Workbench`
+- Linux: `${XDG_STATE_HOME:-~/.local/state}/cbus-workbench/logs`
+
+Use a logger named `workbench.<area>`. For detailed records, call `trace(logger, "Opening %s", name)` from `workbench.logging_config`. Pass identifying fields as `extra={"fields": {"layout_id": 12}}`; they appear as `layout_id=12` after the message. Keep sensitive values out of log messages and fields.
+
+Top-level UI actions that need an error dialog can call `ErrorReporter.run(description, operation)` from their Qt signal connection. It logs an exception with its traceback and shows one critical dialog instead of re-raising it. At startup, `main.py` also installs the reporter as `sys.excepthook` for unexpected PySide6 callback exceptions, restoring the previous hook when the event loop exits. This process-wide hook is a last-resort reporting mechanism; after an unexpected exception, the application is not guaranteed to be in a consistent state. The reporter sends dialog requests through a Qt signal so dialogs run on the GUI thread. Validation failures and cancelled dialogs return normally and do not use this path.
+
 ## Architecture
 
 Not yet defined. We will design and review the initial PySide6 interface using small stubbed data sources before documenting an implemented architecture. Add architectural explanations here only when they materially improve understanding.
