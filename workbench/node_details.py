@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -34,6 +35,7 @@ class NodeDetails(QWidget):
         super().__init__()
 
         self.node = None
+        self.node_list_item = None
         self.editing_values = None
         self.editing_descriptions = None
 
@@ -64,6 +66,10 @@ class NodeDetails(QWidget):
 
         self.node_number = QLabel("-")
         self.node_name = QLabel("-")
+        self.node_name_editor = QLineEdit()
+        self.node_name_stack = QStackedWidget()
+        self.node_name_stack.addWidget(self.node_name)
+        self.node_name_stack.addWidget(self.node_name_editor)
         self.can_id = QLabel("-")
         self.module_type = QLabel("-")
         self.firmware = QLabel("-")
@@ -85,8 +91,8 @@ class NodeDetails(QWidget):
         self.stored_events = QLabel("-")
 
         # Identity
+        form.addRow("Name:", self.node_name_stack)
         form.addRow("Node number:", self.node_number)
-        form.addRow("Name:", self.node_name)
         form.addRow("CAN ID:", self.can_id)
         form.addRow("Status:", self.status)
 
@@ -115,8 +121,31 @@ class NodeDetails(QWidget):
         # Definition
         form.addRow("Module descriptor:", self.module_descriptor)
 
+        self.details_page = QWidget()
+        details_layout = QVBoxLayout(self.details_page)
+        details_layout.addWidget(self.group, 1)
         self.tabs = QTabWidget()
-        self.tabs.addTab(self.group, "Node Details")
+        self.tabs.addTab(self.details_page, "Node Details")
+
+        self.details_buttons = QStackedLayout()
+        self.details_edit_button = QPushButton("Edit")
+        self.details_edit_button.setEnabled(False)
+        self.details_edit_button.clicked.connect(self.start_name_editing)
+        view_buttons = QWidget()
+        view_buttons_layout = QHBoxLayout(view_buttons)
+        view_buttons_layout.addStretch()
+        view_buttons_layout.addWidget(self.details_edit_button)
+        self.details_save_button = QPushButton("Save")
+        self.details_save_button.clicked.connect(self.save_name_editing)
+        self.details_cancel_button = QPushButton("Cancel")
+        self.details_cancel_button.clicked.connect(self.cancel_name_editing)
+        edit_buttons = QWidget()
+        edit_buttons_layout = QHBoxLayout(edit_buttons)
+        edit_buttons_layout.addStretch()
+        edit_buttons_layout.addWidget(self.details_save_button)
+        edit_buttons_layout.addWidget(self.details_cancel_button)
+        self.details_buttons.addWidget(view_buttons)
+        self.details_buttons.addWidget(edit_buttons)
         self.raw_values = RawNodeVariables()
         self.mdf_values = MdfNodeVariables()
         self.mdf_values.set_editing(False)
@@ -207,7 +236,10 @@ class NodeDetails(QWidget):
 
         # Pages must match the tab order: currentChanged passes its index to this stack.
         self.action_area = QStackedWidget()
-        self.action_area.addWidget(QWidget())  # Node Details
+        details_actions = QWidget()
+        details_actions_layout = QHBoxLayout(details_actions)
+        details_actions_layout.addLayout(self.details_buttons)
+        self.action_area.addWidget(details_actions)
         self.action_area.addWidget(variables_actions)
         self.action_area.addWidget(events_actions)
 
@@ -246,6 +278,55 @@ class NodeDetails(QWidget):
 
         self.stop_editing()
 
+    def start_name_editing(self):
+        if self.node is None:
+            return
+        self.node_name_editor.setText(self.node.name)
+        self.node_name_stack.setCurrentWidget(self.node_name_editor)
+        self.set_name_editing_tabs(True)
+        self.details_buttons.setCurrentIndex(1)
+        self.editing_changed.emit(True)
+
+    def save_name_editing(self):
+        if self.node is None:
+            return
+        self.node.name = self.node_name_editor.text().strip()
+        self.refresh_node_name()
+        self.finish_name_editing()
+
+    def cancel_name_editing(self):
+        self.refresh_node_name()
+        self.finish_name_editing()
+
+    def finish_name_editing(self):
+        self.node_name_stack.setCurrentWidget(self.node_name)
+        self.set_name_editing_tabs(False)
+        self.details_buttons.setCurrentIndex(0)
+        self.editing_changed.emit(False)
+
+    def set_name_editing_tabs(self, editing):
+        for page in (
+            self.variables_page,
+            self.node_events,
+            self.node_backups,
+        ):
+            self.tabs.setTabEnabled(self.tabs.indexOf(page), not editing)
+
+    def refresh_node_name(self):
+        self.node_name.setText((self.node.name or "-") if self.node else "-")
+        if self.node is None:
+            return
+        title = f"Node {self.node.number} — {self.node.module_type}"
+        if self.node.name:
+            title += f" — {self.node.name}"
+        self.summary.setTitle(title)
+        current = self.node_list_item
+        if current is not None:
+            label = f"{self.node.number} - {self.node.module_type}"
+            if self.node.name:
+                label += f" — {self.node.name}"
+            current.setText(label)
+
     def cancel_editing(self):
         self.editing_values = None
         self.editing_descriptions = None
@@ -279,7 +360,7 @@ class NodeDetails(QWidget):
         self.editing_changed.emit(False)
 
     def set_editing(self, editing):
-        self.tabs.setTabEnabled(self.tabs.indexOf(self.group), not editing)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.details_page), not editing)
         self.tabs.setTabEnabled(self.tabs.indexOf(self.node_events), not editing)
         self.tabs.setTabEnabled(self.tabs.indexOf(self.node_backups), not editing)
 
@@ -287,7 +368,7 @@ class NodeDetails(QWidget):
         self.node_events.begin_edit()
         self.events_buttons.setCurrentIndex(1)
 
-        self.tabs.setTabEnabled(self.tabs.indexOf(self.group), False)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.details_page), False)
         self.tabs.setTabEnabled(self.tabs.indexOf(self.variables_page), False)
         self.tabs.setTabEnabled(self.tabs.indexOf(self.node_backups), False)
 
@@ -299,7 +380,7 @@ class NodeDetails(QWidget):
 
     def finish_events_editing(self):
         self.events_buttons.setCurrentIndex(0)
-        self.tabs.setTabEnabled(self.tabs.indexOf(self.group), True)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.details_page), True)
         self.tabs.setTabEnabled(self.tabs.indexOf(self.variables_page), True)
         self.tabs.setTabEnabled(self.tabs.indexOf(self.node_backups), True)
 
@@ -310,6 +391,8 @@ class NodeDetails(QWidget):
         self.finish_events_editing()
 
     def show_node(self, current):
+        self.node_list_item = current
+        self.details_buttons.setCurrentIndex(0)
         self.node = current.data(Qt.ItemDataRole.UserRole) if current else None
         self.node_events.show_node(self.node)
         self.node_backups.show_node(self.node)
@@ -318,6 +401,7 @@ class NodeDetails(QWidget):
 
         enabled = current is not None
         self.edit_button.setEnabled(enabled)
+        self.details_edit_button.setEnabled(enabled)
         self.events_edit_button.setEnabled(enabled)
 
         if current is None:
@@ -365,7 +449,7 @@ class NodeDetails(QWidget):
 
         self.variables.setCurrentIndex(1 if has_mdf else 0)
         self.node_number.setText(str(number))
-        self.node_name.setText(node.name or "-")
+        self.refresh_node_name()
         self.can_id.setText("126")
         self.module_type.setText("CANMIO")
         self.firmware.setText("3d")
@@ -386,11 +470,6 @@ class NodeDetails(QWidget):
         self.interface.setText("CAN")
         self.module_descriptor.setText("CANMIO-A520-3d.json (System definitions)")
 
-        title = f"Node {number} — {node.module_type}"
-        if node.name:
-            title += f" — {node.name}"
-
-        self.summary.setTitle(title)
         self.summary_can_id.setText(f"CAN ID: {node.can_id}")
         self.summary_firmware.setText(f"Firmware: {node.firmware}")
         self.summary_mode.setText("Mode: FLiM")
