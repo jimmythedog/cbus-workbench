@@ -50,7 +50,13 @@ ruff check .
 ruff format --check .
 ```
 
-On systems where Ruff is installed through uv as a development dependency, use `uv run ruff` instead. Add test instructions when the first tests are introduced.
+On systems where Ruff is installed through uv as a development dependency, use `uv run ruff` instead.
+
+Run the focused TCP connection and frame checks with:
+
+```sh
+python -m unittest discover -s tests -v
+```
 
 ## Logs
 
@@ -68,4 +74,18 @@ Top-level UI actions that need an error dialog can call `ErrorReporter.run(descr
 
 ## Architecture
 
-Not yet defined. We will design and review the initial PySide6 interface using small stubbed data sources before documenting an implemented architecture. Add architectural explanations here only when they materially improve understanding.
+Layout connection settings live in `MainWindow` for the current session. A TCP layout
+gets a `TcpConnection` when Connect is selected. Its `QTcpSocket` runs on the Qt event
+loop and reports connection, disconnection and errors through signals; `MainWindow`
+updates the selected layout's status from those signals. `readyRead` collects TCP bytes
+until complete colon-to-semicolon GridConnect frames are available, then signals and
+logs each frame at TRACE. `send` queues one complete ASCII frame with `QTcpSocket.write`
+and logs it at TRACE. Changing a layout's endpoint, deleting it or closing the window
+closes its socket. A serial layout gets a `SerialConnection`, which opens its configured
+device path with `QSerialPort` and reports the same connection states and errors. It
+uses Qt's default port settings (9600 baud, 8 data bits, no parity, one stop bit, no
+flow control). Serial `readyRead` buffers bytes until complete GridConnect frames are
+available, then emits and logs each frame at TRACE. Like TCP, serial `send` validates
+one complete printable ASCII frame, queues it with `QSerialPort.write` and logs it at
+TRACE. Both transports use the same Send GridConnect Frame dialog. Disconnecting,
+changing the device path, deleting the layout or closing the window closes the port.

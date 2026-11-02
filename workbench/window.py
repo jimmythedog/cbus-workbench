@@ -17,6 +17,9 @@ from .diagnostics import Diagnostics
 from .layout_settings import LayoutSettingsDialog
 from .layout_view import LayoutView
 from .logging_config import TRACE, trace
+from .send_frame_dialog import SendFrameDialog
+from .serial_connection import SerialConnection
+from .tcp_connection import TcpConnection
 from .ui_errors import ErrorReporter
 
 layout_logger = logging.getLogger("workbench.layouts")
@@ -45,6 +48,7 @@ class MainWindow(QMainWindow):
         self.layout_stack = QStackedWidget()
         self.layouts = {}
         self.layout_settings = {}
+        self.connections: dict[str, TcpConnection | SerialConnection] = {}
 
         for name in ("Home", "Test Layout"):
             view = LayoutView()
@@ -105,16 +109,16 @@ class MainWindow(QMainWindow):
         self.layout_menu.addSeparator()
 
         self.connect_action = QAction("&Connect", self)
-        self.connect_action.triggered.connect(
-            lambda: self.set_connection_state("Connected")
-        )
+        self.connect_action.triggered.connect(self.connect_layout)
         self.layout_menu.addAction(self.connect_action)
 
         self.disconnect_action = QAction("&Disconnect", self)
-        self.disconnect_action.triggered.connect(
-            lambda: self.set_connection_state("Disconnected")
-        )
+        self.disconnect_action.triggered.connect(self.disconnect_layout)
         self.layout_menu.addAction(self.disconnect_action)
+
+        self.send_frame_action = QAction("Send GridConnect Frame…", self)
+        self.send_frame_action.triggered.connect(self.show_send_frame_dialog)
+        self.layout_menu.addAction(self.send_frame_action)
 
         self.layout_menu.addSeparator()
 
@@ -191,28 +195,18 @@ class MainWindow(QMainWindow):
         )
         logger.handle(record)
 
-    def set_connection_state(self, state):
+    def set_connection_state(self, name: str, state: str) -> None:
         trace(
             connection_logger,
             "Entering set_connection_state",
-            extra={"fields": {"state": state}},
+            extra={"fields": {"layout": name, "state": state}},
         )
-        action = self.layout_group.checkedAction()
-
-        if action is None:
-            connection_logger.debug(
-                "Connection state request ignored: no layout selected"
-            )
-            return
-
-        name = action.text()
         previous_state = self.connection_states[name]
         self.connection_states[name] = state
         self.update_connection_actions()
-
-        self.statusBar().showMessage(
-            f"Layout '{name}': {state.lower()} (simulated)", 5000
-        )
+        selected = self.layout_group.checkedAction()
+        if selected is not None and selected.text() == name:
+            self.statusBar().showMessage(f"Layout '{name}': {state.lower()}", 5000)
         fields = {
             "layout": name,
             "connection_type": self.layout_settings[name]["connection_type"],
@@ -220,17 +214,119 @@ class MainWindow(QMainWindow):
             "state": state,
         }
         if state != previous_state:
-            connection_logger.info(
-                "Simulated connection state changed", extra={"fields": fields}
-            )
+            connection_logger.info("Connection state changed", extra={"fields": fields})
         else:
             connection_logger.debug(
-                "Simulated connection state unchanged", extra={"fields": fields}
+                "Connection state unchanged", extra={"fields": fields}
             )
         trace(
             connection_logger,
             "Leaving set_connection_state",
             extra={"fields": {"layout": name}},
+        )
+
+    def connect_layout(self) -> None:
+        action = self.layout_group.checkedAction()
+        if action is None:
+            return
+
+        name = action.text()
+        settings = self.layout_settings[name]
+        serial = settings["connection_type"] == "Serial"
+        endpoint = settings["serial_port"] if serial else settings["host"]
+        if not endpoint:
+            connection_logger.warning(
+                "Connection skipped: endpoint is empty",
+                extra={
+                    "fields": {
+                        "layout": name,
+                        "connection_type": settings["connection_type"],
+                    }
+                },
+            )
+            QMessageBox.warning(
+                self,
+                "Connection failed",
+                f"Set a {'serial device path' if serial else 'TCP host'} in Layout → Edit first.",
+            )
+            return
+
+        connection = self.connections.get(name)
+        if connection is None:
+            connection = (
+                SerialConnection(name, self) if serial else TcpConnection(name, self)
+            )
+            connection.state_changed.connect(
+                lambda state, conn=connection: self.set_connection_state(
+                    conn.layout_name, state
+                )
+            )
+            connection.failed.connect(
+                lambda message, conn=connection: self.connection_failed(conn, message)
+            )
+            self.connections[name] = connection
+
+        if serial:
+            connection_logger.info(
+                "Connecting to serial device",
+                extra={"fields": {"layout": name, "device": endpoint}},
+            )
+            connection.connect(endpoint)
+        else:
+            connection_logger.info(
+                "Connecting to TCP hub",
+                extra={
+                    "fields": {
+                        "layout": name,
+                        "host": endpoint,
+                        "port": settings["port"],
+                    }
+                },
+            )
+            connection.connect(endpoint, settings["port"])
+
+    def disconnect_layout(self) -> None:
+        action = self.layout_group.checkedAction()
+        if action is None:
+            return
+        name = action.text()
+        connection = self.connections.get(name)
+        if connection is not None:
+            connection_logger.info(
+                "Disconnecting layout", extra={"fields": {"layout": name}}
+            )
+            connection.disconnect()
+
+    def show_send_frame_dialog(self) -> None:
+        action = self.layout_group.checkedAction()
+        if action is None:
+            return
+        name = action.text()
+        connection = self.connections.get(name)
+        if isinstance(connection, (TcpConnection, SerialConnection)):
+            SendFrameDialog(name, connection, self).exec()
+
+    def connection_failed(
+        self, connection: TcpConnection | SerialConnection, message: str
+    ) -> None:
+        name = connection.layout_name
+        settings = self.layout_settings[name]
+        serial = settings["connection_type"] == "Serial"
+        endpoint = (
+            settings["serial_port"]
+            if serial
+            else f"{settings['host']}:{settings['port']}"
+        )
+        connection_logger.error(
+            "%s connection failed: %s",
+            settings["connection_type"],
+            message,
+            extra={"fields": {"layout": name, "endpoint": endpoint}},
+        )
+        QMessageBox.warning(
+            self,
+            "Connection failed",
+            f"Connection for layout '{name}' to {endpoint} failed.\n\n{message}",
         )
 
     def update_connection_actions(self):
@@ -239,6 +335,7 @@ class MainWindow(QMainWindow):
         if action is None:
             self.connect_action.setEnabled(False)
             self.disconnect_action.setEnabled(False)
+            self.send_frame_action.setEnabled(False)
             self.connection_status.setText("Disconnected")
             return
 
@@ -246,6 +343,7 @@ class MainWindow(QMainWindow):
 
         self.connect_action.setEnabled(state in ("Disconnected", "Error"))
         self.disconnect_action.setEnabled(state in ("Connected", "Connecting"))
+        self.send_frame_action.setEnabled(state == "Connected")
         self.connection_status.setText(state)
 
     def update_layout_actions(self):
@@ -395,14 +493,36 @@ class MainWindow(QMainWindow):
             )
             return
 
+        old_endpoint = (
+            current["serial_port"]
+            if current["connection_type"] == "Serial"
+            else (current["host"], current["port"])
+        )
+        new_endpoint = (
+            settings["serial_port"]
+            if settings["connection_type"] == "Serial"
+            else (settings["host"], settings["port"])
+        )
+        if (
+            current["connection_type"] != settings["connection_type"]
+            or old_endpoint != new_endpoint
+        ):
+            # A changed endpoint must not keep the old connection open.
+            self.close_layout_connection(old_name)
+
         if name != old_name:
             self.layouts[name] = self.layouts.pop(old_name)
             self.connection_states[name] = self.connection_states.pop(old_name)
+            if old_name in self.connections:
+                connection = self.connections.pop(old_name)
+                connection.layout_name = name
+                self.connections[name] = connection
             action.setText(name)
             self.layout_status.setText(name)
 
         del self.layout_settings[old_name]
         self.layout_settings[name] = settings
+        self.update_connection_actions()
 
         self.statusBar().showMessage(f"Layout '{name}' updated", 5000)
         if name != old_name:
@@ -457,6 +577,8 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self.close_layout_connection(name)
+
         # Remove the layout and its menu action.
         view = self.layouts.pop(name)
         del self.layout_settings[name]
@@ -502,14 +624,25 @@ class MainWindow(QMainWindow):
         state = self.connection_states[action.text()]
 
         if state in ("Disconnected", "Error"):
-            self.set_connection_state("Connected")
+            self.connect_layout()
         elif state in ("Connected", "Connecting"):
-            self.set_connection_state("Disconnected")
+            self.disconnect_layout()
         trace(
             connection_logger,
             "Leaving toggle_connection",
             extra={"fields": {"layout": action.text()}},
         )
+
+    def close_layout_connection(self, name: str) -> None:
+        connection = self.connections.pop(name, None)
+        if connection is not None:
+            connection.disconnect()
+            connection.deleteLater()
+
+    def closeEvent(self, event) -> None:
+        for name in tuple(self.connections):
+            self.close_layout_connection(name)
+        super().closeEvent(event)
 
     def show_about(self):
         QMessageBox.about(

@@ -4,7 +4,10 @@ A cross-platform desktop application for configuring and maintaining CBUS/VLCB n
 
 ## Status
 
-Early development. The application is being designed and is not yet usable.
+Early development. TCP/IP layouts can connect to a configured hub and show their
+connection status. Complete incoming GridConnect frames are logged at TRACE. For a
+connected TCP or serial layout, Layout → Send GridConnect Frame… allows raw frames to
+be sent. Serial layouts use their configured device path.
 
 ## Development
 
