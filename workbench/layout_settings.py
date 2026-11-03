@@ -1,4 +1,5 @@
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -23,6 +24,7 @@ class LayoutSettingsDialog(QDialog):
         host="",
         port=5550,
         serial_port="/dev/ttyACM0",
+        auto_connect=False,
     ):
         super().__init__(parent)
         self.setWindowTitle("Layout settings")
@@ -49,6 +51,9 @@ class LayoutSettingsDialog(QDialog):
         layout_form = QFormLayout()
         layout_form.addRow("Name:", self.name_edit)
         layout_form.addRow("Logical layout:", self.logical_layout_combo)
+        self.auto_connect_check = QCheckBox("Auto-connect on startup")
+        self.auto_connect_check.setChecked(auto_connect)
+        layout_form.addRow(self.auto_connect_check)
 
         connection_group = QGroupBox("Connection")
         connection_form = QFormLayout(connection_group)
@@ -98,4 +103,5 @@ class LayoutSettingsDialog(QDialog):
             "host": self.host_edit.text().strip(),
             "port": self.port_spin.value(),
             "serial_port": self.serial_port_edit.text().strip(),
+            "auto_connect": self.auto_connect_check.isChecked(),
         }

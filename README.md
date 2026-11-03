@@ -7,7 +7,17 @@ A cross-platform desktop application for configuring and maintaining CBUS/VLCB n
 Early development. TCP/IP layouts can connect to a configured hub and show their
 connection status. Complete incoming GridConnect frames are logged at TRACE. For a
 connected TCP or serial layout, Layout → Send GridConnect Frame… allows raw frames to
-be sent. Serial layouts use their configured device path.
+be sent. Serial layouts use their configured device path. At startup, saved layouts
+are loaded from the application settings file; a new installation starts empty.
+Layouts with Auto-connect on startup enabled attempt to connect after the window opens.
+Layout → New, Edit and Delete save changes to that file. The first layout is the
+default on startup; renaming it preserves that choice, and deleting it chooses
+another layout. Selecting a layout during a session does not change the default.
+Layout → Set as default saves the selected layout as the startup choice. A star
+marks the default in the Layout menu; the radio indicator marks the selection.
+Edit and Delete are available only when that layout's connection is closed.
+Changing a layout's logical layout switches its stored node configuration and
+backup directory after confirmation; existing data is not moved or deleted.
 
 ## Development
 

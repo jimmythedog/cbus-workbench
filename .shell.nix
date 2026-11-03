@@ -6,6 +6,7 @@ pkgs.mkShell {
   packages = [
     (pkgs.python3.withPackages (ps: [
       ps.pyside6
+      ps.pyyaml
     ]))
     pkgs.bashInteractive
     pkgs.uv

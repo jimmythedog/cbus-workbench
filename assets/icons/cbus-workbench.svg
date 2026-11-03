@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+<defs>
+ <linearGradient id="bg" x1="0" y1="0" x2="0.85" y2="1"><stop stop-color="#008cff"/><stop offset=".47" stop-color="#0561c5"/><stop offset="1" stop-color="#062450"/></linearGradient>
+ <linearGradient id="metal" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#ffffff"/><stop offset="1" stop-color="#c7e9ff"/></linearGradient>
+ <linearGradient id="node" x1="0" y1="0" x2=".8" y2="1"><stop stop-color="#49ed32"/><stop offset="1" stop-color="#00a84b"/></linearGradient>
+</defs>
+<rect x="20" y="20" width="984" height="984" rx="214" fill="url(#bg)" stroke="#034d9f" stroke-width="8"/>
+<path d="M245 61 Q515 23 790 61" fill="none" stroke="#58bdff" stroke-width="9" opacity=".45"/>
+<!-- Bold CW initials -->
+<text x="512" y="550" font-family="DejaVu Sans, Arial, sans-serif" font-weight="900" font-size="375" letter-spacing="-19" text-anchor="middle" fill="url(#metal)">CW</text>
+<!-- CBUS backbone and three consumers -->
+<path d="M135 643 H889" stroke="#cdeaff" stroke-width="49" stroke-linecap="round"/>
+<path d="M235 644 V749 M512 644 V749 M789 644 V749" stroke="#cdeaff" stroke-width="43" stroke-linecap="round"/>
+<g fill="url(#node)" stroke="#f4fbff" stroke-width="29"><circle cx="235" cy="811" r="68"/><circle cx="512" cy="811" r="68"/><circle cx="789" cy="811" r="68"/></g>
+</svg>

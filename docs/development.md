@@ -74,6 +74,18 @@ Top-level UI actions that need an error dialog can call `ErrorReporter.run(descr
 
 ## Architecture
 
+`workbench.app_settings` owns the single `settings.yaml` in Qt's `AppDataLocation`
+for the application name `CBUS Workbench`. Its YAML mapping uses display names as
+layout keys and keeps TCP and serial connection fields together so switching types
+does not discard the inactive endpoint. It validates before saving and uses Qt's
+`QSaveFile` to replace an existing file atomically. `MainWindow` loads these settings
+at startup, translates them into its existing layout fields and selects the saved
+default. A missing file starts with no layouts; invalid settings are reported through
+the UI error reporter without changing the file. After the event loop starts,
+`MainWindow` attempts to connect each layout marked for auto-connect using the same
+path as manual Connect; one failure does not stop other attempts or change the
+selected default layout.
+
 Layout connection settings live in `MainWindow` for the current session. A TCP layout
 gets a `TcpConnection` when Connect is selected. Its `QTcpSocket` runs on the Qt event
 loop and reports connection, disconnection and errors through signals; `MainWindow`

@@ -5,6 +5,7 @@ import time
 import unittest
 from unittest.mock import patch
 
+from layout_fixture import sample_settings
 from PySide6.QtNetwork import QHostAddress, QTcpServer
 from PySide6.QtWidgets import (
     QApplication,
@@ -27,7 +28,8 @@ class SendFrameDialogTests(unittest.TestCase):
     def setUp(self):
         self.server = QTcpServer()
         self.assertTrue(self.server.listen(QHostAddress.SpecialAddress.LocalHost, 0))
-        self.window = MainWindow()
+        with patch("workbench.window.load_settings", return_value=sample_settings()):
+            self.window = MainWindow()
         self.window.layout_settings["Home"].update(
             host="127.0.0.1", port=self.server.serverPort()
         )
@@ -63,7 +65,7 @@ class SendFrameDialogTests(unittest.TestCase):
         other = next(
             action
             for action in self.window.layout_group.actions()
-            if action.text() == "Test Layout"
+            if action.data() == "Test Layout"
         )
         self.window.layout_settings["Test Layout"]["connection_type"] = "Serial"
         other.setChecked(True)
@@ -73,7 +75,7 @@ class SendFrameDialogTests(unittest.TestCase):
         home = next(
             action
             for action in self.window.layout_group.actions()
-            if action.text() == "Home"
+            if action.data() == "Home"
         )
         home.setChecked(True)
         self.window.select_layout(home)

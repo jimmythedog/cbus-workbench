@@ -7,6 +7,7 @@ import unittest
 from typing import ClassVar
 from unittest.mock import patch
 
+from layout_fixture import sample_settings
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtSerialPort import QSerialPort
 from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QMessageBox
@@ -288,7 +289,11 @@ class SerialLayoutTests(unittest.TestCase):
         )
         self.port_patch.start()
         self.addCleanup(self.port_patch.stop)
-        self.window = MainWindow()
+        with patch("workbench.window.load_settings", return_value=sample_settings()):
+            self.window = MainWindow()
+        save_patch = patch("workbench.window.save_settings")
+        save_patch.start()
+        self.addCleanup(save_patch.stop)
         self.window.layout_settings["Home"].update(
             connection_type="Serial",
             serial_port="/dev/serial/by-id/usb-SPROG_DCC_CAN_USB4-if00",
@@ -399,9 +404,11 @@ class SerialLayoutTests(unittest.TestCase):
         self.assertIn("Device could not be opened", messages[0])
         self.assertIn("Serial connection failed", captured.output[0])
 
-    def test_delete_and_window_close_release_ports(self):
+    def test_disconnect_then_delete_and_window_close_release_ports(self):
         self.window.connect_layout()
         first_port = FakeSerialPort.ports[-1]
+        self.assertFalse(self.window.delete_action.isEnabled())
+        self.window.disconnect_layout()
         with patch.object(
             QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
         ):
@@ -410,7 +417,7 @@ class SerialLayoutTests(unittest.TestCase):
         self.assertNotIn("Home", self.window.connections)
 
         other = self.window.layout_group.checkedAction()
-        self.window.layout_settings[other.text()].update(
+        self.window.layout_settings[other.data()].update(
             connection_type="Serial", serial_port="/dev/ttyACM1"
         )
         self.window.connect_layout()
@@ -431,9 +438,11 @@ class SerialLayoutTests(unittest.TestCase):
         self.assertEqual(self.window.connection_states["Home"], "Disconnected")
         warning.assert_not_called()
 
-    def test_changing_serial_device_path_closes_old_port(self):
+    def test_changing_serial_device_path_after_disconnect_replaces_connection(self):
         self.window.connect_layout()
         port = FakeSerialPort.ports[-1]
+        self.assertFalse(self.window.edit_action.isEnabled())
+        self.window.disconnect_layout()
         updated = self.window.layout_settings["Home"].copy()
         updated["serial_port"] = "/dev/ttyACM1"
         with patch("workbench.window.LayoutSettingsDialog") as dialog_type:
@@ -443,6 +452,7 @@ class SerialLayoutTests(unittest.TestCase):
             self.window.edit_layout()
 
         self.assertFalse(port.is_open)
+        self.assertNotIn("Home", self.window.connections)
         self.assertEqual(self.window.connection_status.text(), "Disconnected")
         self.window.connect_layout()
         self.assertEqual(FakeSerialPort.ports[-1].name, "/dev/ttyACM1")

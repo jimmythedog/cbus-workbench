@@ -1,8 +1,9 @@
 import logging
 import sys
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtNetwork import QAbstractSocket
 from PySide6.QtWidgets import (
     QDialog,
     QDockWidget,
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
 )
 
+from .app_settings import load_settings, save_settings
 from .diagnostics import Diagnostics
 from .layout_settings import LayoutSettingsDialog
 from .layout_view import LayoutView
@@ -37,6 +39,7 @@ class ConnectionStatusLabel(QLabel):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self._closed = False
         self.error_reporter = ErrorReporter(self)
 
         if sys.platform == "linux":
@@ -50,23 +53,34 @@ class MainWindow(QMainWindow):
         self.layout_settings = {}
         self.connections: dict[str, TcpConnection | SerialConnection] = {}
 
-        for name in ("Home", "Test Layout"):
-            view = LayoutView()
+        saved_settings = {"default_layout": None, "layouts": {}}
+
+        def read_settings():
+            nonlocal saved_settings
+            saved_settings = load_settings()
+
+        self.error_reporter.run("Could not load settings", read_settings)
+        self.default_layout = saved_settings["default_layout"]
+
+        for name, saved in saved_settings["layouts"].items():
+            view = LayoutView(empty=True)
             self.layouts[name] = view
             self.layout_stack.addWidget(view)
 
+            connection = saved["connection"]
             self.layout_settings[name] = {
                 "name": name,
-                "logical_layout": name.lower().replace(" ", "-"),
-                "connection_type": "TCP/IP",
-                "host": "",
-                "port": 5550,
-                "serial_port": "",
+                "logical_layout": saved["logical_layout"],
+                "connection_type": connection["type"],
+                "host": connection["host"],
+                "port": connection["port"],
+                "serial_port": connection["serial_port"],
+                "auto_connect": saved["auto_connect"],
             }
 
         self.setCentralWidget(self.layout_stack)
 
-        self.layout_status = QLabel("Home")
+        self.layout_status = QLabel("No layout")
         self.connection_status = ConnectionStatusLabel("Disconnected")
         self.connection_status.setToolTip("Double-click to connect or disconnect")
         self.connection_status.double_clicked.connect(self.toggle_connection)
@@ -103,8 +117,20 @@ class MainWindow(QMainWindow):
         self.layout_menu.addAction(self.edit_action)
 
         self.delete_action = QAction("&Delete…", self)
-        self.delete_action.triggered.connect(self.delete_layout)
+        self.delete_action.triggered.connect(
+            lambda: self.error_reporter.run(
+                "Could not delete layout", self.delete_layout
+            )
+        )
         self.layout_menu.addAction(self.delete_action)
+
+        self.set_default_action = QAction("Set as &default", self)
+        self.set_default_action.triggered.connect(
+            lambda: self.error_reporter.run(
+                "Could not set default layout", self.set_selected_as_default
+            )
+        )
+        self.layout_menu.addAction(self.set_default_action)
 
         self.layout_menu.addSeparator()
 
@@ -122,14 +148,17 @@ class MainWindow(QMainWindow):
 
         self.layout_menu.addSeparator()
 
-        for name in ("Home", "Test Layout"):
+        for name in self.layouts:
             action = QAction(name, self)
             action.setCheckable(True)
+            action.setData(name)
             self.layout_group.addAction(action)
             self.layout_menu.addAction(action)
 
-            if name == "Home":
+            if name == self.default_layout:
                 action.setChecked(True)
+
+        self.update_default_indicator()
 
         self.connection_states = {name: "Disconnected" for name in self.layouts}
 
@@ -170,6 +199,25 @@ class MainWindow(QMainWindow):
 
         self.update_connection_actions()
         self.update_layout_actions()
+        selected = self.layout_group.checkedAction()
+        if selected is not None:
+            self.select_layout(selected)
+        startup_layouts = tuple(
+            name
+            for name, saved in saved_settings["layouts"].items()
+            if saved["auto_connect"]
+        )
+        QTimer.singleShot(0, lambda: self.auto_connect_layouts(startup_layouts))
+
+    def auto_connect_layouts(self, names: tuple[str, ...]) -> None:
+        """Attempt each saved startup connection after the window is initialized."""
+        if self._closed:
+            return
+        for name in names:
+            self.error_reporter.run(
+                f"Could not connect layout '{name}'",
+                lambda name=name: self._connect_layout(name),
+            )
 
     def change_logging_level(self, action: QAction) -> None:
         logger = logging.getLogger("workbench")
@@ -204,8 +252,12 @@ class MainWindow(QMainWindow):
         previous_state = self.connection_states[name]
         self.connection_states[name] = state
         self.update_connection_actions()
+        self.update_layout_actions()
+        if state == "Error":
+            # Serial reports the error before closing its port.
+            QTimer.singleShot(0, self.update_layout_actions)
         selected = self.layout_group.checkedAction()
-        if selected is not None and selected.text() == name:
+        if selected is not None and selected.data() == name:
             self.statusBar().showMessage(f"Layout '{name}': {state.lower()}", 5000)
         fields = {
             "layout": name,
@@ -230,7 +282,9 @@ class MainWindow(QMainWindow):
         if action is None:
             return
 
-        name = action.text()
+        self._connect_layout(action.data())
+
+    def _connect_layout(self, name: str) -> None:
         settings = self.layout_settings[name]
         serial = settings["connection_type"] == "Serial"
         endpoint = settings["serial_port"] if serial else settings["host"]
@@ -289,7 +343,7 @@ class MainWindow(QMainWindow):
         action = self.layout_group.checkedAction()
         if action is None:
             return
-        name = action.text()
+        name = action.data()
         connection = self.connections.get(name)
         if connection is not None:
             connection_logger.info(
@@ -301,7 +355,7 @@ class MainWindow(QMainWindow):
         action = self.layout_group.checkedAction()
         if action is None:
             return
-        name = action.text()
+        name = action.data()
         connection = self.connections.get(name)
         if isinstance(connection, (TcpConnection, SerialConnection)):
             SendFrameDialog(name, connection, self).exec()
@@ -339,7 +393,7 @@ class MainWindow(QMainWindow):
             self.connection_status.setText("Disconnected")
             return
 
-        state = self.connection_states[action.text()]
+        state = self.connection_states[action.data()]
 
         self.connect_action.setEnabled(state in ("Disconnected", "Error"))
         self.disconnect_action.setEnabled(state in ("Connected", "Connecting"))
@@ -347,12 +401,62 @@ class MainWindow(QMainWindow):
         self.connection_status.setText(state)
 
     def update_layout_actions(self):
-        enabled = bool(self.layouts)
+        action = self.layout_group.checkedAction()
+        enabled = action is not None and self.layout_can_change(action.data())
         self.edit_action.setEnabled(enabled)
         self.delete_action.setEnabled(enabled)
+        self.set_default_action.setEnabled(
+            action is not None and action.data() != self.default_layout
+        )
+
+    def update_default_indicator(self) -> None:
+        for action in self.layout_group.actions():
+            name = action.data()
+            action.setText(f"{name} ★" if name == self.default_layout else name)
+
+    def set_selected_as_default(self) -> None:
+        action = self.layout_group.checkedAction()
+        if action is None or action.data() == self.default_layout:
+            return
+        name = action.data()
+        self.save_layouts(self.layout_settings, name)
+        self.default_layout = name
+        self.update_default_indicator()
+        self.update_layout_actions()
+        layout_logger.info("Default layout changed", extra={"fields": {"layout": name}})
+
+    def layout_can_change(self, name: str) -> bool:
+        state = self.connection_states[name]
+        if state == "Disconnected":
+            return True
+        if state != "Error":
+            return False
+        connection = self.connections.get(name)
+        if connection is None:
+            return True
+        if isinstance(connection, SerialConnection):
+            return not connection.port.isOpen()
+        return connection.socket.state() == QAbstractSocket.SocketState.UnconnectedState
+
+    def save_layouts(self, layouts: dict, default_layout: str | None) -> None:
+        """Write proposed layout settings before changing the window's state."""
+        stored = {
+            name: {
+                "logical_layout": settings["logical_layout"],
+                "auto_connect": settings["auto_connect"],
+                "connection": {
+                    "type": settings["connection_type"],
+                    "host": settings["host"],
+                    "port": settings["port"],
+                    "serial_port": settings["serial_port"],
+                },
+            }
+            for name, settings in layouts.items()
+        }
+        save_settings({"default_layout": default_layout, "layouts": stored})
 
     def select_layout(self, action):
-        name = action.text()
+        name = action.data()
         previous_name = self.layout_status.text()
         trace(
             layout_logger, "Entering select_layout", extra={"fields": {"layout": name}}
@@ -360,6 +464,7 @@ class MainWindow(QMainWindow):
         self.layout_stack.setCurrentWidget(self.layouts[name])
         self.layout_status.setText(name)
         self.update_connection_actions()
+        self.update_layout_actions()
         if name != previous_name:
             layout_logger.info(
                 "Layout selected",
@@ -425,19 +530,27 @@ class MainWindow(QMainWindow):
             )
             return
 
+        default_layout = self.default_layout if self.layouts else name
+        proposed = self.layout_settings.copy()
+        proposed[name] = settings
+        self.save_layouts(proposed, default_layout)
+
         view = LayoutView(empty=True)
+        self.default_layout = default_layout
         self.layouts[name] = view
         self.layout_settings[name] = settings
         self.layout_stack.addWidget(view)
 
         action = QAction(name, self)
         action.setCheckable(True)
+        action.setData(name)
         self.layout_group.addAction(action)
         self.layout_menu.addAction(action)
 
         action.setChecked(True)
         self.connection_states[name] = "Disconnected"
         self.select_layout(action)
+        self.update_default_indicator()
         self.update_layout_actions()
 
         self.statusBar().showMessage(f"Layout '{name}' created", 5000)
@@ -460,7 +573,13 @@ class MainWindow(QMainWindow):
             trace(layout_logger, "Edit layout skipped: no layout selected")
             return
 
-        old_name = action.text()
+        old_name = action.data()
+        if not self.layout_can_change(old_name):
+            layout_logger.info(
+                "Edit layout skipped: connection is active",
+                extra={"fields": {"layout": old_name}},
+            )
+            return
         current = self.layout_settings[old_name]
 
         dialog = LayoutSettingsDialog(
@@ -474,24 +593,58 @@ class MainWindow(QMainWindow):
             ),
         )
 
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            trace(
-                layout_logger,
-                "Edit layout cancelled",
+        while True:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                trace(
+                    layout_logger,
+                    "Edit layout cancelled",
+                    extra={"fields": {"layout": old_name}},
+                )
+                return
+
+            settings = dialog.settings()
+            name = settings["name"]
+
+            if not self.validate_layout_settings(settings, old_name):
+                trace(
+                    layout_logger,
+                    "Edit layout rejected",
+                    extra={"fields": {"layout": old_name}},
+                )
+                return
+
+            if settings["logical_layout"] != current["logical_layout"]:
+                answer = QMessageBox.question(
+                    self,
+                    "Change logical layout",
+                    "This layout will use a different stored node configuration and "
+                    "backup directory. Existing data will not be moved or deleted. "
+                    "Continue?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    layout_logger.info(
+                        "Logical layout change cancelled",
+                        extra={"fields": {"layout": old_name}},
+                    )
+                    continue
+            break
+
+        if not self.layout_can_change(old_name):
+            layout_logger.info(
+                "Edit layout skipped: connection became active",
                 extra={"fields": {"layout": old_name}},
             )
             return
 
-        settings = dialog.settings()
-        name = settings["name"]
-
-        if not self.validate_layout_settings(settings, old_name):
-            trace(
-                layout_logger,
-                "Edit layout rejected",
-                extra={"fields": {"layout": old_name}},
-            )
-            return
+        proposed = self.layout_settings.copy()
+        del proposed[old_name]
+        proposed[name] = settings
+        default_layout = (
+            name if self.default_layout == old_name else self.default_layout
+        )
+        self.save_layouts(proposed, default_layout)
 
         old_endpoint = (
             current["serial_port"]
@@ -517,9 +670,11 @@ class MainWindow(QMainWindow):
                 connection = self.connections.pop(old_name)
                 connection.layout_name = name
                 self.connections[name] = connection
-            action.setText(name)
+            action.setData(name)
             self.layout_status.setText(name)
 
+        self.default_layout = default_layout
+        self.update_default_indicator()
         del self.layout_settings[old_name]
         self.layout_settings[name] = settings
         self.update_connection_actions()
@@ -559,7 +714,13 @@ class MainWindow(QMainWindow):
             trace(layout_logger, "Delete layout skipped: no layout selected")
             return
 
-        name = action.text()
+        name = action.data()
+        if not self.layout_can_change(name):
+            layout_logger.info(
+                "Delete layout skipped: connection is active",
+                extra={"fields": {"layout": name}},
+            )
+            return
 
         answer = QMessageBox.question(
             self,
@@ -577,7 +738,24 @@ class MainWindow(QMainWindow):
             )
             return
 
+        if not self.layout_can_change(name):
+            layout_logger.info(
+                "Delete layout skipped: connection became active",
+                extra={"fields": {"layout": name}},
+            )
+            return
+
+        proposed = self.layout_settings.copy()
+        del proposed[name]
+        default_layout = (
+            next(iter(proposed), None)
+            if self.default_layout == name
+            else self.default_layout
+        )
+        self.save_layouts(proposed, default_layout)
+
         self.close_layout_connection(name)
+        self.default_layout = default_layout
 
         # Remove the layout and its menu action.
         view = self.layouts.pop(name)
@@ -587,6 +765,7 @@ class MainWindow(QMainWindow):
         self.layout_group.removeAction(action)
         self.layout_menu.removeAction(action)
         action.deleteLater()
+        self.update_default_indicator()
 
         # removeWidget keeps the page parented; deleteLater frees it on event loop return.
         self.layout_stack.removeWidget(view)
@@ -597,7 +776,7 @@ class MainWindow(QMainWindow):
             next_name = next(iter(self.layouts))
 
             for remaining_action in self.layout_group.actions():
-                if remaining_action.text() == next_name:
+                if remaining_action.data() == next_name:
                     remaining_action.setChecked(True)
                     self.select_layout(remaining_action)
                     break
@@ -621,7 +800,7 @@ class MainWindow(QMainWindow):
             trace(connection_logger, "Toggle connection skipped: no layout selected")
             return
 
-        state = self.connection_states[action.text()]
+        state = self.connection_states[action.data()]
 
         if state in ("Disconnected", "Error"):
             self.connect_layout()
@@ -630,7 +809,7 @@ class MainWindow(QMainWindow):
         trace(
             connection_logger,
             "Leaving toggle_connection",
-            extra={"fields": {"layout": action.text()}},
+            extra={"fields": {"layout": action.data()}},
         )
 
     def close_layout_connection(self, name: str) -> None:
@@ -640,6 +819,7 @@ class MainWindow(QMainWindow):
             connection.deleteLater()
 
     def closeEvent(self, event) -> None:
+        self._closed = True
         for name in tuple(self.connections):
             self.close_layout_connection(name)
         super().closeEvent(event)
