@@ -2,9 +2,6 @@ name: Portable application builds
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - issue-11-portable-builds
 
 jobs:
   package:
@@ -25,8 +22,8 @@ jobs:
             executable: dist/CBUS Workbench.app
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
       - name: Install build dependencies
@@ -44,14 +41,14 @@ jobs:
         run: ditto -c -k --sequesterRsrc --keepParent "dist/CBUS Workbench.app" "cbus-workbench-macos-x64.zip"
       - name: Upload macOS archive
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: cbus-workbench-macos-x64.zip
           if-no-files-found: error
       - name: Upload portable bundle
         if: runner.os != 'macOS'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.bundle }}
