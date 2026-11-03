@@ -14,7 +14,12 @@ from PySide6.QtWidgets import (
     QStackedWidget,
 )
 
-from .app_settings import load_settings, save_settings
+from .app_settings import (
+    layout_settings_for_storage,
+    layout_settings_for_ui,
+    load_settings,
+    save_settings,
+)
 from .cbus_service import CbusService
 from .diagnostics import Diagnostics
 from .layout_settings import LayoutSettingsDialog
@@ -24,6 +29,7 @@ from .pnn import Pnn
 from .send_frame_dialog import SendFrameDialog
 from .serial_connection import SerialConnection
 from .tcp_connection import TcpConnection
+from .traffic import describe_frame
 from .ui_errors import ErrorReporter
 
 layout_logger = logging.getLogger("workbench.layouts")
@@ -64,23 +70,12 @@ class MainWindow(QMainWindow):
 
         self.error_reporter.run("Could not load settings", read_settings)
         self.default_layout = saved_settings["default_layout"]
+        self.layout_settings = layout_settings_for_ui(saved_settings["layouts"])
 
-        for name, saved in saved_settings["layouts"].items():
+        for name in self.layout_settings:
             view = LayoutView(empty=True)
             self.layouts[name] = view
             self.layout_stack.addWidget(view)
-
-            connection = saved["connection"]
-            self.layout_settings[name] = {
-                "name": name,
-                "logical_layout": saved["logical_layout"],
-                "connection_type": connection["type"],
-                "host": connection["host"],
-                "port": connection["port"],
-                "serial_port": connection["serial_port"],
-                "can_id": connection["can_id"],
-                "auto_connect": saved["auto_connect"],
-            }
 
         self.setCentralWidget(self.layout_stack)
 
@@ -208,8 +203,8 @@ class MainWindow(QMainWindow):
             self.select_layout(selected)
         startup_layouts = tuple(
             name
-            for name, saved in saved_settings["layouts"].items()
-            if saved["auto_connect"]
+            for name, settings in self.layout_settings.items()
+            if settings["auto_connect"]
         )
         QTimer.singleShot(0, lambda: self.auto_connect_layouts(startup_layouts))
 
@@ -293,33 +288,26 @@ class MainWindow(QMainWindow):
         connection = self.connections[name]
         service = CbusService(connection, self.layout_settings[name]["can_id"])
         service.node_discovered.connect(
-            lambda node, layout=name: self.record_node_identity(layout, node, False)
+            lambda node, layout=name: self.record_node_identity(layout, node)
         )
         service.node_updated.connect(
-            lambda node, layout=name: self.record_node_identity(layout, node, True)
+            lambda node, layout=name: self.record_node_identity(layout, node)
         )
+        node_view = self.layouts[name].node_view
+        node_view.state_lookup = lambda node_number: service.node_states[node_number]
+        service.node_state_updated.connect(node_view.refresh_state)
         self.cbus_services[name] = service
 
-        def send_query():
-            service.discover_nodes()
-            self.diagnostics_dock.widget().add_message(
-                "TX", "QNN", f"{name}: CAN ID {service.can_id}"
-            )
-
         self.error_reporter.run(
-            f"Could not discover nodes on layout '{name}'", send_query
+            f"Could not discover nodes on layout '{name}'", service.discover_nodes
         )
 
-    def record_node_identity(self, name: str, node: Pnn, updated: bool) -> None:
-        view = self.layouts[name]
-        view.node_view.show_identity(node)
-        action = "updated" if updated else "discovered"
-        self.diagnostics_dock.widget().add_message(
-            "RX",
-            "PNN",
-            f"{name}: node {node.node_number} {action} "
-            f"(manufacturer {node.manufacturer}, type {node.module_type}, flags {node.flags})",
-        )
+    def record_node_identity(self, name: str, node: Pnn) -> None:
+        self.layouts[name].node_view.show_identity(node)
+
+    def record_frame(self, name: str, direction: str, frame: bytes) -> None:
+        opcode, details = describe_frame(frame, name)
+        self.diagnostics_dock.widget().add_message(direction, opcode, details)
 
     def remove_cbus_service(self, name: str) -> None:
         service = self.cbus_services.pop(name, None)
@@ -372,6 +360,16 @@ class MainWindow(QMainWindow):
             )
             connection.failed.connect(
                 lambda message, conn=connection: self.connection_failed(conn, message)
+            )
+            connection.frame_sent.connect(
+                lambda frame, conn=connection: self.record_frame(
+                    conn.layout_name, "TX", frame
+                )
+            )
+            connection.frame_received.connect(
+                lambda frame, conn=connection: self.record_frame(
+                    conn.layout_name, "RX", frame
+                )
             )
             self.connections[name] = connection
 
@@ -495,21 +493,12 @@ class MainWindow(QMainWindow):
 
     def save_layouts(self, layouts: dict, default_layout: str | None) -> None:
         """Write proposed layout settings before changing the window's state."""
-        stored = {
-            name: {
-                "logical_layout": settings["logical_layout"],
-                "auto_connect": settings["auto_connect"],
-                "connection": {
-                    "type": settings["connection_type"],
-                    "host": settings["host"],
-                    "port": settings["port"],
-                    "serial_port": settings["serial_port"],
-                    "can_id": settings["can_id"],
-                },
+        save_settings(
+            {
+                "default_layout": default_layout,
+                "layouts": layout_settings_for_storage(layouts),
             }
-            for name, settings in layouts.items()
-        }
-        save_settings({"default_layout": default_layout, "layouts": stored})
+        )
 
     def select_layout(self, action):
         name = action.data()
@@ -638,6 +627,32 @@ class MainWindow(QMainWindow):
             )
             return
         current = self.layout_settings[old_name]
+        settings = self._edited_layout_settings(old_name, current)
+        if settings is None:
+            return
+        name = settings["name"]
+
+        if not self.layout_can_change(old_name):
+            layout_logger.info(
+                "Edit layout skipped: connection became active",
+                extra={"fields": {"layout": old_name}},
+            )
+            return
+
+        proposed = self.layout_settings.copy()
+        del proposed[old_name]
+        proposed[name] = settings
+        default_layout = (
+            name if self.default_layout == old_name else self.default_layout
+        )
+        self.save_layouts(proposed, default_layout)
+
+        self._apply_saved_layout_edit(old_name, settings, default_layout, action)
+        self._log_layout_edit(old_name, settings)
+        trace(layout_logger, "Leaving edit_layout", extra={"fields": {"layout": name}})
+
+    def _edited_layout_settings(self, old_name: str, current: dict) -> dict | None:
+        """Collect valid dialog settings, returning to the form after a declined change."""
 
         dialog = LayoutSettingsDialog(
             self,
@@ -660,7 +675,6 @@ class MainWindow(QMainWindow):
                 return
 
             settings = dialog.settings()
-            name = settings["name"]
 
             if not self.validate_layout_settings(settings, old_name):
                 trace(
@@ -670,38 +684,39 @@ class MainWindow(QMainWindow):
                 )
                 return
 
-            if settings["logical_layout"] != current["logical_layout"]:
-                answer = QMessageBox.question(
-                    self,
-                    "Change logical layout",
-                    "This layout will use a different stored node configuration and "
-                    "backup directory. Existing data will not be moved or deleted. "
-                    "Continue?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if answer != QMessageBox.StandardButton.Yes:
-                    layout_logger.info(
-                        "Logical layout change cancelled",
-                        extra={"fields": {"layout": old_name}},
-                    )
-                    continue
-            break
+            logical_layout_changed = (
+                settings["logical_layout"] != current["logical_layout"]
+            )
+            if logical_layout_changed and not self._confirm_logical_layout_change(
+                old_name
+            ):
+                continue
+            return settings
 
-        if not self.layout_can_change(old_name):
+    def _confirm_logical_layout_change(self, old_name: str) -> bool:
+        answer = QMessageBox.question(
+            self,
+            "Change logical layout",
+            "This layout will use a different stored node configuration and "
+            "backup directory. Existing data will not be moved or deleted. "
+            "Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
             layout_logger.info(
-                "Edit layout skipped: connection became active",
+                "Logical layout change cancelled",
                 extra={"fields": {"layout": old_name}},
             )
-            return
+            return False
+        return True
 
-        proposed = self.layout_settings.copy()
-        del proposed[old_name]
-        proposed[name] = settings
-        default_layout = (
-            name if self.default_layout == old_name else self.default_layout
-        )
-        self.save_layouts(proposed, default_layout)
+    def _apply_saved_layout_edit(
+        self, old_name: str, settings: dict, default_layout: str, action: QAction
+    ) -> None:
+        """Update connection and window state only after the settings save succeeds."""
+        current = self.layout_settings[old_name]
+        name = settings["name"]
 
         old_endpoint = (
             current["serial_port"]
@@ -737,6 +752,9 @@ class MainWindow(QMainWindow):
         self.update_connection_actions()
 
         self.statusBar().showMessage(f"Layout '{name}' updated", 5000)
+
+    def _log_layout_edit(self, old_name: str, settings: dict) -> None:
+        name = settings["name"]
         if name != old_name:
             layout_logger.info(
                 "Layout renamed",
@@ -763,7 +781,6 @@ class MainWindow(QMainWindow):
                     }
                 },
             )
-        trace(layout_logger, "Leaving edit_layout", extra={"fields": {"layout": name}})
 
     def delete_layout(self):
         trace(layout_logger, "Entering delete_layout")

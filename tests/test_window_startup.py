@@ -8,9 +8,10 @@ from typing import ClassVar
 from unittest.mock import patch
 
 from PySide6.QtCore import QObject
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from workbench.app_settings import load_settings, save_settings
+from workbench.layout_settings import LayoutSettingsDialog
 from workbench.pnn import Pnn
 from workbench.window import MainWindow
 
@@ -41,6 +42,7 @@ class RecordingConnection(QObject):
         self.state_changed = RecordingSignal()
         self.failed = RecordingSignal()
         self.frame_received = RecordingSignal()
+        self.frame_sent = RecordingSignal()
         self.sent = []
 
     def connect(self, *endpoint):
@@ -59,6 +61,7 @@ class RecordingConnection(QObject):
 
     def send(self, frame):
         self.sent.append(frame)
+        self.frame_sent.emit(frame)
 
     def deleteLater(self):
         pass
@@ -303,8 +306,116 @@ class WindowStartupTests(unittest.TestCase):
         )
         self.assertEqual(captured.records[0].fields["layout"], "First")
         table = window.diagnostics_dock.widget().table
-        self.assertEqual(table.rowCount(), 5)
-        self.assertIn("First: node 258 updated", table.item(3, 3).text())
+        self.assertEqual(table.rowCount(), 7)
+        self.assertTrue(
+            any(
+                "First: node 258 (manufacturer 13, type 35, flags 3)"
+                == table.item(row, 3).text()
+                for row in range(table.rowCount())
+            )
+        )
+
+    def test_identical_pnn_frames_are_both_shown_but_discovered_once(self):
+        self.save_startup_layouts([("Default", "TCP/IP", True)])
+        window = self.start_with_recording_connections()
+        connection = window.connections["Default"]
+        service = window.cbus_services["Default"]
+        discoveries = []
+        service.node_discovered.connect(discoveries.append)
+        table = window.diagnostics_dock.widget().table
+
+        frame = b":SB040NB601020D2203;"
+        connection.frame_received.emit(frame)
+        connection.frame_received.emit(frame)
+
+        pnn_rows = [
+            (table.item(row, 1).text(), table.item(row, 3).text())
+            for row in range(table.rowCount())
+            if table.item(row, 2).text() == "PNN"
+        ]
+        expected = (
+            "RX",
+            "Default: node 258 (manufacturer 13, type 34, flags 3)",
+        )
+        self.assertEqual(pnn_rows, [expected, expected])
+        self.assertEqual(discoveries, [Pnn(258, 13, 34, 3)])
+        self.assertEqual(window.layouts["Default"].node_view.node_list.count(), 1)
+
+    def test_diagnostics_shows_sent_and_network_frames_once(self):
+        self.save_startup_layouts([("Default", "TCP/IP", True)])
+        window = self.start_with_recording_connections()
+        connection = window.connections["Default"]
+        table = window.diagnostics_dock.widget().table
+
+        connection.frame_received.emit(b":SB040NB601020D2203;")
+        connection.frame_received.emit(b":SB040N9B01020002;")
+        connection.frame_received.emit(b":SB060N73010304;")  # Another application.
+        connection.frame_received.emit(b":SB060N9B01030405;")
+        connection.frame_received.emit(b":SB060N00;")
+
+        records = [
+            tuple(table.item(row, column).text() for column in (1, 2, 3))
+            for row in range(table.rowCount())
+        ]
+        self.assertEqual(records[0], ("TX", "QNN", "Default: CAN ID 126"))
+        self.assertEqual(
+            [record for record in records if record[1] == "PNN"],
+            [
+                (
+                    "RX",
+                    "PNN",
+                    "Default: node 258 (manufacturer 13, type 34, flags 3)",
+                )
+            ],
+        )
+        self.assertIn(("TX", "RQNPN", "Default: node 258, parameter 0"), records)
+        self.assertIn(("RX", "PARAN", "Default: node 258, parameter 0 = 2"), records)
+        self.assertIn(("RX", "RQNPN", "Default: node 259, parameter 4"), records)
+        self.assertIn(("RX", "PARAN", "Default: node 259, parameter 4 = 5"), records)
+        self.assertIn(("RX", "0x00", "Default: :SB060N00;"), records)
+
+    def test_frame_diagnostics_use_renamed_layout_on_reused_connection(self):
+        self.save_startup_layouts([("Default", "TCP/IP", True)])
+        window = self.start_with_recording_connections()
+        connection = window.connections["Default"]
+        table = window.diagnostics_dock.widget().table
+        frame = b":SB060N00;"
+
+        connection.send(frame)
+        connection.frame_received.emit(frame)
+        connection.disconnect()
+
+        def rename(dialog):
+            dialog.name_edit.setText("Renamed")
+            return QDialog.DialogCode.Accepted
+
+        with (
+            patch("workbench.app_settings.settings_path", return_value=self.path),
+            patch.object(LayoutSettingsDialog, "exec", rename),
+        ):
+            window.edit_layout()
+
+        self.assertIs(window.connections["Renamed"], connection)
+        self.assertEqual(connection.layout_name, "Renamed")
+        window.connect_layout()
+        self.assertIs(window.connections["Renamed"], connection)
+        connection.send(frame)
+        connection.frame_received.emit(frame)
+
+        records = [
+            (table.item(row, 1).text(), table.item(row, 3).text())
+            for row in range(table.rowCount())
+            if table.item(row, 2).text() == "0x00"
+        ]
+        self.assertEqual(
+            records,
+            [
+                ("TX", "Default: :SB060N00;"),
+                ("RX", "Default: :SB060N00;"),
+                ("TX", "Renamed: :SB060N00;"),
+                ("RX", "Renamed: :SB060N00;"),
+            ],
+        )
 
     def test_navigator_tracks_each_layout_and_refreshes_selected_identity(self):
         self.save_startup_layouts(
@@ -320,6 +431,9 @@ class WindowStartupTests(unittest.TestCase):
         window.connections["First"].frame_received.emit(b":SB040NB601020D2203;")
         self.assertEqual(first_view.node_list.count(), 1)
         self.assertEqual(default_view.node_list.count(), 0)
+        item = first_view.node_list.item(0)
+        self.assertIs(first_view.node_list.currentItem(), item)
+        self.assertEqual(first_view.details.node_number.text(), "258")
         first_action = next(
             action
             for action in window.layout_group.actions()
@@ -327,8 +441,6 @@ class WindowStartupTests(unittest.TestCase):
         )
         first_action.setChecked(True)
         window.select_layout(first_action)
-        item = first_view.node_list.item(0)
-        first_view.node_list.setCurrentItem(item)
         details = first_view.details
         self.assertEqual(item.text(), "258 - 34")
         self.assertEqual(details.node_number.text(), "258")
@@ -355,13 +467,300 @@ class WindowStartupTests(unittest.TestCase):
         window.select_layout(default_action)
         self.assertIs(window.layout_stack.currentWidget(), window.layouts["Default"])
         self.assertEqual(default_view.node_list.item(0).text(), "259 - 34")
+        self.assertIs(
+            default_view.node_list.currentItem(), default_view.node_list.item(0)
+        )
+        self.assertEqual(default_view.details.node_number.text(), "259")
         self.assertEqual(first_view.node_list.item(0).text(), "258 - 35")
 
         window.connections["First"].disconnect()
         self.assertEqual(first_view.node_list.count(), 0)
+        self.assertIsNone(first_view.node_list.currentItem())
         self.assertIsNone(first_view.details.node)
         self.assertEqual(first_view.details.node_number.text(), "-")
         self.assertEqual(default_view.node_list.count(), 1)
+
+    def test_navigator_keeps_selection_on_later_discoveries(self):
+        self.save_startup_layouts([("Default", "TCP/IP", True)])
+        window = self.start_with_recording_connections()
+        connection = window.connections["Default"]
+        view = window.layouts["Default"].node_view
+        navigator = view.node_list
+
+        connection.frame_received.emit(b":SB040NB601020D2203;")
+        first_item = navigator.item(0)
+        connection.frame_received.emit(b":SB040NB601030D2303;")
+        self.assertIs(navigator.currentItem(), first_item)
+        self.assertEqual(view.details.node_number.text(), "258")
+
+        navigator.clearSelection()
+        self.assertEqual(navigator.selectedItems(), [])
+        navigator.setCurrentItem(None)
+        self.assertIsNone(navigator.currentItem())
+        connection.frame_received.emit(b":SB040NB601040D2403;")
+        self.assertEqual(navigator.selectedItems(), [])
+        self.assertIsNone(navigator.currentItem())
+        self.assertIsNone(view.details.node)
+
+    def test_pnn_flags_update_selected_capabilities_and_clear_on_disconnect(self):
+        self.save_startup_layouts([("Default", "TCP/IP", True)])
+        window = self.start_with_recording_connections()
+        connection = window.connections["Default"]
+        view = window.layouts["Default"].node_view
+        details = view.details
+
+        for flags, expected in (
+            (0x00, ("SLiM", "No", "No", "No", "No")),
+            (0x01, ("SLiM", "No", "Yes", "No", "No")),
+            (0x02, ("SLiM", "Yes", "No", "No", "No")),
+            (0x04, ("FLiM", "No", "No", "No", "No")),
+            (0x08, ("SLiM", "No", "No", "No", "Yes")),
+            (0x10, ("SLiM", "No", "No", "Yes", "No")),
+            (0x1F, ("FLiM", "Yes", "Yes", "Yes", "Yes")),
+            (0x20, ("SLiM", "No", "No", "No", "No")),
+            (0xC0, ("SLiM", "No", "No", "No", "No")),
+        ):
+            with self.subTest(flags=flags):
+                connection.frame_received.emit(
+                    f":SB040NB601020D22{flags:02X};".encode()
+                )
+                self.assertEqual(view.node_list.count(), 1)
+                self.assertIs(view.node_list.currentItem(), view.node_list.item(0))
+                self.assertEqual(details.flags.text(), f"0x{flags:02X}")
+                self.assertEqual(
+                    (
+                        details.node_mode.text(),
+                        details.producer.text(),
+                        details.consumer.text(),
+                        details.consumes_own_events.text(),
+                        details.supports_bootloading.text(),
+                    ),
+                    expected,
+                )
+                self.assertEqual(details.summary_mode.text(), f"Mode: {expected[0]}")
+                self.assertEqual(details.can_id.text(), "-")
+                self.assertEqual(details.status.text(), "-")
+
+        connection.disconnect()
+        self.assertEqual(details.flags.text(), "-")
+        self.assertEqual(details.node_mode.text(), "-")
+        self.assertEqual(details.producer.text(), "-")
+        self.assertEqual(details.consumer.text(), "-")
+        self.assertEqual(details.consumes_own_events.text(), "-")
+        self.assertEqual(details.supports_bootloading.text(), "-")
+        self.assertEqual(details.summary_mode.text(), "Mode: -")
+
+    def test_selected_node_details_refresh_from_confirmed_parameters(self):
+        self.save_startup_layouts([("Default", "TCP/IP", True)])
+        window = self.start_with_recording_connections()
+        connection = window.connections["Default"]
+        view = window.layouts["Default"].node_view
+        connection.frame_received.emit(b":SB040NB601020D2203;")
+        selected = view.node_list.currentItem()
+        details = view.details
+
+        connection.frame_received.emit(b":SB040N9B01020703;")
+        self.assertIs(view.node_list.currentItem(), selected)
+        self.assertEqual(details.firmware.text(), "3")
+        connection.frame_received.emit(b":SB040N9B01020264;")
+        self.assertEqual(details.firmware.text(), "3d")
+        self.assertEqual(details.summary_firmware.text(), "Firmware: 3d")
+        connection.frame_received.emit(b":SB040N9B01020400;")
+        connection.frame_received.emit(b":SB040N9B01020514;")
+        connection.frame_received.emit(b":SB040N9B01020600;")
+        self.assertEqual(details.event_count.text(), "0")
+        self.assertEqual(details.ev_count.text(), "20")
+        self.assertEqual(details.nv_count.text(), "0")
+        self.assertEqual(details.manufacturer.text(), "13")
+        self.assertEqual(details.module_type.text(), "34")
+        self.assertEqual(details.flags.text(), "0x03")
+        self.assertEqual(details.node_name.text(), "-")
+        self.assertEqual(details.cpu_name.text(), "-")
+        connection.frame_received.emit(b":SB040N9B01021301;")
+        self.assertEqual(details.cpu_name.text(), "-")
+        connection.frame_received.emit(b":SB040N9B0102090D;")
+        self.assertEqual(details.cpu_name.text(), "P18F25K80")
+        connection.frame_received.emit(b":SB040N9B01020A01;")
+        self.assertEqual(details.interface.text(), "CAN")
+        connection.frame_received.emit(b":SB040N9B01020900;")
+        connection.frame_received.emit(b":SB040N9B01020A00;")
+        self.assertEqual(details.cpu_name.text(), "-")
+        self.assertEqual(details.interface.text(), "-")
+        self.assertEqual(details.event_count.text(), "0")
+        self.assertEqual(details.nv_count.text(), "0")
+        connection.frame_received.emit(b":SB040NB601020D2307;")
+        self.assertEqual(details.module_type.text(), "35")
+        self.assertEqual(details.flags.text(), "0x07")
+        self.assertEqual(details.firmware.text(), "3d")
+        self.assertEqual(details.event_count.text(), "0")
+
+    def test_live_nv_count_and_progressive_values_keep_selection_and_rows(self):
+        self.save_startup_layouts([("Default", "TCP/IP", True)])
+        window = self.start_with_recording_connections()
+        connection = window.connections["Default"]
+        view = window.layouts["Default"].node_view
+        connection.frame_received.emit(b":SB040NB601020D2203;")
+        selected = view.node_list.currentItem()
+        details = view.details
+        table = details.raw_values
+        connection.frame_received.emit(b":SB040N9B01020603;")
+
+        self.assertTrue(
+            details.tabs.isTabEnabled(details.tabs.indexOf(details.variables_page))
+        )
+        self.assertIs(details.variables.currentWidget(), table)
+        self.assertEqual(table.editTriggers(), table.EditTrigger.NoEditTriggers)
+        self.assertEqual(
+            [
+                (table.item(row, 0).text(), table.item(row, 1).text())
+                for row in range(3)
+            ],
+            [("1", "-"), ("2", "-"), ("3", "-")],
+        )
+        first_row = table.item(0, 0)
+        connection.frame_received.emit(b":SB040N9701020200;")
+        connection.frame_received.emit(b":SB040N970102012A;")
+        self.assertIs(view.node_list.currentItem(), selected)
+        self.assertIs(table.item(0, 0), first_row)
+        self.assertEqual(
+            [table.item(row, 1).text() for row in range(3)],
+            ["42", "0", "-"],
+        )
+
+    def test_live_nv_values_follow_selection_and_unknown_count(self):
+        self.save_startup_layouts([("Default", "TCP/IP", True)])
+        window = self.start_with_recording_connections()
+        connection = window.connections["Default"]
+        view = window.layouts["Default"].node_view
+        connection.frame_received.emit(b":SB040NB601020D2203;")
+        connection.frame_received.emit(b":SB040NB601030D2303;")
+        service = window.cbus_services["Default"]
+        service.record_nv(258, 1, 7)
+        service.record_nv(259, 3, 0)
+        table = view.details.raw_values
+        self.assertEqual(table.rowCount(), 1)
+        self.assertEqual((table.item(0, 0).text(), table.item(0, 1).text()), ("1", "7"))
+
+        view.node_list.setCurrentItem(view.node_list.item(1))
+        self.assertEqual(table.rowCount(), 1)
+        self.assertEqual((table.item(0, 0).text(), table.item(0, 1).text()), ("3", "0"))
+        connection.frame_received.emit(b":SB040N9B01030603;")
+        self.assertEqual(
+            [table.item(row, 1).text() for row in range(3)],
+            ["-", "-", "0"],
+        )
+        view.node_list.setCurrentItem(view.node_list.item(0))
+        self.assertEqual(table.rowCount(), 1)
+        self.assertEqual(table.item(0, 1).text(), "7")
+
+    def test_live_nv_display_clears_on_disconnect_and_reconnect(self):
+        self.save_startup_layouts([("Default", "TCP/IP", True)])
+        window = self.start_with_recording_connections()
+        connection = window.connections["Default"]
+        view = window.layouts["Default"].node_view
+        connection.frame_received.emit(b":SB040NB601020D2203;")
+        service = window.cbus_services["Default"]
+        service.record_nv(258, 1, 42)
+        self.assertEqual(view.details.raw_values.item(0, 1).text(), "42")
+
+        connection.disconnect()
+        self.assertEqual(view.details.raw_values.rowCount(), 0)
+        connection.connect()
+        connection.frame_received.emit(b":SB040NB601020D2203;")
+        connection.frame_received.emit(b":SB040N9B01020601;")
+        self.assertEqual(view.details.raw_values.item(0, 1).text(), "-")
+        window.cbus_services["Default"].record_nv(258, 1, 0)
+        self.assertEqual(view.details.raw_values.item(0, 1).text(), "0")
+
+    def test_switching_nodes_shows_each_nodes_confirmed_parameters(self):
+        self.save_startup_layouts([("Default", "TCP/IP", True)])
+        window = self.start_with_recording_connections()
+        connection = window.connections["Default"]
+        view = window.layouts["Default"].node_view
+        connection.frame_received.emit(b":SB040NB601020D2203;")
+        connection.frame_received.emit(b":SB040NB601030D2303;")
+        connection.frame_received.emit(b":SB040N9B01030409;")
+        connection.frame_received.emit(b":SB040N9B01030700;")
+        connection.frame_received.emit(b":SB040N9B01030261;")
+        connection.frame_received.emit(b":SB040N9B01030901;")
+        connection.frame_received.emit(b":SB040N9B01030A02;")
+        connection.frame_received.emit(b":SB040N9B01031301;")
+
+        self.assertEqual(view.details.event_count.text(), "-")
+        self.assertEqual(view.details.firmware.text(), "-")
+        self.assertEqual(view.details.cpu_name.text(), "-")
+        self.assertEqual(view.details.interface.text(), "-")
+        view.node_list.setCurrentItem(view.node_list.item(1))
+        self.assertEqual(view.details.node_number.text(), "259")
+        self.assertEqual(view.details.event_count.text(), "9")
+        self.assertEqual(view.details.firmware.text(), "0a")
+        self.assertEqual(view.details.ev_count.text(), "-")
+        self.assertEqual(view.details.cpu_name.text(), "P18F2480")
+        self.assertEqual(view.details.interface.text(), "Ethernet")
+        view.node_list.setCurrentItem(view.node_list.item(0))
+        self.assertEqual(view.details.event_count.text(), "-")
+        self.assertEqual(view.details.firmware.text(), "-")
+        self.assertEqual(view.details.cpu_name.text(), "-")
+        self.assertEqual(view.details.interface.text(), "-")
+
+    def test_beta_build_updates_firmware_and_summary(self):
+        self.save_startup_layouts([("Default", "TCP/IP", True)])
+        window = self.start_with_recording_connections()
+        connection = window.connections["Default"]
+        details = window.layouts["Default"].node_view.details
+        connection.frame_received.emit(b":SB040NB601020D2203;")
+
+        connection.frame_received.emit(b":SB040N9B01021401;")
+        connection.frame_received.emit(b":SB040N9B01020264;")
+        self.assertEqual(details.firmware.text(), "-")
+        self.assertEqual(details.summary_firmware.text(), "Firmware: -")
+        connection.frame_received.emit(b":SB040N9B01020703;")
+        self.assertEqual(details.firmware.text(), "3d Beta 1")
+        self.assertEqual(details.summary_firmware.text(), "Firmware: 3d Beta 1")
+        connection.frame_received.emit(b":SB040N9B01021400;")
+        self.assertEqual(details.firmware.text(), "3d")
+        self.assertEqual(details.summary_firmware.text(), "Firmware: 3d")
+
+    def test_parameter_presentation_is_isolated_and_cleared_on_disconnect(self):
+        self.save_startup_layouts(
+            [("First", "TCP/IP", True), ("Default", "Serial", True)]
+        )
+        window = self.start_with_recording_connections()
+        first = window.connections["First"]
+        second = window.connections["Default"]
+        first_view = window.layouts["First"].node_view
+        second_view = window.layouts["Default"].node_view
+        pnn = b":SB040NB601020D2203;"
+        first.frame_received.emit(pnn)
+        second.frame_received.emit(pnn)
+        first.frame_received.emit(b":SB040N9B01020405;")
+        first.frame_received.emit(b":SB040N9B0102090D;")
+        first.frame_received.emit(b":SB040N9B01021301;")
+        first.frame_received.emit(b":SB040N9B01020A01;")
+        first.frame_received.emit(b":SB040N9B01020703;")
+        first.frame_received.emit(b":SB040N9B01021401;")
+        self.assertEqual(first_view.details.event_count.text(), "5")
+        self.assertEqual(first_view.details.cpu_name.text(), "P18F25K80")
+        self.assertEqual(first_view.details.interface.text(), "CAN")
+        self.assertEqual(first_view.details.firmware.text(), "3 Beta 1")
+        self.assertEqual(second_view.details.event_count.text(), "-")
+        second.frame_received.emit(b":SB040N9B01020400;")
+        self.assertEqual(second_view.details.event_count.text(), "0")
+
+        first.disconnect()
+        self.assertEqual(first_view.node_list.count(), 0)
+        self.assertEqual(first_view.details.event_count.text(), "-")
+        self.assertEqual(first_view.details.firmware.text(), "-")
+        self.assertEqual(first_view.details.summary_firmware.text(), "Firmware: -")
+        self.assertEqual(first_view.details.cpu_name.text(), "-")
+        self.assertEqual(first_view.details.interface.text(), "-")
+        self.assertEqual(second_view.details.event_count.text(), "0")
+
+        first.connect()
+        first.frame_received.emit(pnn)
+        self.assertEqual(first_view.details.event_count.text(), "-")
+        self.assertEqual(first_view.details.cpu_name.text(), "-")
+        self.assertEqual(first_view.details.interface.text(), "-")
 
     def test_reconnect_clears_discovery_and_sends_one_new_query(self):
         self.save_startup_layouts([("Default", "TCP/IP", True)])
@@ -372,18 +771,25 @@ class WindowStartupTests(unittest.TestCase):
         self.assertEqual(first_service.nodes, {258: Pnn(258, 13, 34, 3)})
         navigator = window.layouts["Default"].node_view.node_list
         self.assertEqual(navigator.count(), 1)
+        first_service.record_nv(258, 1, 42)
+        self.assertEqual(first_service.node_states[258].nv_values, {1: 42})
 
         window.disconnect_layout()
         self.assertEqual(window.cbus_services, {})
         self.assertEqual(navigator.count(), 0)
+        self.assertIsNone(window.layouts["Default"].node_view.state_lookup)
         connection.frame_received.emit(b":SB040NB601030D2203;")
         self.assertEqual(first_service.nodes, {258: Pnn(258, 13, 34, 3)})
         self.assertEqual(navigator.count(), 0)
 
         window.connect_layout()
-        self.assertEqual(connection.sent, [b":SBFC0N0D;", b":SBFC0N0D;"])
+        self.assertEqual(
+            connection.sent,
+            [b":SBFC0N0D;", b":SBFC0N73010200;", b":SBFC0N0D;"],
+        )
         self.assertIsNot(window.cbus_services["Default"], first_service)
         self.assertEqual(window.cbus_services["Default"].nodes, {})
+        self.assertEqual(window.cbus_services["Default"].node_states, {})
         self.assertEqual(navigator.count(), 0)
 
     def test_failed_connection_does_not_prevent_other_startup_attempts(self):

@@ -44,6 +44,31 @@ class RawNodeVariables(QTableWidget):
             self.setItem(row, 2, QTableWidgetItem(self.descriptions.get(number, "")))
         self.blockSignals(False)
 
+    def show_live_values(self, count: int | None, values: dict[int, int]) -> None:
+        """Show confirmed live NVs; absent values within a known count stay unknown."""
+        self.set_editing(False)
+        self.values = None  # Live state must never be changed through this table.
+        indices = range(1, count + 1) if count is not None else sorted(values)
+        current = [self.item(row, 0).text() for row in range(self.rowCount())]
+        rebuild = current != [str(index) for index in indices]
+
+        self.blockSignals(True)
+        if rebuild:
+            self.setRowCount(len(indices))
+        for row, index in enumerate(indices):
+            if rebuild:
+                number_item = QTableWidgetItem(str(index))
+                number_item.setFlags(number_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.setItem(row, 0, number_item)
+                self.setItem(row, 2, QTableWidgetItem(""))
+            value = str(values[index]) if index in values else "-"
+            item = self.item(row, 1)
+            if item is None or item.text() != value:
+                item = QTableWidgetItem(value)
+                self.setItem(row, 1, item)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.blockSignals(False)
+
     def set_editing(self, editing):
         triggers = (
             QTableWidget.EditTrigger.DoubleClicked

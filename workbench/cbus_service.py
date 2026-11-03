@@ -1,20 +1,61 @@
-"""Live CBUS node identities for one GridConnect connection."""
+"""Live CBUS node identities and configuration for one GridConnect connection."""
 
 import logging
+from collections import deque
+from dataclasses import dataclass, field
+from enum import Enum
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 
+from .cmderr import decode_cmderr
+from .enrsp import decode_enrsp
 from .logging_config import trace
+from .neval import decode_neval
+from .numev import decode_numev
+from .nvans import decode_nvans
+from .paran import decode_paran
 from .pnn import Pnn, decode_pnn
 from .serial_connection import SerialConnection
 from .tcp_connection import TcpConnection
 
 logger = logging.getLogger("workbench.cbus")
+AUTOMATIC_REQUEST_TIMEOUT_MS = 2000
+AUTOMATIC_PARAMETER_INDICES = (2, 4, 5, 6, 7, 10, 20, 19, 9)
+RequestIndex = int | tuple[int, int]
+
+
+class DiscoveryProgress(Enum):
+    NOT_STARTED = "not started"
+    IN_PROGRESS = "in progress"
+    COMPLETE = "complete"
+    INCOMPLETE = "incomplete"
+    SKIPPED = "skipped"
+
+
+@dataclass
+class NodeState:
+    """Live discovery values and independent progress for one node."""
+
+    identity: Pnn
+    parameters: dict[int, int] = field(default_factory=dict)
+    nv_values: dict[int, int] = field(default_factory=dict)
+    stored_event_count: int | None = None
+    # The index identifies a slot in this node's event table, not the event number.
+    event_identities: dict[int, tuple[int, int]] = field(default_factory=dict)
+    # Zero is the assumed default until NEVAL confirms a value for that EV.
+    ev_values: dict[int, dict[int, int]] = field(default_factory=dict)
+    parameter_progress: DiscoveryProgress = DiscoveryProgress.NOT_STARTED
+    nv_progress: DiscoveryProgress = DiscoveryProgress.NOT_STARTED
+    event_progress: DiscoveryProgress = DiscoveryProgress.NOT_STARTED
+    ev_progress: DiscoveryProgress = DiscoveryProgress.NOT_STARTED
 
 
 class CbusService(QObject):
     node_discovered = Signal(Pnn)
     node_updated = Signal(Pnn)
+    parameter_updated = Signal(int, int, int)  # Node number, index, value.
+    # Observers read the current state by node number, including progress changes.
+    node_state_updated = Signal(int)
 
     def __init__(self, connection: TcpConnection | SerialConnection, can_id: int):
         """Use a unique PC CAN ID (100–127) assigned for this network."""
@@ -24,11 +65,29 @@ class CbusService(QObject):
         self.connection = connection
         self.can_id = can_id
         self.nodes: dict[int, Pnn] = {}
+        self.node_states: dict[int, NodeState] = {}
+        self._request_queue: deque[tuple[str, int, RequestIndex]] = deque()
+        self._outstanding_request: tuple[str, int, RequestIndex] | None = None
+        self._nv_started: dict[int, int] = {}
+        self._ev_started: set[int] = set()
+        self._request_timer = QTimer(self)
+        self._request_timer.setSingleShot(True)
+        self._request_timer.timeout.connect(self._request_timed_out)
         connection.frame_received.connect(self._receive_frame)
 
     def close(self) -> None:
         """Stop observing frames when this connection's live state ends."""
         self.connection.frame_received.disconnect(self._receive_frame)
+        self._request_timer.stop()
+        self._request_queue.clear()
+        self._outstanding_request = None
+        self._nv_started.clear()
+        self._ev_started.clear()
+        trace(
+            logger,
+            "Automatic discovery work cleared",
+            extra={"fields": {"layout": self.connection.layout_name}},
+        )
 
     def discover_nodes(self) -> None:
         """Queue one QNN request; PNN responses arrive independently by signal."""
@@ -45,9 +104,200 @@ class CbusService(QObject):
             raise
         trace(logger, "QNN queued", extra={"fields": fields})
 
+    def request_parameter(self, node_number: int, parameter_index: int) -> None:
+        """Queue one RQNPN request for an assigned node number."""
+        if type(node_number) is not int or not 1 <= node_number <= 0xFFFF:
+            raise ValueError("Node number must be between 1 and 65535")
+        if type(parameter_index) is not int or not 0 <= parameter_index <= 0xFF:
+            raise ValueError("Parameter index must be between 0 and 255")
+
+        header = (0x580 | self.can_id) << 5
+        frame = (f":S{header:04X}N73{node_number:04X}{parameter_index:02X};").encode(
+            "ascii"
+        )
+        fields = {
+            "layout": self.connection.layout_name,
+            "node_number": node_number,
+            "parameter_index": parameter_index,
+        }
+        trace(logger, "Sending RQNPN", extra={"fields": fields})
+        try:
+            self.connection.send(frame)
+        except OSError:
+            logger.exception("Could not send RQNPN", extra={"fields": fields})
+            raise
+        trace(logger, "RQNPN queued", extra={"fields": fields})
+
+    def request_nv(self, node_number: int, index: int) -> None:
+        """Send NVRD for one numbered node variable (Developer's Guide 6b)."""
+        if type(node_number) is not int or not 1 <= node_number <= 0xFFFF:
+            raise ValueError("Node number must be between 1 and 65535")
+        if type(index) is not int or not 1 <= index <= 0xFF:
+            raise ValueError("NV index must be between 1 and 255")
+        header = (0x580 | self.can_id) << 5
+        frame = f":S{header:04X}N71{node_number:04X}{index:02X};".encode("ascii")
+        fields = {
+            "layout": self.connection.layout_name,
+            "node_number": node_number,
+            "nv_index": index,
+        }
+        trace(logger, "Sending NVRD", extra={"fields": fields})
+        try:
+            self.connection.send(frame)
+        except OSError:
+            logger.exception("Could not send NVRD", extra={"fields": fields})
+            raise
+        trace(logger, "NVRD queued", extra={"fields": fields})
+
+    def request_stored_event_count(self, node_number: int) -> None:
+        """Send RQEVN for the stored count, distinct from parameter 4 capacity."""
+        if type(node_number) is not int or not 1 <= node_number <= 0xFFFF:
+            raise ValueError("Node number must be between 1 and 65535")
+        header = (0x580 | self.can_id) << 5
+        frame = f":S{header:04X}N58{node_number:04X};".encode("ascii")
+        fields = {"layout": self.connection.layout_name, "node_number": node_number}
+        trace(logger, "Sending RQEVN", extra={"fields": fields})
+        try:
+            self.connection.send(frame)
+        except OSError:
+            logger.exception("Could not send RQEVN", extra={"fields": fields})
+            raise
+        trace(logger, "RQEVN queued", extra={"fields": fields})
+
+    def request_stored_events(self, node_number: int) -> None:
+        """Send NERD to enumerate the node's stored event identities."""
+        if type(node_number) is not int or not 1 <= node_number <= 0xFFFF:
+            raise ValueError("Node number must be between 1 and 65535")
+        header = (0x580 | self.can_id) << 5
+        frame = f":S{header:04X}N57{node_number:04X};".encode("ascii")
+        fields = {"layout": self.connection.layout_name, "node_number": node_number}
+        trace(logger, "Sending NERD", extra={"fields": fields})
+        try:
+            self.connection.send(frame)
+        except OSError:
+            logger.exception("Could not send NERD", extra={"fields": fields})
+            raise
+        trace(logger, "NERD queued", extra={"fields": fields})
+
+    def request_ev(self, node_number: int, event_index: int, ev_index: int) -> None:
+        """Send REVAL using an internal index confirmed by ENRSP."""
+        if type(node_number) is not int or not 1 <= node_number <= 0xFFFF:
+            raise ValueError("Node number must be between 1 and 65535")
+        if type(event_index) is not int or not 0 <= event_index <= 0xFF:
+            raise ValueError("Event index must be between 0 and 255")
+        if type(ev_index) is not int or not 1 <= ev_index <= 0xFF:
+            raise ValueError("EV index must be between 1 and 255")
+        header = (0x580 | self.can_id) << 5
+        frame = f":S{header:04X}N9C{node_number:04X}{event_index:02X}{ev_index:02X};".encode(
+            "ascii"
+        )
+        fields = {
+            "layout": self.connection.layout_name,
+            "node_number": node_number,
+            "event_index": event_index,
+            "ev_index": ev_index,
+        }
+        trace(logger, "Sending REVAL", extra={"fields": fields})
+        try:
+            self.connection.send(frame)
+        except OSError:
+            logger.exception("Could not send REVAL", extra={"fields": fields})
+            raise
+        trace(logger, "REVAL queued", extra={"fields": fields})
+
+    def record_nv(self, node_number: int, index: int, value: int) -> None:
+        """Record a confirmed NV value without changing automatic progress."""
+        state = self.node_states[node_number]
+        if not 1 <= index <= 0xFF or not 0 <= value <= 0xFF:
+            raise ValueError("NV index and value must be bytes; index starts at 1")
+        if state.nv_values.get(index) == value and index in state.nv_values:
+            return
+        state.nv_values[index] = value
+        trace(
+            logger,
+            "Confirmed NV recorded",
+            extra={
+                "fields": {
+                    "layout": self.connection.layout_name,
+                    "node_number": node_number,
+                    "nv_index": index,
+                    "value": value,
+                }
+            },
+        )
+        self.node_state_updated.emit(node_number)
+
+    def _set_progress(
+        self, kind: str, node_number: int, progress: DiscoveryProgress
+    ) -> None:
+        state = self.node_states[node_number]
+        if kind == "parameter":
+            if state.parameter_progress == progress:
+                return
+            state.parameter_progress = progress
+        elif kind == "nv":
+            # An interrupted or outdated pass cannot later become complete.
+            if state.nv_progress == progress or (
+                state.nv_progress == DiscoveryProgress.INCOMPLETE
+                and progress != DiscoveryProgress.INCOMPLETE
+            ):
+                return
+            state.nv_progress = progress
+        elif kind == "ev":
+            if state.ev_progress == progress or (
+                state.ev_progress == DiscoveryProgress.INCOMPLETE
+                and progress != DiscoveryProgress.INCOMPLETE
+            ):
+                return
+            state.ev_progress = progress
+        else:
+            if state.event_progress == progress or (
+                state.event_progress == DiscoveryProgress.INCOMPLETE
+                and progress != DiscoveryProgress.INCOMPLETE
+            ):
+                return
+            state.event_progress = progress
+        trace(
+            logger,
+            "Discovery progress changed",
+            extra={
+                "fields": {
+                    "layout": self.connection.layout_name,
+                    "node_number": node_number,
+                    "kind": kind,
+                    "progress": progress.value,
+                }
+            },
+        )
+        self.node_state_updated.emit(node_number)
+
     def _receive_frame(self, frame: bytes) -> None:
         try:
             pnn = decode_pnn(frame)
+            paran = decode_paran(frame) if pnn is None else None
+            nvans = decode_nvans(frame) if pnn is None and paran is None else None
+            numev = (
+                decode_numev(frame)
+                if pnn is None and paran is None and nvans is None
+                else None
+            )
+            enrsp = (
+                decode_enrsp(frame)
+                if pnn is None and paran is None and nvans is None and numev is None
+                else None
+            )
+            neval = (
+                decode_neval(frame)
+                if all(reply is None for reply in (pnn, paran, nvans, numev, enrsp))
+                else None
+            )
+            cmderr = (
+                decode_cmderr(frame)
+                if all(
+                    reply is None for reply in (pnn, paran, nvans, numev, enrsp, neval)
+                )
+                else None
+            )
         except ValueError as error:
             trace(
                 logger,
@@ -62,6 +312,27 @@ class CbusService(QObject):
             )
             return
         if pnn is None:
+            if paran is not None:
+                self._receive_paran(
+                    paran.node_number, paran.parameter_index, paran.parameter_value
+                )
+            elif nvans is not None:
+                self._receive_nvans(nvans.node_number, nvans.nv_index, nvans.nv_value)
+            elif numev is not None:
+                self._receive_numev(numev.node_number, numev.stored_event_count)
+            elif enrsp is not None:
+                self._receive_enrsp(
+                    enrsp.node_number,
+                    enrsp.event_index,
+                    enrsp.event_node_number,
+                    enrsp.event_number,
+                )
+            elif neval is not None:
+                self._receive_neval(
+                    neval.node_number, neval.event_index, neval.ev_index, neval.value
+                )
+            elif cmderr is not None:
+                self._receive_cmderr(cmderr.node_number, cmderr.code)
             return
 
         previous = self.nodes.get(pnn.node_number)
@@ -69,6 +340,11 @@ class CbusService(QObject):
             return
         is_new = previous is None
         self.nodes[pnn.node_number] = pnn
+        state = self.node_states.get(pnn.node_number)
+        if state is None:
+            self.node_states[pnn.node_number] = NodeState(pnn)
+        else:
+            state.identity = pnn
         logger.info(
             "Node discovered" if is_new else "Node identity updated",
             extra={
@@ -84,5 +360,423 @@ class CbusService(QObject):
         )
         if is_new:
             self.node_discovered.emit(pnn)
+            self.node_state_updated.emit(pnn.node_number)
+            if pnn.node_number != 0:
+                self._request_queue.append(("parameter", pnn.node_number, 0))
+                trace(
+                    logger,
+                    "Automatic parameter count queued",
+                    extra={
+                        "fields": {
+                            "layout": self.connection.layout_name,
+                            "node_number": pnn.node_number,
+                            "parameter_index": 0,
+                        }
+                    },
+                )
+                self._send_next_request()
         else:
             self.node_updated.emit(pnn)
+            self.node_state_updated.emit(pnn.node_number)
+
+    def _receive_paran(self, node_number: int, index: int, value: int) -> None:
+        state = self.node_states.get(node_number)
+        fields = {
+            "layout": self.connection.layout_name,
+            "node_number": node_number,
+            "parameter_index": index,
+            "parameter_value": value,
+        }
+        if state is None:
+            trace(
+                logger, "Ignoring PARAN for undiscovered node", extra={"fields": fields}
+            )
+            return
+
+        # Membership matters: zero is a confirmed value, not an unknown parameter.
+        changed = index not in state.parameters or state.parameters[index] != value
+        if changed:
+            previous = state.parameters.get(index)
+            state.parameters[index] = value
+            trace(
+                logger,
+                "Node parameter updated",
+                extra={"fields": {**fields, "previous": previous}},
+            )
+            self.parameter_updated.emit(node_number, index, value)
+            self.node_state_updated.emit(node_number)
+
+        # Parameter 6 is the confirmed NV count. It may arrive outside our
+        # automatic parameter sequence, so discovery starts on the reply itself.
+        if index == 6:
+            if node_number not in self._nv_started:
+                self._start_nv_discovery(node_number, value)
+            elif value != self._nv_started[node_number]:
+                # The queued pass covers the first confirmed count. Keep it
+                # moving, but do not call it complete for a different count.
+                trace(
+                    logger,
+                    "NV count changed during discovery",
+                    extra={
+                        "fields": {
+                            "layout": self.connection.layout_name,
+                            "node_number": node_number,
+                            "queued_count": self._nv_started[node_number],
+                            "confirmed_count": value,
+                        }
+                    },
+                )
+                self._set_progress("nv", node_number, DiscoveryProgress.INCOMPLETE)
+
+        if index == 5 and state.event_progress == DiscoveryProgress.COMPLETE:
+            self._start_ev_discovery(node_number)
+
+        if self._outstanding_request != ("parameter", node_number, index):
+            trace(
+                logger,
+                "PARAN does not match outstanding automatic request",
+                extra={"fields": {**fields, "outstanding": self._outstanding_request}},
+            )
+            return
+
+        trace(logger, "Automatic PARAN received", extra={"fields": fields})
+        if index == 0:
+            # Parameter zero counts available indices, excluding itself.
+            self._request_queue.extend(
+                ("parameter", node_number, requested)
+                for requested in AUTOMATIC_PARAMETER_INDICES
+                if requested <= value
+            )
+        self._finish_request("parameter", node_number)
+
+    def _start_nv_discovery(self, node_number: int, count: int) -> None:
+        self._nv_started[node_number] = count
+        if count == 0:
+            self._set_progress("nv", node_number, DiscoveryProgress.COMPLETE)
+            return
+        self._request_queue.extend(
+            ("nv", node_number, index) for index in range(1, count + 1)
+        )
+        trace(
+            logger,
+            "Automatic NV discovery queued",
+            extra={
+                "fields": {
+                    "layout": self.connection.layout_name,
+                    "node_number": node_number,
+                    "count": count,
+                }
+            },
+        )
+        self._send_next_request()
+
+    def _receive_nvans(self, node_number: int, index: int, value: int) -> None:
+        if node_number not in self.node_states:
+            trace(
+                logger,
+                "Ignoring NVANS for undiscovered node",
+                extra={
+                    "fields": {
+                        "layout": self.connection.layout_name,
+                        "node_number": node_number,
+                        "nv_index": index,
+                    }
+                },
+            )
+            return
+        self.record_nv(node_number, index, value)
+        if self._outstanding_request != ("nv", node_number, index):
+            trace(
+                logger,
+                "NVANS does not match outstanding automatic request",
+                extra={
+                    "fields": {
+                        "layout": self.connection.layout_name,
+                        "node_number": node_number,
+                        "nv_index": index,
+                        "outstanding": self._outstanding_request,
+                    }
+                },
+            )
+            return
+        self._finish_request("nv", node_number)
+
+    def _receive_numev(self, node_number: int, count: int) -> None:
+        fields = {
+            "layout": self.connection.layout_name,
+            "node_number": node_number,
+            "stored_event_count": count,
+        }
+        if self._outstanding_request != ("event", node_number, 0):
+            trace(
+                logger,
+                "NUMEV does not match outstanding automatic request",
+                extra={"fields": {**fields, "outstanding": self._outstanding_request}},
+            )
+            return
+        state = self.node_states[node_number]
+        state.stored_event_count = count
+        trace(logger, "Stored event count confirmed", extra={"fields": fields})
+        self.node_state_updated.emit(node_number)
+        if count > 0:
+            self._request_queue.append(("event", node_number, 1))
+        self._finish_request("event", node_number)
+
+    def _receive_enrsp(
+        self, node_number: int, index: int, event_node: int, event_number: int
+    ) -> None:
+        fields = {
+            "layout": self.connection.layout_name,
+            "node_number": node_number,
+            "event_index": index,
+            "event_node": event_node,
+            "event_number": event_number,
+        }
+        if self._outstanding_request != ("event", node_number, 1):
+            trace(
+                logger,
+                "ENRSP does not match outstanding NERD request",
+                extra={"fields": {**fields, "outstanding": self._outstanding_request}},
+            )
+            return
+        state = self.node_states[node_number]
+        if index in state.event_identities:
+            previous = state.event_identities[index]
+            if previous == (event_node, event_number):
+                trace(logger, "Duplicate ENRSP index ignored", extra={"fields": fields})
+                return
+            logger.warning(
+                "Conflicting ENRSP identity; event discovery stopped",
+                extra={"fields": {**fields, "confirmed_identity": previous}},
+            )
+            self._request_timer.stop()
+            self._outstanding_request = None
+            self._set_progress("event", node_number, DiscoveryProgress.INCOMPLETE)
+            self._send_next_request()
+            return
+        state.event_identities[index] = (event_node, event_number)
+        confirmed = len(state.event_identities)
+        trace(
+            logger,
+            "Stored event identity confirmed",
+            extra={"fields": {**fields, "confirmed": confirmed}},
+        )
+        self.node_state_updated.emit(node_number)
+        if confirmed == state.stored_event_count:
+            self._finish_request("event", node_number)
+        else:
+            # NERD has no final response; each new index extends the wait for more.
+            self._request_timer.start(AUTOMATIC_REQUEST_TIMEOUT_MS)
+
+    def _start_ev_discovery(self, node_number: int) -> None:
+        if node_number in self._ev_started:
+            return
+        state = self.node_states[node_number]
+        count = state.parameters.get(5)
+        if state.stored_event_count == 0 or count == 0:
+            self._ev_started.add(node_number)
+            self._set_progress("ev", node_number, DiscoveryProgress.COMPLETE)
+            return
+        if count is None:
+            trace(
+                logger,
+                "EV discovery waits for parameter 5",
+                extra={
+                    "fields": {
+                        "layout": self.connection.layout_name,
+                        "node_number": node_number,
+                    }
+                },
+            )
+            return
+        self._ev_started.add(node_number)
+        for event_index in sorted(state.event_identities):
+            state.ev_values[event_index] = {
+                ev_index: 0 for ev_index in range(1, count + 1)
+            }
+            self._request_queue.extend(
+                ("ev", node_number, (event_index, ev_index))
+                for ev_index in range(1, count + 1)
+            )
+        trace(
+            logger,
+            "Automatic EV reads queued with assumed zero defaults",
+            extra={
+                "fields": {
+                    "layout": self.connection.layout_name,
+                    "node_number": node_number,
+                    "events": len(state.event_identities),
+                    "ev_count": count,
+                }
+            },
+        )
+        self.node_state_updated.emit(node_number)
+        self._send_next_request()
+
+    def _receive_neval(
+        self, node_number: int, event_index: int, ev_index: int, value: int
+    ) -> None:
+        fields = {
+            "layout": self.connection.layout_name,
+            "node_number": node_number,
+            "event_index": event_index,
+            "ev_index": ev_index,
+            "value": value,
+        }
+        if self._outstanding_request != ("ev", node_number, (event_index, ev_index)):
+            trace(
+                logger,
+                "NEVAL does not match outstanding REVAL",
+                extra={"fields": {**fields, "outstanding": self._outstanding_request}},
+            )
+            return
+        self.node_states[node_number].ev_values[event_index][ev_index] = value
+        trace(logger, "EV value confirmed", extra={"fields": fields})
+        self.node_state_updated.emit(node_number)
+        self._finish_request("ev", node_number)
+
+    def _receive_cmderr(self, node_number: int, code: int) -> None:
+        # CMDERR has no event or EV index. A matching node while REVAL is
+        # outstanding provisionally means this EV is undefined. This does not
+        # prove the error was caused by our request.
+        if (
+            code != 5
+            or not self._outstanding_request
+            or self._outstanding_request[:2] != ("ev", node_number)
+        ):
+            return
+        logger.debug(
+            "CMDERR 5 received with REVAL outstanding; keeping assumed zero",
+            extra={
+                "fields": {
+                    "layout": self.connection.layout_name,
+                    "node_number": node_number,
+                    "request": self._outstanding_request,
+                }
+            },
+        )
+        self._finish_request("ev", node_number)
+
+    def _queue_event_count(self, node_number: int) -> None:
+        if self.node_states[node_number].identity.is_consumer is False:
+            trace(
+                logger,
+                "Automatic event discovery skipped: node is not a consumer",
+                extra={
+                    "fields": {
+                        "layout": self.connection.layout_name,
+                        "node_number": node_number,
+                    }
+                },
+            )
+            self._set_progress("event", node_number, DiscoveryProgress.SKIPPED)
+            self._set_progress("ev", node_number, DiscoveryProgress.SKIPPED)
+            return
+        self._request_queue.append(("event", node_number, 0))
+        trace(
+            logger,
+            "Automatic stored event count queued",
+            extra={
+                "fields": {
+                    "layout": self.connection.layout_name,
+                    "node_number": node_number,
+                }
+            },
+        )
+
+    def _finish_request(self, kind: str, node_number: int) -> None:
+        """Advance the shared FIFO only after a matching reply."""
+        self._request_timer.stop()
+        self._outstanding_request = None
+        if not any(
+            queued_kind == kind and queued_node == node_number
+            for queued_kind, queued_node, _index in self._request_queue
+        ):
+            self._set_progress(kind, node_number, DiscoveryProgress.COMPLETE)
+            if kind == "parameter":
+                self._queue_event_count(node_number)
+            elif kind == "event":
+                self._start_ev_discovery(node_number)
+        self._send_next_request()
+
+    def _send_next_request(self) -> None:
+        if self._outstanding_request is not None:
+            return
+        while self._request_queue:
+            kind, node_number, index = self._request_queue.popleft()
+            fields = {
+                "layout": self.connection.layout_name,
+                "node_number": node_number,
+                "kind": kind,
+            }
+            if kind == "ev":
+                event_index, ev_index = index
+                fields.update(event_index=event_index, ev_index=ev_index)
+            elif kind == "event":
+                fields["request"] = "RQEVN" if index == 0 else "NERD"
+            else:
+                fields["parameter_index" if kind == "parameter" else "nv_index"] = index
+            try:
+                if kind == "parameter":
+                    self.request_parameter(node_number, index)
+                elif kind == "nv":
+                    self.request_nv(node_number, index)
+                elif kind == "ev":
+                    self.request_ev(node_number, event_index, ev_index)
+                elif index == 0:
+                    self.request_stored_event_count(node_number)
+                else:
+                    self.request_stored_events(node_number)
+            except OSError:
+                # A failed send leaves confirmed values intact, but cannot hold the queue.
+                self._request_queue = deque(
+                    request
+                    for request in self._request_queue
+                    if request[:2] != (kind, node_number)
+                )
+                logger.error("Automatic requests stopped", extra={"fields": fields})
+                self._set_progress(kind, node_number, DiscoveryProgress.INCOMPLETE)
+                if kind == "parameter":
+                    self._queue_event_count(node_number)
+                continue
+            self._outstanding_request = (kind, node_number, index)
+            self._set_progress(kind, node_number, DiscoveryProgress.IN_PROGRESS)
+            self._request_timer.start(AUTOMATIC_REQUEST_TIMEOUT_MS)
+            trace(logger, "Awaiting automatic reply", extra={"fields": fields})
+            return
+
+    def _request_timed_out(self) -> None:
+        if self._outstanding_request is None:
+            return
+        self._request_timer.stop()
+        kind, node_number, index = self._outstanding_request
+        self._outstanding_request = None
+        self._request_queue = deque(
+            request
+            for request in self._request_queue
+            if request[:2] != (kind, node_number)
+        )
+        fields = {
+            "layout": self.connection.layout_name,
+            "node_number": node_number,
+            "kind": kind,
+        }
+        if kind == "ev":
+            event_index, ev_index = index
+            fields.update(event_index=event_index, ev_index=ev_index)
+        elif kind == "event":
+            fields["request"] = "RQEVN" if index == 0 else "NERD"
+            if index == 1:
+                fields["confirmed_events"] = len(
+                    self.node_states[node_number].event_identities
+                )
+        else:
+            fields["parameter_index" if kind == "parameter" else "nv_index"] = index
+        logger.warning(
+            "Automatic request timed out; remaining requests of this kind abandoned",
+            extra={"fields": fields},
+        )
+        self._set_progress(kind, node_number, DiscoveryProgress.INCOMPLETE)
+        if kind == "parameter":
+            self._queue_event_count(node_number)
+        self._send_next_request()

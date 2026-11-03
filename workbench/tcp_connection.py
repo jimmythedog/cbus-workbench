@@ -15,6 +15,7 @@ class TcpConnection(QObject):
     state_changed = Signal(str)
     failed = Signal(str)
     frame_received = Signal(bytes)
+    frame_sent = Signal(bytes)
 
     def __init__(self, layout_name: str, parent: QObject):
         super().__init__(parent)
@@ -60,6 +61,7 @@ class TcpConnection(QObject):
                 }
             },
         )
+        self.frame_sent.emit(frame)
 
     def _receive_data(self) -> None:
         # TCP read boundaries do not match GridConnect frame boundaries.

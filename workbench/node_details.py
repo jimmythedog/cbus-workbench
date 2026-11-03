@@ -1,15 +1,10 @@
-from datetime import datetime
+import logging
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QFormLayout,
     QGroupBox,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
-    QLineEdit,
-    QMainWindow,
-    QMessageBox,
     QPushButton,
     QStackedLayout,
     QStackedWidget,
@@ -18,15 +13,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .backup_compare import BackupCompare
-from .backup_view import BackupView, backup_contents
+from .cbus_service import NodeState
+from .logging_config import trace
+from .node_backup_workflow import NodeBackupWorkflow
 from .node_backups import NodeBackups
+from .node_details_form import NodeDetailsForm
 from .node_events import NodeEvents
-from .node_snapshot import create_node_snapshot, restore_node_snapshot
 from .node_variables import MdfNodeVariables, RawNodeVariables
 from .pnn import Pnn
 
 DEFAULT_NODE_TITLE = "Node details"
+logger = logging.getLogger("workbench.ui")
 
 
 class NodeDetails(QWidget):
@@ -60,73 +57,28 @@ class NodeDetails(QWidget):
 
         layout.addWidget(self.summary)
 
-        self.group = QWidget()
-
-        form = QFormLayout(self.group)
-        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
-
-        self.node_number = QLabel("-")
-        self.node_name = QLabel("-")
-        self.node_name_editor = QLineEdit()
-        self.node_name_stack = QStackedWidget()
-        self.node_name_stack.addWidget(self.node_name)
-        self.node_name_stack.addWidget(self.node_name_editor)
-        self.can_id = QLabel("-")
-        self.module_type = QLabel("-")
-        self.firmware = QLabel("-")
-        self.status = QLabel("-")
-        self.manufacturer = QLabel("-")
-        self.flags = QLabel("-")
-        self.module_identifier = QLabel("-")
-        self.node_mode = QLabel("-")
-        self.vlcb = QLabel("-")
-        self.nv_count = QLabel("-")
-        self.event_count = QLabel("-")
-        self.ev_count = QLabel("-")
-        self.cpu_name = QLabel("-")
-        self.interface = QLabel("-")
-        self.module_descriptor = QLabel("-")
-        self.producer = QLabel("-")
-        self.consumer = QLabel("-")
-        self.consumes_own_events = QLabel("-")
-        self.supports_bootloading = QLabel("-")
-        self.stored_events = QLabel("-")
-
-        # Identity
-        form.addRow("Name:", self.node_name_stack)
-        form.addRow("Node number:", self.node_number)
-        form.addRow("CAN ID:", self.can_id)
-        form.addRow("Status:", self.status)
-
-        # Module
-        form.addRow("Manufacturer:", self.manufacturer)
-        form.addRow("Module type:", self.module_type)
-        form.addRow("Flags:", self.flags)
-        form.addRow("Module identifier:", self.module_identifier)
-        form.addRow("Firmware:", self.firmware)
-
-        # Capabilities
-        form.addRow("Node mode:", self.node_mode)
-        form.addRow("VLCB:", self.vlcb)
-        form.addRow("Producer:", self.producer)
-        form.addRow("Consumer:", self.consumer)
-        form.addRow("Consumes own events:", self.consumes_own_events)
-        form.addRow("Supports bootloading:", self.supports_bootloading)
-        form.addRow("Node variables:", self.nv_count)
-        form.addRow("Events currently stored:", self.stored_events)
-        form.addRow("Events supported:", self.event_count)
-        form.addRow("Event variables:", self.ev_count)
-
-        # Hardware
-        form.addRow("CPU name:", self.cpu_name)
-        form.addRow("Interface:", self.interface)
-
-        # Definition
-        form.addRow("Module descriptor:", self.module_descriptor)
-
-        self.details_page = QWidget()
-        details_layout = QVBoxLayout(self.details_page)
-        details_layout.addWidget(self.group, 1)
+        self.details_page = NodeDetailsForm()
+        # Keep existing label access paths for callers and name-editing code.
+        self.node_number = self.details_page.node_number
+        self.node_name = self.details_page.node_name
+        self.node_name_editor = self.details_page.node_name_editor
+        self.node_name_stack = self.details_page.node_name_stack
+        self.can_id = self.details_page.can_id
+        self.module_type = self.details_page.module_type
+        self.firmware = self.details_page.firmware
+        self.status = self.details_page.status
+        self.manufacturer = self.details_page.manufacturer
+        self.flags = self.details_page.flags
+        self.node_mode = self.details_page.node_mode
+        self.nv_count = self.details_page.nv_count
+        self.event_count = self.details_page.event_count
+        self.ev_count = self.details_page.ev_count
+        self.cpu_name = self.details_page.cpu_name
+        self.interface = self.details_page.interface
+        self.producer = self.details_page.producer
+        self.consumer = self.details_page.consumer
+        self.consumes_own_events = self.details_page.consumes_own_events
+        self.supports_bootloading = self.details_page.supports_bootloading
         self.tabs = QTabWidget()
         self.tabs.addTab(self.details_page, "Node Details")
 
@@ -231,9 +183,13 @@ class NodeDetails(QWidget):
         self.tabs.addTab(self.variables_page, "Node Variables")
 
         self.node_events = NodeEvents(events)
-        self.tabs.addTab(self.node_events, "Events")
+        self.events_page = self.node_events
+        self.tabs.addTab(self.events_page, "Events")
 
         self.node_backups = NodeBackups()
+        self.backup_workflow = NodeBackupWorkflow(
+            self, self.node_backups, self.refresh_backup_displays
+        )
         self.node_backups.itemSelectionChanged.connect(self.update_backup_buttons)
         self.tabs.addTab(self.node_backups, "Backups")
 
@@ -310,13 +266,13 @@ class NodeDetails(QWidget):
     def set_name_editing_tabs(self, editing):
         for page in (
             self.variables_page,
-            self.node_events,
+            self.events_page,
             self.node_backups,
         ):
             self.tabs.setTabEnabled(self.tabs.indexOf(page), not editing)
 
     def refresh_node_name(self):
-        self.node_name.setText((self.node.name or "-") if self.node else "-")
+        self.details_page.show_node_name(self.node)
         if self.node is None:
             return
         title = f"Node {self.node.number} — {self.node.module_type}"
@@ -364,7 +320,7 @@ class NodeDetails(QWidget):
 
     def set_editing(self, editing):
         self.tabs.setTabEnabled(self.tabs.indexOf(self.details_page), not editing)
-        self.tabs.setTabEnabled(self.tabs.indexOf(self.node_events), not editing)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.events_page), not editing)
         self.tabs.setTabEnabled(self.tabs.indexOf(self.node_backups), not editing)
 
     def start_events_editing(self):
@@ -393,12 +349,42 @@ class NodeDetails(QWidget):
         self.node_events.save_edit()
         self.finish_events_editing()
 
+    def show_parameters(self, parameters: dict[int, int]) -> None:
+        """Display confirmed PARAN values; absent indices remain unknown."""
+        firmware = self.details_page.show_parameters(parameters)
+        self.summary_firmware.setText(f"Firmware: {firmware}")
+
+    def show_live_state(self, state: NodeState) -> None:
+        """Refresh the selected identity from confirmed service values."""
+        self.show_parameters(state.parameters)
+        self.raw_values.show_live_values(state.parameters.get(6), state.nv_values)
+        self.node_events.show_live_state(state)
+        trace(
+            logger,
+            "Live node values displayed",
+            extra={
+                "fields": {
+                    "node_number": state.identity.node_number,
+                    "nv_count": state.parameters.get(6),
+                    "confirmed_nv_indices": sorted(state.nv_values),
+                    "event_indices": sorted(state.event_identities),
+                    "event_progress": state.event_progress.value,
+                    "ev_progress": state.ev_progress.value,
+                }
+            },
+        )
+
     def show_node(self, current):
+        selected_page = self.tabs.currentWidget()
+        previous_live_node = (
+            self.node.node_number if isinstance(self.node, Pnn) else None
+        )
         self.node_list_item = current
         self.details_buttons.setCurrentIndex(0)
         self.node = current.data(Qt.ItemDataRole.UserRole) if current else None
         live_identity = isinstance(self.node, Pnn)
-        self.node_events.show_node(None if live_identity else self.node)
+        if not live_identity or self.node.node_number != previous_live_node:
+            self.node_events.show_node(None if live_identity else self.node)
         self.node_backups.show_node(None if live_identity else self.node)
         self.backup_buttons["New"].setEnabled(
             self.node is not None and not live_identity
@@ -409,112 +395,49 @@ class NodeDetails(QWidget):
         self.edit_button.setEnabled(enabled and not live_identity)
         self.details_edit_button.setEnabled(enabled and not live_identity)
         self.events_edit_button.setEnabled(enabled and not live_identity)
-        for page in (self.variables_page, self.node_events, self.node_backups):
-            self.tabs.setTabEnabled(self.tabs.indexOf(page), not live_identity)
-        if live_identity:
-            self.tabs.setCurrentWidget(self.details_page)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.variables_page), True)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.node_backups), not live_identity)
+        self.tabs.setCurrentWidget(
+            selected_page
+            if self.tabs.isTabEnabled(self.tabs.indexOf(selected_page))
+            else self.details_page
+        )
 
         if current is None:
-            self.node_number.setText("-")
-            self.node_name.setText("-")
-            self.can_id.setText("-")
-            self.module_type.setText("-")
-            self.firmware.setText("-")
-            self.status.setText("-")
-            self.flags.setText("-")
-            self.variables.setCurrentIndex(0)
-            for label in (
-                self.manufacturer,
-                self.module_identifier,
-                self.node_mode,
-                self.vlcb,
-                self.producer,
-                self.consumer,
-                self.consumes_own_events,
-                self.supports_bootloading,
-                self.nv_count,
-                self.stored_events,
-                self.event_count,
-                self.ev_count,
-                self.cpu_name,
-                self.interface,
-                self.module_descriptor,
-            ):
-                label.setText("-")
+            self._show_no_node()
+        elif live_identity:
+            self._show_live_identity(self.node)
+        else:
+            self._show_configured_node(self.node)
 
-            self.summary.setTitle(DEFAULT_NODE_TITLE)
-            self.summary_can_id.setText("CAN ID: -")
-            self.summary_firmware.setText("Firmware: -")
-            self.summary_mode.setText("Mode: -")
-            self.summary_status.setText("Status: -")
+    def _show_no_node(self) -> None:
+        self.variables.setCurrentIndex(0)
+        self.raw_values.show_live_values(None, {})
+        self.details_page.show_no_node()
+        self.summary.setTitle(DEFAULT_NODE_TITLE)
+        self.summary_can_id.setText("CAN ID: -")
+        self.summary_firmware.setText("Firmware: -")
+        self.summary_mode.setText("Mode: -")
+        self.summary_status.setText("Status: -")
 
-            return
+    def _show_live_identity(self, node) -> None:
+        self.variables.setCurrentIndex(0)
+        self.raw_values.show_live_values(None, {})
+        mode = "FLiM" if node.is_flim else "SLiM"
+        self.details_page.show_live_identity(node, mode)
+        self.summary.setTitle(f"Node {node.node_number} — {node.module_type}")
+        self.summary_can_id.setText("CAN ID: -")
+        self.summary_firmware.setText("Firmware: -")
+        self.summary_mode.setText(f"Mode: {mode}")
+        self.summary_status.setText("Status: -")
 
-        node = current.data(Qt.ItemDataRole.UserRole)
-
-        if isinstance(node, Pnn):
-            self.node_number.setText(str(node.node_number))
-            self.node_name.setText("-")
-            self.can_id.setText("-")
-            self.module_type.setText(str(node.module_type))
-            self.firmware.setText("-")
-            self.status.setText("-")
-            self.manufacturer.setText(str(node.manufacturer))
-            self.flags.setText(f"0x{node.flags:02X}")
-            for label in (
-                self.module_identifier,
-                self.node_mode,
-                self.vlcb,
-                self.producer,
-                self.consumer,
-                self.consumes_own_events,
-                self.supports_bootloading,
-                self.nv_count,
-                self.stored_events,
-                self.event_count,
-                self.ev_count,
-                self.cpu_name,
-                self.interface,
-                self.module_descriptor,
-            ):
-                label.setText("-")
-            self.summary.setTitle(f"Node {node.node_number} — {node.module_type}")
-            self.summary_can_id.setText("CAN ID: -")
-            self.summary_firmware.setText("Firmware: -")
-            self.summary_mode.setText("Mode: -")
-            self.summary_status.setText("Status: -")
-            return
-
+    def _show_configured_node(self, node) -> None:
         self.raw_values.show_node(node)
         self.mdf_values.show_node(node)
 
-        number = node.number
-        has_mdf = node.has_mdf
-
-        self.variables.setCurrentIndex(1 if has_mdf else 0)
-        self.node_number.setText(str(number))
+        self.variables.setCurrentIndex(1 if node.has_mdf else 0)
+        self.details_page.show_configured_node(node)
         self.refresh_node_name()
-        self.can_id.setText("126")
-        self.module_type.setText("CANMIO")
-        self.flags.setText("-")
-        self.firmware.setText("3d")
-        self.status.setText("Online")
-        self.manufacturer.setText("MERG")
-        self.module_identifier.setText("A520")
-        self.node_mode.setText("FLiM")
-        self.vlcb.setText("No")
-        self.producer.setText("Yes")
-        self.consumer.setText("Yes")
-        self.consumes_own_events.setText("Yes")
-        self.supports_bootloading.setText("Yes")
-        self.nv_count.setText("127")
-        self.stored_events.setText(str(len(node.consumed_events)))
-        self.event_count.setText("255")
-        self.ev_count.setText("20")
-        self.cpu_name.setText("P18F25K80")
-        self.interface.setText("CAN")
-        self.module_descriptor.setText("CANMIO-A520-3d.json (System definitions)")
-
         self.summary_can_id.setText(f"CAN ID: {node.can_id}")
         self.summary_firmware.setText(f"Firmware: {node.firmware}")
         self.summary_mode.setText("Mode: FLiM")
@@ -528,136 +451,22 @@ class NodeDetails(QWidget):
                 button.setEnabled(selected)
 
     def view_backup(self):
-        if self.node is None:
-            return
-
-        selected = self.node_backups.selectedItems()
-        if not selected:
-            return
-
-        backup = selected[0].data(0, Qt.ItemDataRole.UserRole)
-
-        dialog = BackupView(self.node, backup, self)
-        dialog.exec()
+        self.backup_workflow.view(self.node)
 
     def compare_backup(self):
-        if self.node is None:
-            return
-
-        selected = self.node_backups.selectedItems()
-        if not selected:
-            return
-
-        backup = selected[0].data(0, Qt.ItemDataRole.UserRole)
-
-        dialog = BackupCompare(self.node, backup, self)
-        dialog.exec()
+        self.backup_workflow.compare(self.node)
 
     def new_backup(self):
-        if self.node is None:
-            return
-
-        description, accepted = QInputDialog.getText(
-            self,
-            "New node backup",
-            "Description (optional):",
-        )
-
-        if not accepted:
-            return
-
-        backup = create_node_snapshot(self.node)
-        backup["created"] = datetime.now().strftime("%d %b %Y, %H:%M")
-        backup["description"] = description.strip()
-
-        self.node_backups.add_backup(self.node, backup)
-
-        window = self.window()
-        if isinstance(window, QMainWindow):
-            window.statusBar().showMessage("Node backup created", 5000)
+        self.backup_workflow.create(self.node)
 
     def restore_backup(self):
-        if self.node is None:
-            return
+        self.backup_workflow.restore(self.node)
 
-        selected = self.node_backups.selectedItems()
-        if not selected:
-            return
+    def delete_backup(self):
+        self.backup_workflow.delete(self.node)
 
-        backup = selected[0].data(0, Qt.ItemDataRole.UserRole)
-
-        is_layout_backup = (
-            backup.get("partOfLayoutBackup", False)
-            or backup.get("description") == "Layout backup"
-        )
-
-        if is_layout_backup:
-            message = (
-                "This backup is part of a layout backup.\n\n"
-                f"Restoring node {self.node.number} independently may leave "
-                "its configuration inconsistent with other nodes.\n\n"
-                "Do you want to continue?"
-            )
-        else:
-            message = f"Restore '{backup['description']}' to node {self.node.number}?"
-
-        answer = QMessageBox.question(
-            self,
-            "Restore node backup",
-            message,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-
-        contents = backup_contents(backup)
-
-        restore_node_snapshot(self.node, contents)
-
-        # Refresh the node configuration displays.
+    def refresh_backup_displays(self):
+        """Refresh the configuration displays after a node backup restore."""
         self.raw_values.show_node(self.node)
         self.mdf_values.show_node(self.node)
         self.node_events.show_node(self.node)
-
-        window = self.window()
-        if isinstance(window, QMainWindow):
-            window.statusBar().showMessage("Node backup restored successfully", 5000)
-
-    def delete_backup(self):
-        if self.node is None:
-            return
-
-        selected = self.node_backups.selectedItems()
-        if not selected:
-            return
-
-        backup = selected[0].data(0, Qt.ItemDataRole.UserRole)
-
-        if (
-            backup.get("partOfLayoutBackup", False)
-            or backup.get("description") == "Layout backup"
-        ):
-            QMessageBox.information(
-                self,
-                "Delete node backup",
-                "This backup belongs to a layout backup and cannot be deleted individually.",
-            )
-            return
-
-        answer = QMessageBox.question(
-            self,
-            "Delete node backup",
-            f"Delete '{backup['description']}' for node {self.node.number}?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-
-        self.node_backups.delete_backup(self.node, backup)
-        window = self.window()
-        if isinstance(window, QMainWindow):
-            window.statusBar().showMessage("Node backup deleted", 5000)

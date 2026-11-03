@@ -1,0 +1,173 @@
+"""Actions for the selected node backup, using NodeDetails as the dialog parent."""
+
+import logging
+from collections.abc import Callable
+from datetime import datetime
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QInputDialog, QMainWindow, QMessageBox, QWidget
+
+from .backup_compare import BackupCompare
+from .backup_view import BackupView, backup_contents
+from .logging_config import trace
+from .node_backups import NodeBackups
+from .node_snapshot import create_node_snapshot, restore_node_snapshot
+
+logger = logging.getLogger("workbench.ui")
+
+
+class NodeBackupWorkflow:
+    def __init__(
+        self,
+        parent: QWidget,
+        backups: NodeBackups,
+        refresh_displays: Callable[[], None],
+    ) -> None:
+        self.parent = parent
+        self.backups = backups
+        self.refresh_displays = refresh_displays
+
+    def _selected_backup(self, node):
+        if node is None:
+            return None
+        selected = self.backups.selectedItems()
+        return selected[0].data(0, Qt.ItemDataRole.UserRole) if selected else None
+
+    @staticmethod
+    def _is_layout_backup(backup):
+        return (
+            backup.get("partOfLayoutBackup", False)
+            or backup.get("description") == "Layout backup"
+        )
+
+    def _show_status(self, message):
+        window = self.parent.window()
+        if isinstance(window, QMainWindow):
+            window.statusBar().showMessage(message, 5000)
+
+    def view(self, node):
+        backup = self._selected_backup(node)
+        if backup is None:
+            return
+        trace(
+            logger,
+            "Viewing node backup",
+            extra={"fields": {"node_number": node.number}},
+        )
+        BackupView(node, backup, self.parent).exec()
+
+    def compare(self, node):
+        backup = self._selected_backup(node)
+        if backup is None:
+            return
+        trace(
+            logger,
+            "Comparing node backup",
+            extra={"fields": {"node_number": node.number}},
+        )
+        BackupCompare(node, backup, self.parent).exec()
+
+    def create(self, node):
+        if node is None:
+            return
+
+        description, accepted = QInputDialog.getText(
+            self.parent,
+            "New node backup",
+            "Description (optional):",
+        )
+        if not accepted:
+            trace(logger, "Node backup creation cancelled")
+            return
+
+        backup = create_node_snapshot(node)
+        backup["created"] = datetime.now().strftime("%d %b %Y, %H:%M")
+        backup["description"] = description.strip()
+        self.backups.add_backup(node, backup)
+        trace(
+            logger,
+            "Node backup created",
+            extra={"fields": {"node_number": node.number}},
+        )
+        self._show_status("Node backup created")
+
+    def restore(self, node):
+        backup = self._selected_backup(node)
+        if backup is None:
+            return
+
+        if self._is_layout_backup(backup):
+            message = (
+                "This backup is part of a layout backup.\n\n"
+                f"Restoring node {node.number} independently may leave "
+                "its configuration inconsistent with other nodes.\n\n"
+                "Do you want to continue?"
+            )
+        else:
+            message = f"Restore '{backup['description']}' to node {node.number}?"
+
+        answer = QMessageBox.question(
+            self.parent,
+            "Restore node backup",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            trace(
+                logger,
+                "Node backup restore declined",
+                extra={"fields": {"node_number": node.number}},
+            )
+            return
+
+        contents = backup_contents(backup)
+        restore_node_snapshot(node, contents)
+        self.refresh_displays()
+        trace(
+            logger,
+            "Node backup restored",
+            extra={"fields": {"node_number": node.number}},
+        )
+        self._show_status("Node backup restored successfully")
+
+    def delete(self, node):
+        backup = self._selected_backup(node)
+        if backup is None:
+            return
+
+        if self._is_layout_backup(backup):
+            trace(
+                logger,
+                "Individual layout backup deletion blocked",
+                extra={"fields": {"node_number": node.number}},
+            )
+            QMessageBox.information(
+                self.parent,
+                "Delete node backup",
+                "This backup belongs to a layout backup and cannot be deleted individually.",
+            )
+            return
+
+        answer = QMessageBox.question(
+            self.parent,
+            "Delete node backup",
+            f"Delete '{backup['description']}' for node {node.number}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            trace(
+                logger,
+                "Node backup deletion declined",
+                extra={"fields": {"node_number": node.number}},
+            )
+            return
+
+        self.backups.delete_backup(node, backup)
+        trace(
+            logger,
+            "Node backup deleted",
+            extra={"fields": {"node_number": node.number}},
+        )
+        self._show_status("Node backup deleted")

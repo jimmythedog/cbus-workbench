@@ -62,10 +62,13 @@ A developer should understand a complicated section by scanning its comments bef
 
 - Start with the happy path; then cover important realistic exceptions and hardware-safety failures.
 - Test observable inputs, outputs and effects, not every conceivable path or permutation.
+- Keep tests few and meaningful: normal operation and realistic failures, without duplicating existing coverage.
+- Do not assert logs, private calls, internal queues or signal wiring, and do not change production code solely to satisfy such tests.
 - Do not add tests merely for coverage or because a function or branch exists.
 - Avoid tests coupled to private methods, mock call counts or internal sequencing.
 - Use small fixtures and minimal stubs; do not create test frameworks without approval.
 - Behaviour-preserving refactors should not require extensive test rewrites.
+- If a test fails after a behaviour-preserving change, question whether it tests an implementation detail.
 - Run focused tests during development and broader checks at agreed milestones.
 
 Before adding a test, ask: **Which contract or significant real-world risk does this protect?** If unclear, do not add it.
@@ -77,6 +80,12 @@ Before adding a test, ask: **Which contract or significant real-world risk does 
 - Functions above roughly 50 lines or modules above roughly 300 lines prompt review, not automatic splitting.
 - Do not expand into unrelated improvements. Stop and consult if complexity grows unexpectedly.
 - Prefer explicit errors and manual retry over elaborate recovery unless protocol safety requires otherwise.
+
+- Keep MainWindow focused on application-level UI coordination.
+- Place feature-specific logic in cohesive components with clear responsibilities.
+- Before substantially expanding an existing module, review whether the new behaviour belongs there.
+- Avoid both monolithic modules and unnecessary abstraction layers.
+- Prefer small, independently testable changes.
 
 **Do not turn a simple requirement into a subsystem.**
 
@@ -115,7 +124,24 @@ Maintain `docs/development.md` as a concise guide to major responsibilities, exe
 
 Only update it when doing so adds meaningful architectural understanding or corrects an inaccuracy. Do not automatically catalogue new files, classes, functions or routine implementation changes. Prefer refining existing explanations over accumulating sections.
 
+Document non-trivial workflows with concise ASCII diagrams beside relevant
+explanations, particularly asynchronous request/response sequences and failure
+paths. Keep diagrams synchronised with the implementation.
+
 The document should help the developer understand and modify the application, not inventory its code.
+
+### Hardware independence
+
+CBUS Workbench is a general-purpose CBUS/VLCB management application, not a tool designed for any particular module or manufacturer.
+
+- Implement protocol behaviour according to published CBUS/VLCB specifications, not observations from individual test devices.
+- Treat hardware such as CANMIO as test fixtures, never as the basis for general application behaviour.
+- Do not hardcode module types, manufacturer IDs, firmware versions, parameter counts or capabilities observed on test hardware.
+- Support different modules, firmware versions and implementations, including missing or unsupported features.
+- Preserve unknown values rather than inventing defaults.
+- Use manufacturer-specific behaviour only when explicitly required, documented and approved.
+- Prefer generic, specification-based implementations over device-specific workarounds.
+- Test against different module types and edge cases where practical.
 
 ## 11. Releases and infrastructure
 

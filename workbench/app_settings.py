@@ -114,6 +114,41 @@ def validate_settings(value: object, *, recover_default: bool = False) -> dict:
     return {"default_layout": default_layout, "layouts": validated}
 
 
+def layout_settings_for_ui(stored_layouts: dict[str, dict]) -> dict[str, dict]:
+    """Flatten layouts returned by load_settings for the window and its dialog."""
+    return {
+        name: {
+            "name": name,
+            "logical_layout": saved["logical_layout"],
+            "connection_type": saved["connection"]["type"],
+            "host": saved["connection"]["host"],
+            "port": saved["connection"]["port"],
+            "serial_port": saved["connection"]["serial_port"],
+            "can_id": saved["connection"]["can_id"],
+            "auto_connect": saved["auto_connect"],
+        }
+        for name, saved in stored_layouts.items()
+    }
+
+
+def layout_settings_for_storage(layouts: dict[str, dict]) -> dict[str, dict]:
+    """Nest the window's layout settings for save_settings validation and storage."""
+    return {
+        name: {
+            "logical_layout": settings["logical_layout"],
+            "auto_connect": settings["auto_connect"],
+            "connection": {
+                "type": settings["connection_type"],
+                "host": settings["host"],
+                "port": settings["port"],
+                "serial_port": settings["serial_port"],
+                "can_id": settings["can_id"],
+            },
+        }
+        for name, settings in layouts.items()
+    }
+
+
 def load_settings(path: Path | None = None) -> dict:
     """Load settings; a missing file represents a new, empty configuration."""
     path = settings_path() if path is None else Path(path)

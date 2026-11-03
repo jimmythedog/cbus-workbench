@@ -9,6 +9,8 @@ from PySide6.QtCore import QCoreApplication, QStandardPaths
 
 from workbench.app_settings import (
     SettingsError,
+    layout_settings_for_storage,
+    layout_settings_for_ui,
     load_settings,
     save_settings,
     settings_path,
@@ -90,6 +92,83 @@ class AppSettingsTests(unittest.TestCase):
 
         self.assertEqual(load_settings(self.path), settings)
         self.assertIsNone(yaml.safe_load(self.path.read_text())["default_layout"])
+
+    def test_layout_conversion_preserves_fields_order_and_saved_format(self):
+        stored = {
+            "Workshop": {
+                "logical_layout": "shared-track",
+                "auto_connect": True,
+                "connection": {
+                    "type": "Serial",
+                    "host": "unused-host",
+                    "port": 5551,
+                    "serial_port": "/dev/ttyACM1",
+                    "can_id": 127,
+                },
+            },
+            "Home": {
+                "logical_layout": "home-track",
+                "auto_connect": False,
+                "connection": {
+                    "type": "TCP/IP",
+                    "host": "localhost",
+                    "port": 5550,
+                    "serial_port": "unused-device",
+                    "can_id": 100,
+                },
+            },
+        }
+        settings = {"default_layout": "Home", "layouts": stored}
+        save_settings(settings, self.path)
+        original_yaml = self.path.read_text()
+
+        loaded = load_settings(self.path)
+        ui_layouts = layout_settings_for_ui(loaded["layouts"])
+        self.assertEqual(list(ui_layouts), ["Workshop", "Home"])
+        self.assertEqual(ui_layouts["Workshop"]["name"], "Workshop")
+        self.assertEqual(ui_layouts["Workshop"]["logical_layout"], "shared-track")
+        self.assertTrue(ui_layouts["Workshop"]["auto_connect"])
+        self.assertEqual(ui_layouts["Workshop"]["connection_type"], "Serial")
+        self.assertEqual(ui_layouts["Workshop"]["can_id"], 127)
+        self.assertEqual(ui_layouts["Home"]["logical_layout"], "home-track")
+        self.assertFalse(ui_layouts["Home"]["auto_connect"])
+        self.assertEqual(ui_layouts["Home"]["connection_type"], "TCP/IP")
+        self.assertEqual(ui_layouts["Home"]["can_id"], 100)
+
+        save_settings(
+            {
+                "default_layout": loaded["default_layout"],
+                "layouts": layout_settings_for_storage(ui_layouts),
+            },
+            self.path,
+        )
+        self.assertEqual(load_settings(self.path), settings)
+        self.assertEqual(self.path.read_text(), original_yaml)
+        self.assertEqual(yaml.safe_load(self.path.read_text()), settings)
+
+    def test_layout_conversion_uses_loaded_defaults_and_handles_missing_file(self):
+        missing = load_settings(self.path)
+        self.assertEqual(layout_settings_for_ui(missing["layouts"]), {})
+        self.assertEqual(layout_settings_for_storage({}), {})
+
+        self.path.parent.mkdir(parents=True)
+        self.path.write_text(
+            "default_layout: Home\n"
+            "layouts:\n"
+            "  Home:\n"
+            "    logical_layout: home\n"
+            "    connection:\n"
+            "      type: TCP/IP\n"
+            "      host: localhost\n"
+            "      port: 5550\n"
+            "      serial_port: ''\n"
+        )
+        loaded = load_settings(self.path)
+        ui_layouts = layout_settings_for_ui(loaded["layouts"])
+        self.assertEqual(loaded["default_layout"], "Home")
+        self.assertFalse(ui_layouts["Home"]["auto_connect"])
+        self.assertEqual(ui_layouts["Home"]["can_id"], 126)
+        self.assertEqual(layout_settings_for_storage(ui_layouts), loaded["layouts"])
 
     def test_stale_default_recovers_to_first_layout_without_rewriting_file(self):
         self.path.parent.mkdir(parents=True)

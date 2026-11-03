@@ -100,11 +100,14 @@ class TcpConnectionTests(unittest.TestCase):
 
     def test_send_delivers_exact_frame_and_logs_it(self):
         frame = b":S123N00;"
+        sent = []
+        self.connection.frame_sent.connect(sent.append)
         with self.assertLogs("workbench.connection", level=TRACE) as captured:
             self.connection.send(frame)
             self.wait_for(lambda: self.peer.bytesAvailable() == len(frame))
 
         self.assertEqual(bytes(self.peer.readAll()), frame)
+        self.assertEqual(sent, [frame])
         self.assertEqual(captured.records[0].fields["layout"], "Test Layout")
         self.assertEqual(captured.records[0].fields["frame"], frame.decode("ascii"))
 
@@ -126,9 +129,12 @@ class TcpConnectionTests(unittest.TestCase):
         self.assertEqual(self.peer.bytesAvailable(), 0)
 
     def test_send_rejects_disconnected_socket(self):
+        sent = []
+        self.connection.frame_sent.connect(sent.append)
         self.connection.disconnect()
         with self.assertRaisesRegex(ConnectionError, "not connected"):
             self.connection.send(b":S123N00;")
+        self.assertEqual(sent, [])
 
 
 if __name__ == "__main__":

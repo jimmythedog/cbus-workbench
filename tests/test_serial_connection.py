@@ -231,6 +231,8 @@ class SerialConnectionTests(unittest.TestCase):
 
     def test_send_queues_exact_frames_and_logs_each_one(self):
         connection = SerialConnection("Test Layout", self.app)
+        sent = []
+        connection.frame_sent.connect(sent.append)
         connection.connect("/dev/ttyACM1")
         port = FakeSerialPort.ports[-1]
 
@@ -239,6 +241,7 @@ class SerialConnectionTests(unittest.TestCase):
             connection.send(b":S456N01;")
 
         self.assertEqual(port.written, b":S123N00;:S456N01;")
+        self.assertEqual(sent, [b":S123N00;", b":S456N01;"])
         self.assertEqual(
             [record.fields["frame"] for record in captured.records],
             [":S123N00;", ":S456N01;"],
@@ -327,15 +330,16 @@ class SerialLayoutTests(unittest.TestCase):
         port.feed(b":SB040NB601020D2203;")
         self.assertEqual(first_service.nodes, {258: Pnn(258, 13, 34, 3)})
         table = self.window.diagnostics_dock.widget().table
-        self.assertEqual(table.rowCount(), 2)
-        self.assertIn("Home: node 258 discovered", table.item(1, 3).text())
+        self.assertEqual(table.rowCount(), 3)
+        self.assertIn("Home: node 258 (manufacturer 13", table.item(1, 3).text())
+        self.assertEqual(table.item(2, 2).text(), "RQNPN")
 
         self.window.disconnect_layout()
         self.assertEqual(self.window.cbus_services, {})
         self.window.connect_layout()
         self.assertIsNot(self.window.cbus_services["Home"], first_service)
         self.assertEqual(self.window.cbus_services["Home"].nodes, {})
-        self.assertEqual(port.written, b":SBFE0N0D;:SBFE0N0D;")
+        self.assertEqual(port.written, b":SBFE0N0D;:SBFE0N73010200;:SBFE0N0D;")
 
         with patch.object(QMessageBox, "warning"):
             port.errorOccurred.emit(QSerialPort.SerialPortError.ResourceError)

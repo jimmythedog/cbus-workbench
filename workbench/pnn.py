@@ -16,6 +16,28 @@ class Pnn:
     module_type: int
     flags: int
 
+    # PNN flag bits: Developer's Guide 6b defines 0-3; later definitions add
+    # bit 4 (own events) and bit 5 (learn mode). Learn mode is not shown here.
+    @property
+    def is_consumer(self) -> bool:
+        return bool(self.flags & 0x01)
+
+    @property
+    def is_producer(self) -> bool:
+        return bool(self.flags & 0x02)
+
+    @property
+    def is_flim(self) -> bool:
+        return bool(self.flags & 0x04)
+
+    @property
+    def supports_bootloading(self) -> bool:
+        return bool(self.flags & 0x08)
+
+    @property
+    def consumes_own_events(self) -> bool:
+        return bool(self.flags & 0x10)
+
 
 def decode_pnn(frame: bytes) -> Pnn | None:
     """Return PNN data, or None for another opcode in a valid standard data frame.

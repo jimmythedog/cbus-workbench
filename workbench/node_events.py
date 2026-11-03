@@ -7,6 +7,8 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
     QGroupBox,
+    QHBoxLayout,
+    QLabel,
     QSpinBox,
     QSplitter,
     QStyle,
@@ -18,6 +20,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from .cbus_service import NodeState
+from .pnn import Pnn
 
 
 class NoHoverDelegate(QStyledItemDelegate):
@@ -79,8 +84,16 @@ class NodeEvents(QSplitter):
         )
         produced_layout.addWidget(self.produced_table)
 
-        consumed = QGroupBox("Consumed events")
+        consumed = QWidget()
         consumed_layout = QVBoxLayout(consumed)
+
+        self.hide_zero_evs = QCheckBox("Hide zero EVs")
+        self.hide_zero_evs.toggled.connect(self.apply_zero_filter)
+        heading = QHBoxLayout()
+        heading.addSpacing(self.hide_zero_evs.sizeHint().width())
+        heading.addWidget(QLabel("Consumed events"), 1, Qt.AlignmentFlag.AlignCenter)
+        heading.addWidget(self.hide_zero_evs)
+        consumed_layout.addLayout(heading)
 
         self.consumed_table = QTreeWidget()
         self.consumed_table.setExpandsOnDoubleClick(False)
@@ -109,19 +122,7 @@ class NodeEvents(QSplitter):
         if node is None:
             return
 
-        produced = [
-            (f"{node.number}:{number}", details.get("description", ""))
-            for number, details in self.events.get(node.number, {}).items()
-        ]
-
-        self.produced_table.setRowCount(len(produced))
-
-        for row, (event, description) in enumerate(produced):
-            event_item = QTableWidgetItem(event)
-            event_item.setFlags(event_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-
-            self.produced_table.setItem(row, 0, event_item)
-            self.produced_table.setItem(row, 1, QTableWidgetItem(description))
+        self.show_produced_events(node.number)
 
         for event, description in node.consumed_events.items():
             parent = QTreeWidgetItem(self.consumed_table, [event, description])
@@ -166,6 +167,64 @@ class NodeEvents(QSplitter):
             details.setSizeHint(1, form.sizeHint())
 
         self.set_editing(False)
+        self.apply_zero_filter()
+
+    def show_produced_events(self, node_number: int) -> None:
+        produced = [
+            (f"{node_number}:{number}", details.get("description", ""))
+            for number, details in self.events.get(node_number, {}).items()
+        ]
+        self.produced_table.setRowCount(len(produced))
+        for row, (event, description) in enumerate(produced):
+            event_item = QTableWidgetItem(event)
+            event_item.setFlags(event_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.produced_table.setItem(row, 0, event_item)
+            self.produced_table.setItem(row, 1, QTableWidgetItem(description))
+
+    def show_live_state(self, state: NodeState) -> None:
+        """Show discovered consumed events using their internal table indices."""
+        same_node = (
+            isinstance(self.node, Pnn)
+            and self.node.node_number == state.identity.node_number
+        )
+        expanded = set()
+        if same_node:
+            for row in range(self.consumed_table.topLevelItemCount()):
+                item = self.consumed_table.topLevelItem(row)
+                if item.isExpanded():
+                    expanded.add(item.data(0, Qt.ItemDataRole.UserRole))
+
+        self.node = state.identity
+        self.consumed_table.clear()
+        self.show_produced_events(state.identity.node_number)
+        ev_count = state.parameters.get(5)
+        for index, (event_node, event_number) in sorted(state.event_identities.items()):
+            description = (
+                self.events.get(event_node, {})
+                .get(event_number, {})
+                .get("description", "")
+            )
+            event = f"{event_node}:{event_number}"
+            parent = QTreeWidgetItem(self.consumed_table, [event, description])
+            parent.setData(0, Qt.ItemDataRole.UserRole, index)
+            values = state.ev_values.get(index, {})
+            indices = range(1, ev_count + 1) if ev_count is not None else sorted(values)
+            for ev_index in indices:
+                value = values.get(ev_index)
+                QTreeWidgetItem(
+                    parent, [f"EV {ev_index}", "-" if value is None else str(value)]
+                )
+            parent.setExpanded(index in expanded)
+        self.set_editing(False)
+        self.apply_zero_filter()
+
+    def apply_zero_filter(self) -> None:
+        hide_zeros = self.hide_zero_evs.isChecked()
+        for row in range(self.consumed_table.topLevelItemCount()):
+            event = self.consumed_table.topLevelItem(row)
+            for child_index in range(event.childCount()):
+                ev = event.child(child_index)
+                ev.setHidden(hide_zeros and ev.text(1) == "0")
 
     def set_editing(self, editing):
         self.produced_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)

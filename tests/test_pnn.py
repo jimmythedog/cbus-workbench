@@ -12,6 +12,34 @@ class PnnTests(unittest.TestCase):
             Pnn(node_number=258, manufacturer=13, module_type=34, flags=3),
         )
 
+    def test_flag_properties_decode_only_their_assigned_bits(self):
+        # Consumer, producer, FLiM, bootloading, own events.
+        cases = (
+            (0x00, (False, False, False, False, False)),
+            (0x01, (True, False, False, False, False)),
+            (0x02, (False, True, False, False, False)),
+            (0x04, (False, False, True, False, False)),
+            (0x08, (False, False, False, True, False)),
+            (0x10, (False, False, False, False, True)),
+            (0x1F, (True, True, True, True, True)),
+            (0x20, (False, False, False, False, False)),
+            (0xC0, (False, False, False, False, False)),
+            (0xFF, (True, True, True, True, True)),
+        )
+        for flags, expected in cases:
+            with self.subTest(flags=flags):
+                node = Pnn(258, 13, 34, flags)
+                self.assertEqual(
+                    (
+                        node.is_consumer,
+                        node.is_producer,
+                        node.is_flim,
+                        node.supports_bootloading,
+                        node.consumes_own_events,
+                    ),
+                    expected,
+                )
+
     def test_other_opcode_is_ignored(self):
         self.assertIsNone(decode_pnn(b":SB040N0D;"))
 

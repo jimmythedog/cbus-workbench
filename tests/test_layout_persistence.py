@@ -207,6 +207,8 @@ class LayoutPersistenceTests(unittest.TestCase):
         window = self.open_window(sample_settings())
         original = self.path.read_bytes()
         original_view = window.layouts["Home"]
+        connection = Mock()
+        window.connections["Home"] = connection
 
         def rename(dialog):
             dialog.name_edit.setText("Main")
@@ -221,6 +223,7 @@ class LayoutPersistenceTests(unittest.TestCase):
                 ["Home", "Test Layout"],
             )
             self.assertIs(window.layouts["Home"], original_view)
+            self.assertIs(window.connections["Home"], connection)
             self.assertEqual(window.layout_group.checkedAction().data(), "Home")
             self.assertEqual(window.default_layout, "Home")
 

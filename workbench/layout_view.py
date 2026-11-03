@@ -99,8 +99,7 @@ class LayoutView(QWidget):
 
     def on_tab_changed(self, index):
         if index == self.tabs.indexOf(self.node_view):
-            node_events = self.node_view.details.node_events
-            node_events.show_node(node_events.node)
+            self.node_view.show_selected_node(self.node_view.node_list.currentItem())
 
     def on_editing_changed(self, editing):
         self.tabs.setTabEnabled(self.tabs.indexOf(self.layout_events), not editing)
