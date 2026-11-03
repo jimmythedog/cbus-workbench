@@ -15,10 +15,12 @@ from PySide6.QtWidgets import (
 )
 
 from .app_settings import load_settings, save_settings
+from .cbus_service import CbusService
 from .diagnostics import Diagnostics
 from .layout_settings import LayoutSettingsDialog
 from .layout_view import LayoutView
 from .logging_config import TRACE, trace
+from .pnn import Pnn
 from .send_frame_dialog import SendFrameDialog
 from .serial_connection import SerialConnection
 from .tcp_connection import TcpConnection
@@ -52,6 +54,7 @@ class MainWindow(QMainWindow):
         self.layouts = {}
         self.layout_settings = {}
         self.connections: dict[str, TcpConnection | SerialConnection] = {}
+        self.cbus_services: dict[str, CbusService] = {}
 
         saved_settings = {"default_layout": None, "layouts": {}}
 
@@ -75,6 +78,7 @@ class MainWindow(QMainWindow):
                 "host": connection["host"],
                 "port": connection["port"],
                 "serial_port": connection["serial_port"],
+                "can_id": connection["can_id"],
                 "auto_connect": saved["auto_connect"],
             }
 
@@ -251,6 +255,14 @@ class MainWindow(QMainWindow):
         )
         previous_state = self.connection_states[name]
         self.connection_states[name] = state
+        if (
+            state == "Connected"
+            and name in self.connections
+            and name not in self.cbus_services
+        ):
+            self.start_cbus_service(name)
+        elif state != "Connected":
+            self.remove_cbus_service(name)
         self.update_connection_actions()
         self.update_layout_actions()
         if state == "Error":
@@ -275,6 +287,49 @@ class MainWindow(QMainWindow):
             connection_logger,
             "Leaving set_connection_state",
             extra={"fields": {"layout": name}},
+        )
+
+    def start_cbus_service(self, name: str) -> None:
+        connection = self.connections[name]
+        service = CbusService(connection, self.layout_settings[name]["can_id"])
+        service.node_discovered.connect(
+            lambda node, layout=name: self.record_node_identity(layout, node, False)
+        )
+        service.node_updated.connect(
+            lambda node, layout=name: self.record_node_identity(layout, node, True)
+        )
+        self.cbus_services[name] = service
+
+        def send_query():
+            service.discover_nodes()
+            self.diagnostics_dock.widget().add_message(
+                "TX", "QNN", f"{name}: CAN ID {service.can_id}"
+            )
+
+        self.error_reporter.run(
+            f"Could not discover nodes on layout '{name}'", send_query
+        )
+
+    def record_node_identity(self, name: str, node: Pnn, updated: bool) -> None:
+        view = self.layouts[name]
+        view.node_view.show_identity(node)
+        action = "updated" if updated else "discovered"
+        self.diagnostics_dock.widget().add_message(
+            "RX",
+            "PNN",
+            f"{name}: node {node.node_number} {action} "
+            f"(manufacturer {node.manufacturer}, type {node.module_type}, flags {node.flags})",
+        )
+
+    def remove_cbus_service(self, name: str) -> None:
+        service = self.cbus_services.pop(name, None)
+        if service is None:
+            return
+        service.close()
+        service.deleteLater()
+        self.layouts[name].node_view.clear_identities()
+        connection_logger.info(
+            "CBUS discovery state cleared", extra={"fields": {"layout": name}}
         )
 
     def connect_layout(self) -> None:
@@ -449,6 +504,7 @@ class MainWindow(QMainWindow):
                     "host": settings["host"],
                     "port": settings["port"],
                     "serial_port": settings["serial_port"],
+                    "can_id": settings["can_id"],
                 },
             }
             for name, settings in layouts.items()
@@ -560,6 +616,7 @@ class MainWindow(QMainWindow):
                 "fields": {
                     "layout": name,
                     "connection_type": settings["connection_type"],
+                    "can_id": settings["can_id"],
                 }
             },
         )
@@ -688,6 +745,7 @@ class MainWindow(QMainWindow):
                         "old_layout": old_name,
                         "layout": name,
                         "connection_type": settings["connection_type"],
+                        "can_id": settings["can_id"],
                     }
                 },
             )
@@ -701,6 +759,7 @@ class MainWindow(QMainWindow):
                     "fields": {
                         "layout": name,
                         "connection_type": settings["connection_type"],
+                        "can_id": settings["can_id"],
                     }
                 },
             )
@@ -813,6 +872,7 @@ class MainWindow(QMainWindow):
         )
 
     def close_layout_connection(self, name: str) -> None:
+        self.remove_cbus_service(name)
         connection = self.connections.pop(name, None)
         if connection is not None:
             connection.disconnect()

@@ -1,4 +1,4 @@
-"""The auto-connect choice in the layout dialog and in-memory layouts."""
+"""Layout connection choices in the dialog and in-memory layouts."""
 
 import os
 import unittest
@@ -28,6 +28,9 @@ class LayoutSettingsTests(unittest.TestCase):
     def test_new_layout_defaults_to_auto_connect_off(self):
         def accept_new(dialog):
             self.assertFalse(dialog.auto_connect_check.isChecked())
+            self.assertEqual(dialog.can_id_spin.value(), 126)
+            self.assertEqual(dialog.can_id_spin.minimum(), 100)
+            self.assertEqual(dialog.can_id_spin.maximum(), 127)
             dialog.name_edit.setText("Garden")
             dialog.logical_layout_combo.setCurrentText("garden")
             return QDialog.DialogCode.Accepted
@@ -36,6 +39,7 @@ class LayoutSettingsTests(unittest.TestCase):
             self.window.new_layout()
 
         self.assertFalse(self.window.layout_settings["Garden"]["auto_connect"])
+        self.assertEqual(self.window.layout_settings["Garden"]["can_id"], 126)
 
     def test_new_layout_can_enable_auto_connect(self):
         def accept_new(dialog):
@@ -57,13 +61,17 @@ class LayoutSettingsTests(unittest.TestCase):
             auto_connect=True,
             connection_type="Serial",
             serial_port="/dev/ttyACM1",
+            can_id=125,
         )
 
         def accept_edit(dialog):
             self.assertTrue(dialog.auto_connect_check.isChecked())
             self.assertEqual(dialog.connection_type_combo.currentText(), "Serial")
             self.assertEqual(dialog.serial_port_edit.text(), "/dev/ttyACM1")
+            self.assertEqual(dialog.can_id_spin.value(), 125)
+            self.assertTrue(dialog.can_id_spin.isVisibleTo(dialog))
             dialog.auto_connect_check.setChecked(False)
+            dialog.can_id_spin.setValue(127)
             return QDialog.DialogCode.Accepted
 
         with patch.object(LayoutSettingsDialog, "exec", accept_edit):
@@ -73,6 +81,16 @@ class LayoutSettingsTests(unittest.TestCase):
         self.assertFalse(updated["auto_connect"])
         self.assertEqual(updated["connection_type"], "Serial")
         self.assertEqual(updated["serial_port"], "/dev/ttyACM1")
+        self.assertEqual(updated["can_id"], 127)
+
+    def test_can_id_is_available_for_tcp_and_serial(self):
+        dialog = LayoutSettingsDialog()
+        self.addCleanup(dialog.close)
+        for connection_type in ("TCP/IP", "Serial"):
+            with self.subTest(connection_type=connection_type):
+                dialog.connection_type_combo.setCurrentText(connection_type)
+                self.assertTrue(dialog.can_id_spin.isVisibleTo(dialog))
+                self.assertEqual(dialog.settings()["can_id"], 126)
 
     def test_cancel_leaves_existing_layout_settings_unchanged(self):
         original = self.window.layout_settings["Home"].copy()

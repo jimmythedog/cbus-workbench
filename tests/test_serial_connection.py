@@ -13,6 +13,7 @@ from PySide6.QtSerialPort import QSerialPort
 from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QMessageBox
 
 from workbench.logging_config import TRACE
+from workbench.pnn import Pnn
 from workbench.send_frame_dialog import SendFrameDialog
 from workbench.serial_connection import SerialConnection
 from workbench.window import MainWindow
@@ -316,6 +317,31 @@ class SerialLayoutTests(unittest.TestCase):
         self.assertEqual(self.window.connection_status.text(), "Disconnected")
         self.assertFalse(self.window.send_frame_action.isEnabled())
 
+    def test_manual_connection_discovers_nodes_and_reconnect_starts_fresh(self):
+        self.window.layout_settings["Home"]["can_id"] = 127
+        self.window.connect_layout()
+        port = FakeSerialPort.ports[-1]
+        first_service = self.window.cbus_services["Home"]
+        self.assertEqual(port.written, b":SBFE0N0D;")
+
+        port.feed(b":SB040NB601020D2203;")
+        self.assertEqual(first_service.nodes, {258: Pnn(258, 13, 34, 3)})
+        table = self.window.diagnostics_dock.widget().table
+        self.assertEqual(table.rowCount(), 2)
+        self.assertIn("Home: node 258 discovered", table.item(1, 3).text())
+
+        self.window.disconnect_layout()
+        self.assertEqual(self.window.cbus_services, {})
+        self.window.connect_layout()
+        self.assertIsNot(self.window.cbus_services["Home"], first_service)
+        self.assertEqual(self.window.cbus_services["Home"].nodes, {})
+        self.assertEqual(port.written, b":SBFE0N0D;:SBFE0N0D;")
+
+        with patch.object(QMessageBox, "warning"):
+            port.errorOccurred.emit(QSerialPort.SerialPortError.ResourceError)
+        self.assertEqual(self.window.connection_states["Home"], "Error")
+        self.assertEqual(self.window.cbus_services, {})
+
     def test_existing_dialog_sends_serial_frames_and_keeps_status(self):
         self.window.connect_layout()
         port = FakeSerialPort.ports[-1]
@@ -327,14 +353,14 @@ class SerialLayoutTests(unittest.TestCase):
         dialog.send_button.click()
         self.assertTrue(dialog.isVisible())
         self.assertEqual(dialog.status_label.text(), "Frame sent (1)")
-        self.assertEqual(port.written, b":S123N00;")
+        self.assertEqual(port.written, b":SBFC0N0D;:S123N00;")
 
         dialog.frame_edit.setText(":S456N01;")
         self.assertEqual(dialog.status_label.text(), "")
         dialog.send_button.click()
         self.assertTrue(dialog.isVisible())
         self.assertEqual(dialog.status_label.text(), "Frame sent (2)")
-        self.assertEqual(port.written, b":S123N00;:S456N01;")
+        self.assertEqual(port.written, b":SBFC0N0D;:S123N00;:S456N01;")
 
         dialog.frame_edit.setText(":S1;:S2;")
         messages = []
@@ -348,7 +374,7 @@ class SerialLayoutTests(unittest.TestCase):
         self.assertTrue(dialog.isVisible())
         self.assertIn("complete printable ASCII", messages[0])
         self.assertEqual(dialog.status_label.text(), "")
-        self.assertEqual(port.written, b":S123N00;:S456N01;")
+        self.assertEqual(port.written, b":SBFC0N0D;:S123N00;:S456N01;")
 
         buttons = dialog.findChild(QDialogButtonBox)
         buttons.button(QDialogButtonBox.StandardButton.Close).click()
@@ -424,6 +450,7 @@ class SerialLayoutTests(unittest.TestCase):
         second_port = FakeSerialPort.ports[-1]
         self.window.close()
         self.assertFalse(second_port.is_open)
+        self.assertEqual(self.window.cbus_services, {})
 
     def test_window_close_after_disconnect_does_not_report_failure(self):
         self.window.connect_layout()

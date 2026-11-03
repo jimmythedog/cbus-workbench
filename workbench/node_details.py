@@ -24,6 +24,7 @@ from .node_backups import NodeBackups
 from .node_events import NodeEvents
 from .node_snapshot import create_node_snapshot, restore_node_snapshot
 from .node_variables import MdfNodeVariables, RawNodeVariables
+from .pnn import Pnn
 
 DEFAULT_NODE_TITLE = "Node details"
 
@@ -75,6 +76,7 @@ class NodeDetails(QWidget):
         self.firmware = QLabel("-")
         self.status = QLabel("-")
         self.manufacturer = QLabel("-")
+        self.flags = QLabel("-")
         self.module_identifier = QLabel("-")
         self.node_mode = QLabel("-")
         self.vlcb = QLabel("-")
@@ -99,6 +101,7 @@ class NodeDetails(QWidget):
         # Module
         form.addRow("Manufacturer:", self.manufacturer)
         form.addRow("Module type:", self.module_type)
+        form.addRow("Flags:", self.flags)
         form.addRow("Module identifier:", self.module_identifier)
         form.addRow("Firmware:", self.firmware)
 
@@ -394,15 +397,22 @@ class NodeDetails(QWidget):
         self.node_list_item = current
         self.details_buttons.setCurrentIndex(0)
         self.node = current.data(Qt.ItemDataRole.UserRole) if current else None
-        self.node_events.show_node(self.node)
-        self.node_backups.show_node(self.node)
-        self.backup_buttons["New"].setEnabled(self.node is not None)
+        live_identity = isinstance(self.node, Pnn)
+        self.node_events.show_node(None if live_identity else self.node)
+        self.node_backups.show_node(None if live_identity else self.node)
+        self.backup_buttons["New"].setEnabled(
+            self.node is not None and not live_identity
+        )
         self.update_backup_buttons()
 
         enabled = current is not None
-        self.edit_button.setEnabled(enabled)
-        self.details_edit_button.setEnabled(enabled)
-        self.events_edit_button.setEnabled(enabled)
+        self.edit_button.setEnabled(enabled and not live_identity)
+        self.details_edit_button.setEnabled(enabled and not live_identity)
+        self.events_edit_button.setEnabled(enabled and not live_identity)
+        for page in (self.variables_page, self.node_events, self.node_backups):
+            self.tabs.setTabEnabled(self.tabs.indexOf(page), not live_identity)
+        if live_identity:
+            self.tabs.setCurrentWidget(self.details_page)
 
         if current is None:
             self.node_number.setText("-")
@@ -411,6 +421,7 @@ class NodeDetails(QWidget):
             self.module_type.setText("-")
             self.firmware.setText("-")
             self.status.setText("-")
+            self.flags.setText("-")
             self.variables.setCurrentIndex(0)
             for label in (
                 self.manufacturer,
@@ -441,6 +452,39 @@ class NodeDetails(QWidget):
 
         node = current.data(Qt.ItemDataRole.UserRole)
 
+        if isinstance(node, Pnn):
+            self.node_number.setText(str(node.node_number))
+            self.node_name.setText("-")
+            self.can_id.setText("-")
+            self.module_type.setText(str(node.module_type))
+            self.firmware.setText("-")
+            self.status.setText("-")
+            self.manufacturer.setText(str(node.manufacturer))
+            self.flags.setText(f"0x{node.flags:02X}")
+            for label in (
+                self.module_identifier,
+                self.node_mode,
+                self.vlcb,
+                self.producer,
+                self.consumer,
+                self.consumes_own_events,
+                self.supports_bootloading,
+                self.nv_count,
+                self.stored_events,
+                self.event_count,
+                self.ev_count,
+                self.cpu_name,
+                self.interface,
+                self.module_descriptor,
+            ):
+                label.setText("-")
+            self.summary.setTitle(f"Node {node.node_number} — {node.module_type}")
+            self.summary_can_id.setText("CAN ID: -")
+            self.summary_firmware.setText("Firmware: -")
+            self.summary_mode.setText("Mode: -")
+            self.summary_status.setText("Status: -")
+            return
+
         self.raw_values.show_node(node)
         self.mdf_values.show_node(node)
 
@@ -452,6 +496,7 @@ class NodeDetails(QWidget):
         self.refresh_node_name()
         self.can_id.setText("126")
         self.module_type.setText("CANMIO")
+        self.flags.setText("-")
         self.firmware.setText("3d")
         self.status.setText("Online")
         self.manufacturer.setText("MERG")

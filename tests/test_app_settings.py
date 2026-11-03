@@ -56,6 +56,7 @@ class AppSettingsTests(unittest.TestCase):
                         "host": "localhost",
                         "port": 5550,
                         "serial_port": "",
+                        "can_id": 126,
                     },
                 },
                 "Workshop": {
@@ -66,6 +67,7 @@ class AppSettingsTests(unittest.TestCase):
                         "host": "",
                         "port": 5550,
                         "serial_port": "/dev/ttyACM1",
+                        "can_id": 127,
                     },
                 },
             },
@@ -117,12 +119,45 @@ class AppSettingsTests(unittest.TestCase):
         self.assertIn("Old Name", captured.output[0])
         self.assertEqual(settings["default_layout"], "Home")
         self.assertFalse(settings["layouts"]["Home"]["auto_connect"])
+        self.assertEqual(settings["layouts"]["Home"]["connection"]["can_id"], 126)
+        self.assertEqual(settings["layouts"]["Workshop"]["connection"]["can_id"], 126)
         self.assertEqual(self.path.read_text(), content)
 
         save_settings(settings, self.path)
         self.assertEqual(
             yaml.safe_load(self.path.read_text())["default_layout"], "Home"
         )
+        self.assertEqual(
+            yaml.safe_load(self.path.read_text())["layouts"]["Home"]["connection"][
+                "can_id"
+            ],
+            126,
+        )
+
+    def test_invalid_can_ids_are_rejected(self):
+        settings = {
+            "default_layout": "Home",
+            "layouts": {
+                "Home": {
+                    "logical_layout": "home",
+                    "connection": {
+                        "type": "TCP/IP",
+                        "host": "",
+                        "port": 5550,
+                        "serial_port": "",
+                        "can_id": 126,
+                    },
+                }
+            },
+        }
+        for can_id in (99, 128, True, "126"):
+            with self.subTest(can_id=can_id):
+                settings["layouts"]["Home"]["connection"]["can_id"] = can_id
+                with (
+                    self.assertLogs("workbench.settings", level="ERROR"),
+                    self.assertRaisesRegex(SettingsError, "CAN ID"),
+                ):
+                    save_settings(settings, self.path)
 
     def test_stale_default_with_no_layouts_recovers_to_none(self):
         self.path.parent.mkdir(parents=True)

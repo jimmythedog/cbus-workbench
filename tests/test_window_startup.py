@@ -7,9 +7,11 @@ from pathlib import Path
 from typing import ClassVar
 from unittest.mock import patch
 
+from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from workbench.app_settings import save_settings
+from workbench.app_settings import load_settings, save_settings
+from workbench.pnn import Pnn
 from workbench.window import MainWindow
 
 
@@ -20,20 +22,26 @@ class RecordingSignal:
     def connect(self, callback):
         self.callbacks.append(callback)
 
+    def disconnect(self, callback):
+        self.callbacks.remove(callback)
+
     def emit(self, value):
         for callback in self.callbacks:
             callback(value)
 
 
-class RecordingConnection:
+class RecordingConnection(QObject):
     attempts: ClassVar[list] = []
     failing_layout = None
 
     def __init__(self, layout_name, parent):
+        super().__init__(parent)
         self.layout_name = layout_name
         self.window = parent
         self.state_changed = RecordingSignal()
         self.failed = RecordingSignal()
+        self.frame_received = RecordingSignal()
+        self.sent = []
 
     def connect(self, *endpoint):
         selected = self.window.layout_group.checkedAction().data()
@@ -49,16 +57,22 @@ class RecordingConnection:
     def disconnect(self):
         self.state_changed.emit("Disconnected")
 
+    def send(self, frame):
+        self.sent.append(frame)
+
     def deleteLater(self):
         pass
 
 
 class RecordingTcpConnection(RecordingConnection):
-    pass
+    # PySide exposes QObject.connect/disconnect on subclasses unless overridden here.
+    connect = RecordingConnection.connect
+    disconnect = RecordingConnection.disconnect
 
 
 class RecordingSerialConnection(RecordingConnection):
-    pass
+    connect = RecordingConnection.connect
+    disconnect = RecordingConnection.disconnect
 
 
 class WindowStartupTests(unittest.TestCase):
@@ -130,6 +144,7 @@ class WindowStartupTests(unittest.TestCase):
                 "host": "localhost",
                 "port": 5551,
                 "serial_port": "/dev/ttyACM0",
+                "can_id": 126,
             },
         )
         self.assertEqual(
@@ -256,6 +271,121 @@ class WindowStartupTests(unittest.TestCase):
         self.assertEqual(window.layout_group.checkedAction().data(), "Default")
         self.assertEqual(window.layout_status.text(), "Default")
 
+    def test_auto_connected_services_use_layout_ids_and_keep_nodes_separate(self):
+        self.save_startup_layouts(
+            [("First", "TCP/IP", True), ("Default", "Serial", True)]
+        )
+        settings = load_settings(self.path)
+        settings["layouts"]["First"]["connection"]["can_id"] = 127
+        save_settings(settings, self.path)
+
+        window = self.start_with_recording_connections()
+        first = window.connections["First"]
+        second = window.connections["Default"]
+        self.assertEqual(first.sent, [b":SBFE0N0D;"])
+        self.assertEqual(second.sent, [b":SBFC0N0D;"])
+        self.assertEqual(set(window.cbus_services), {"First", "Default"})
+
+        with self.assertLogs("workbench.cbus", level="INFO") as captured:
+            first.frame_received.emit(b":SB040NB601020D2203;")
+            first.frame_received.emit(b":SB040NB601020D2303;")
+            second.frame_received.emit(b":SB040NB601030D2203;")
+
+        self.assertEqual(
+            window.cbus_services["First"].nodes, {258: Pnn(258, 13, 35, 3)}
+        )
+        self.assertEqual(
+            window.cbus_services["Default"].nodes, {259: Pnn(259, 13, 34, 3)}
+        )
+        self.assertEqual(
+            [record.getMessage() for record in captured.records],
+            ["Node discovered", "Node identity updated", "Node discovered"],
+        )
+        self.assertEqual(captured.records[0].fields["layout"], "First")
+        table = window.diagnostics_dock.widget().table
+        self.assertEqual(table.rowCount(), 5)
+        self.assertIn("First: node 258 updated", table.item(3, 3).text())
+
+    def test_navigator_tracks_each_layout_and_refreshes_selected_identity(self):
+        self.save_startup_layouts(
+            [("First", "TCP/IP", True), ("Default", "Serial", True)]
+        )
+        window = self.start_with_recording_connections()
+        first_view = window.layouts["First"].node_view
+        default_view = window.layouts["Default"].node_view
+        self.assertEqual(first_view.node_list.count(), 0)
+        self.assertEqual(default_view.node_list.count(), 0)
+
+        # PNNs arrive for the hidden layout too, without a new query on selection.
+        window.connections["First"].frame_received.emit(b":SB040NB601020D2203;")
+        self.assertEqual(first_view.node_list.count(), 1)
+        self.assertEqual(default_view.node_list.count(), 0)
+        first_action = next(
+            action
+            for action in window.layout_group.actions()
+            if action.data() == "First"
+        )
+        first_action.setChecked(True)
+        window.select_layout(first_action)
+        item = first_view.node_list.item(0)
+        first_view.node_list.setCurrentItem(item)
+        details = first_view.details
+        self.assertEqual(item.text(), "258 - 34")
+        self.assertEqual(details.node_number.text(), "258")
+        self.assertEqual(details.manufacturer.text(), "13")
+        self.assertEqual(details.module_type.text(), "34")
+        self.assertEqual(details.flags.text(), "0x03")
+        self.assertEqual(details.firmware.text(), "-")
+        self.assertFalse(details.edit_button.isEnabled())
+
+        window.connections["First"].frame_received.emit(b":SB040NB601020D2307;")
+        self.assertIs(first_view.node_list.currentItem(), item)
+        self.assertEqual(first_view.node_list.count(), 1)
+        self.assertEqual(item.text(), "258 - 35")
+        self.assertEqual(details.module_type.text(), "35")
+        self.assertEqual(details.flags.text(), "0x07")
+
+        window.connections["Default"].frame_received.emit(b":SB040NB601030D2203;")
+        default_action = next(
+            action
+            for action in window.layout_group.actions()
+            if action.data() == "Default"
+        )
+        default_action.setChecked(True)
+        window.select_layout(default_action)
+        self.assertIs(window.layout_stack.currentWidget(), window.layouts["Default"])
+        self.assertEqual(default_view.node_list.item(0).text(), "259 - 34")
+        self.assertEqual(first_view.node_list.item(0).text(), "258 - 35")
+
+        window.connections["First"].disconnect()
+        self.assertEqual(first_view.node_list.count(), 0)
+        self.assertIsNone(first_view.details.node)
+        self.assertEqual(first_view.details.node_number.text(), "-")
+        self.assertEqual(default_view.node_list.count(), 1)
+
+    def test_reconnect_clears_discovery_and_sends_one_new_query(self):
+        self.save_startup_layouts([("Default", "TCP/IP", True)])
+        window = self.start_with_recording_connections()
+        connection = window.connections["Default"]
+        first_service = window.cbus_services["Default"]
+        connection.frame_received.emit(b":SB040NB601020D2203;")
+        self.assertEqual(first_service.nodes, {258: Pnn(258, 13, 34, 3)})
+        navigator = window.layouts["Default"].node_view.node_list
+        self.assertEqual(navigator.count(), 1)
+
+        window.disconnect_layout()
+        self.assertEqual(window.cbus_services, {})
+        self.assertEqual(navigator.count(), 0)
+        connection.frame_received.emit(b":SB040NB601030D2203;")
+        self.assertEqual(first_service.nodes, {258: Pnn(258, 13, 34, 3)})
+        self.assertEqual(navigator.count(), 0)
+
+        window.connect_layout()
+        self.assertEqual(connection.sent, [b":SBFC0N0D;", b":SBFC0N0D;"])
+        self.assertIsNot(window.cbus_services["Default"], first_service)
+        self.assertEqual(window.cbus_services["Default"].nodes, {})
+        self.assertEqual(navigator.count(), 0)
+
     def test_failed_connection_does_not_prevent_other_startup_attempts(self):
         self.save_startup_layouts(
             [("First", "Serial", True), ("Default", "TCP/IP", True)]
@@ -271,6 +401,8 @@ class WindowStartupTests(unittest.TestCase):
         )
         self.assertEqual(window.connection_states["First"], "Error")
         self.assertEqual(window.connection_states["Default"], "Connected")
+        self.assertNotIn("First", window.cbus_services)
+        self.assertIn("Default", window.cbus_services)
         self.assertEqual(window.layout_group.checkedAction().data(), "Default")
         warning.assert_called_once()
 

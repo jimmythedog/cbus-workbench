@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from workbench.pnn import Pnn
 from workbench.send_frame_dialog import SendFrameDialog
 from workbench.window import MainWindow
 
@@ -56,6 +57,8 @@ class SendFrameDialogTests(unittest.TestCase):
         self.wait_for(lambda: self.window.connection_status.text() == "Connected")
         self.wait_for(self.server.hasPendingConnections)
         self.peer = self.server.nextPendingConnection()
+        self.wait_for(lambda: self.peer.bytesAvailable() >= len(b":SBFC0N0D;"))
+        self.assertEqual(bytes(self.peer.readAll()), b":SBFC0N0D;")
 
     def test_menu_action_requires_connected_tcp_layout(self):
         self.assertFalse(self.window.send_frame_action.isEnabled())
@@ -82,6 +85,20 @@ class SendFrameDialogTests(unittest.TestCase):
         self.assertTrue(self.window.send_frame_action.isEnabled())
         self.window.disconnect_layout()
         self.assertFalse(self.window.send_frame_action.isEnabled())
+
+    def test_tcp_pnn_discovery_ends_when_peer_disconnects(self):
+        self.connect_home()
+        self.peer.write(b":SB040NB601020D2203;")
+        self.peer.flush()
+        self.wait_for(lambda: 258 in self.window.cbus_services["Home"].nodes)
+        self.assertEqual(
+            self.window.cbus_services["Home"].nodes,
+            {258: Pnn(258, 13, 34, 3)},
+        )
+
+        self.peer.close()
+        self.wait_for(lambda: self.window.connection_states["Home"] == "Disconnected")
+        self.assertEqual(self.window.cbus_services, {})
 
     def test_successive_sends_deliver_frames_and_increment_status(self):
         self.connect_home()

@@ -22,12 +22,6 @@ class Diagnostics(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self.table)
 
-        # Sample messages until real CBUS diagnostics are available.
-        self.add_message("TX", "QNN", "Query all nodes")
-        self.add_message("RX", "PNN", "Node 256 - CANMIO")
-        self.add_message("RX", "PNN", "Node 258 - CANACE8C")
-        self.add_message("TX", "RQNP", "Request node parameters")
-
     def add_message(self, direction, opcode, details):
         row = self.table.rowCount()
         self.table.insertRow(row)

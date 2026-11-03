@@ -24,6 +24,7 @@ class LayoutSettingsDialog(QDialog):
         host="",
         port=5550,
         serial_port="/dev/ttyACM0",
+        can_id=126,
         auto_connect=False,
     ):
         super().__init__(parent)
@@ -47,6 +48,10 @@ class LayoutSettingsDialog(QDialog):
         self.port_spin.setValue(port)
 
         self.serial_port_edit = QLineEdit(serial_port)
+
+        self.can_id_spin = QSpinBox()
+        self.can_id_spin.setRange(100, 127)
+        self.can_id_spin.setValue(can_id)
 
         layout_form = QFormLayout()
         layout_form.addRow("Name:", self.name_edit)
@@ -75,6 +80,7 @@ class LayoutSettingsDialog(QDialog):
         self.connection_fields.addWidget(self.serial_fields)
 
         connection_form.addRow(self.connection_fields)
+        connection_form.addRow("CAN ID:", self.can_id_spin)
 
         self.connection_type_combo.currentTextChanged.connect(
             self.update_connection_fields
@@ -103,5 +109,6 @@ class LayoutSettingsDialog(QDialog):
             "host": self.host_edit.text().strip(),
             "port": self.port_spin.value(),
             "serial_port": self.serial_port_edit.text().strip(),
+            "can_id": self.can_id_spin.value(),
             "auto_connect": self.auto_connect_check.isChecked(),
         }

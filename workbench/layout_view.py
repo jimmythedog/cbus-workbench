@@ -49,10 +49,10 @@ class LayoutView(QWidget):
 
         self.tabs = QTabWidget()
         self.tabs.currentChanged.connect(self.on_tab_changed)
-        self.node_view = NodeView(self.events, empty=empty)
+        self.node_view = NodeView(self.events)
         self.tabs.addTab(self.node_view, "Nodes")
 
-        self.layout_events = LayoutEvents(self.nodes(), self.events)
+        self.layout_events = LayoutEvents([], self.events)
 
         self.tabs.addTab(self.layout_events, "Events")
 

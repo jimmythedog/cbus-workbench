@@ -13,6 +13,7 @@ def sample_settings():
                     "host": "",
                     "port": 5550,
                     "serial_port": "",
+                    "can_id": 126,
                 },
             }
             for name, logical_layout in (

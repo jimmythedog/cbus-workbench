@@ -44,6 +44,7 @@ class LayoutPersistenceTests(unittest.TestCase):
         dialog.logical_layout_combo.setCurrentText("garden")
         dialog.connection_type_combo.setCurrentText("Serial")
         dialog.serial_port_edit.setText("/dev/ttyACM2")
+        dialog.can_id_spin.setValue(127)
         dialog.auto_connect_check.setChecked(True)
         return QDialog.DialogCode.Accepted
 
@@ -57,6 +58,7 @@ class LayoutPersistenceTests(unittest.TestCase):
         self.assertEqual(saved["layouts"]["Garden"]["logical_layout"], "garden")
         self.assertTrue(saved["layouts"]["Garden"]["auto_connect"])
         self.assertEqual(saved["layouts"]["Garden"]["connection"]["type"], "Serial")
+        self.assertEqual(saved["layouts"]["Garden"]["connection"]["can_id"], 127)
         self.assertEqual(
             saved["layouts"]["Garden"]["connection"]["serial_port"],
             "/dev/ttyACM2",
@@ -64,6 +66,7 @@ class LayoutPersistenceTests(unittest.TestCase):
         reopened = MainWindow()
         self.addCleanup(reopened.close)
         self.assertEqual(reopened.default_layout, "Garden")
+        self.assertEqual(reopened.layout_settings["Garden"]["can_id"], 127)
         self.assertEqual(reopened.layout_group.checkedAction().data(), "Garden")
         self.assertEqual(reopened.layout_group.checkedAction().text(), "Garden ★")
 
@@ -98,6 +101,26 @@ class LayoutPersistenceTests(unittest.TestCase):
         self.assertEqual(window.default_layout, "Main")
         self.assertEqual(load_settings()["default_layout"], "Main")
         self.assertEqual(other.text(), "Test Layout")
+
+    def test_edit_tcp_can_id_survives_restart(self):
+        window = self.open_window(sample_settings())
+
+        def edit_can_id(dialog):
+            self.assertEqual(dialog.connection_type_combo.currentText(), "TCP/IP")
+            self.assertEqual(dialog.can_id_spin.value(), 126)
+            dialog.can_id_spin.setValue(100)
+            return QDialog.DialogCode.Accepted
+
+        with patch.object(LayoutSettingsDialog, "exec", edit_can_id):
+            window.edit_layout()
+
+        self.assertEqual(window.layout_settings["Home"]["can_id"], 100)
+        self.assertEqual(
+            load_settings()["layouts"]["Home"]["connection"]["can_id"], 100
+        )
+        reopened = MainWindow()
+        self.addCleanup(reopened.close)
+        self.assertEqual(reopened.layout_settings["Home"]["can_id"], 100)
 
     def test_delete_default_then_last_layout(self):
         window = self.open_window(sample_settings())

@@ -49,7 +49,12 @@ def _validate_layout(name: object, value: object) -> dict:
     connection = value.get("connection")
     if not isinstance(connection, dict):
         raise SettingsError(f"Layout '{name}' needs a connection mapping")
-    if set(connection) != {"type", "host", "port", "serial_port"}:
+    if set(connection) - {"type", "host", "port", "serial_port", "can_id"} or not {
+        "type",
+        "host",
+        "port",
+        "serial_port",
+    } <= set(connection):
         raise SettingsError(
             f"Layout '{name}' connection needs type, host, port and serial_port"
         )
@@ -62,11 +67,14 @@ def _validate_layout(name: object, value: object) -> dict:
     port = connection["port"]
     if type(port) is not int or not 1 <= port <= 65535:
         raise SettingsError(f"Layout '{name}' TCP port must be from 1 to 65535")
+    can_id = connection.get("can_id", 126)
+    if type(can_id) is not int or not 100 <= can_id <= 127:
+        raise SettingsError(f"Layout '{name}' CAN ID must be from 100 to 127")
 
     return {
         "logical_layout": logical_layout,
         "auto_connect": auto_connect,
-        "connection": connection.copy(),
+        "connection": {**connection, "can_id": can_id},
     }
 
 

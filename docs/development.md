@@ -101,3 +101,40 @@ available, then emits and logs each frame at TRACE. Like TCP, serial `send` vali
 one complete printable ASCII frame, queues it with `QSerialPort.write` and logs it at
 TRACE. Both transports use the same Send GridConnect Frame dialog. Disconnecting,
 changing the device path, deleting the layout or closing the window closes the port.
+
+### Agreed CBUS service design
+
+Each connected layout will have a CBUS service between its GridConnect transport and
+the UI. The service will interpret every incoming CBUS message, whether it follows a
+Workbench request, another application's activity or unsolicited network traffic.
+It will maintain that layout's live node state and emit Qt signals when known node,
+node variable (NV) or event variable (EV) state changes. The UI will observe those
+signals and initiate operations through the service; it will neither decode CBUS
+opcodes nor manage protocol transactions.
+
+```text
+PySide6 UI ── commands ──► per-layout CBUS service ── outgoing frames ──► transport
+PySide6 UI ◄── signals ─── per-layout CBUS service ◄── incoming frames ─── transport
+                            (live node state)                         (TCP or serial)
+```
+
+An undiscovered value remains unknown, rather than defaulting to zero. A value is
+confirmed only by an appropriate response from its node; seeing a write request
+does not confirm that the write succeeded. Live connection state stays separate for
+each layout, including layouts that share a logical-layout data directory.
+
+QNN/PNN node discovery is the first service capability. NV reads, EVs and other CBUS
+operations will follow incrementally as their UI needs are defined. The service uses
+Qt's existing asynchronous event loop; add a `QThread` only if processing later
+proves to require it.
+
+The service listens to one connection's frame signal, keeps PNN-confirmed node
+identities in memory and emits signals only for new or changed identities. When a
+layout connects, `MainWindow` creates its service using the configured PC CAN ID
+(100–127) and sends one QNN. Leaving Connected detaches and clears that service;
+reconnecting starts discovery with empty state. The caller must choose a CAN ID
+unique on the network. Discovery is visible in the Diagnostics pane and logs, and
+the existing navigator shows those PNN identities for each layout. The selected
+node details show only the node number, manufacturer, module type and flags known
+from PNN; unknown configuration values stay blank. Identity updates keep the
+current selection, and ending a connection clears that layout's live entries.
