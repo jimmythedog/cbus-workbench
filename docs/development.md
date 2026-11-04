@@ -203,8 +203,8 @@ matching NEVAL confirms an EV value, including zero. Seeing a write request does
 not confirm that the write succeeded. Live connection state stays separate for
 each layout, including layouts that share a logical-layout data directory.
 
-QNN/PNN node discovery and read-only parameter, NV, stored-event identity and
-EV value discovery are implemented. Other CBUS operations will follow
+QNN/PNN node discovery, parameter, NV, stored-event identity and
+EV value discovery, and verified NV writes are implemented. Other CBUS operations will follow
 incrementally as their UI needs are defined. The service uses Qt's
 existing asynchronous event loop; add a `QThread` only if processing later
 proves to require it.
@@ -217,6 +217,59 @@ reconnecting starts discovery with empty state. The caller must choose a CAN ID
 unique on the network. Discovery is visible in the Diagnostics pane and logs.
 
 ### Node discovery lifecycle
+
+NV Save uses the existing editor working copy, leaving `NodeState` confirmed
+values untouched until each matching readback. `CbusService.write_nvs()` validates
+the working copy against the discovered NV count and selects changed values.
+The NV-specific `NvWrite` operation waits for any outstanding discovery request
+to finish, then pauses the shared discovery queue for sequential writes:
+
+```text
+Edit -> working copy -> Cancel -> discard (no writes)
+                     -> Save -> finish current discovery request
+                                  |
+                 for each changed NV: NVSET (96)
+                                  -> WRACK (59), same node
+                                  -> NVRD (71), same NV
+                                  -> NVANS (97), matching node/index/value
+                                  -> update confirmed NV -> next write
+                                  |
+                    CMDERR / timeout / mismatch / send failure
+                                  -> stop; keep earlier verified writes
+                 all writes verified -> queue full NV reread
+                                      -> each NVANS updates confirmed views
+                                      -> clear saved node's event slots and EVs
+                                      -> RQEVN -> NERD/ENRSP -> REVAL/NEVAL
+                                      -> one final success / refresh uncertainty
+                 write failure -> report result -> resume discovery
+                 disconnect -> stop and report; service is then discarded
+```
+
+The Developer's Guide 6b teaching/readback sections define this sequence; no learn
+mode is needed. Successful discovery provides evidence that NVRD is supported,
+so every write requires readback rather than falling back to acknowledgement
+alone. WRACK and CMDERR have only a node number, with no NV index or transaction
+identifier. Serialisation prevents ambiguity between Workbench's own requests;
+another configuration tool must not write the same node concurrently. Each reply
+has a two-second timeout. There are no automatic retries or rollbacks. An
+unverified written NV retains its previous confirmed value; late NVANS for it
+are ignored, and another Save requires reconnecting to rediscover physical state.
+After verified writes, the shared discovery queue rereads every NV because
+firmware can change other NVs as a side effect. The editor working copy is released
+at write completion so both views display each confirmed reread immediately.
+After the NV reread, the saved node's old event identities and EV values are
+cleared: firmware can rebuild its event table, so old slot indices cannot safely
+identify current EVs. Its event/EV progress and EV-start guard are reset, and the
+existing shared queue performs RQEVN, NERD/ENRSP and REVAL/NEVAL again. Work for
+other nodes is preserved. Zero events completes without NERD or EV reads.
+The inline saving message remains until the node's queued refresh work ends.
+Success requires complete NV, event and EV discovery (or non-consumer event
+skips); timeouts, unknown EV capacity and disconnects report saved changes with
+refresh uncertainty. Confirmed replies remain available; sparse EV semantics
+are unchanged. Detailed stages and failure reasons remain in diagnostics.
+No full reread is started after a failed write or unchanged Save.
+During writes the
+working copy and node selection are locked; Cancel is available before Save.
 
 Each new numbered PNN starts a parameter pass. A confirmed parameter 6 can
 queue NV reads before that pass ends; the shared queue serialises the requests.
@@ -346,8 +399,9 @@ A node-state signal lets
 the UI refresh from the service when state changes; switching nodes reads values
 already confirmed by the service. Identity updates keep the current selection,
 and ending a connection clears that layout's live entries. The selected live
-node's Raw Node Variables table shows confirmed values read-only, with `-` for
-unread indices when parameter 6 provides the count.
+node's Raw Node Variables table shows confirmed values, with `-` for
+unread indices when parameter 6 provides the count. Edit becomes available after
+complete NV discovery while the connection is active.
 The node Events tab uses the same side-by-side widget for configured nodes and
 live nodes. For live nodes, it reads `NodeState` on selection and state-update
 signals. Consumed event rows use discovered identities and keep the internal

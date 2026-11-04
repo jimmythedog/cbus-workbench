@@ -71,7 +71,6 @@ class LiveNodeEventsTests(unittest.TestCase):
         self.states[258].event_identities[1] = (258, 10)
         self.view.refresh_state(258)
         self.assertEqual(tree.topLevelItem(0).text(0), "258:10")
-        self.assertEqual(tree.topLevelItem(0).child(0).text(1), "-")
 
         self.states[258].ev_values[1] = {1: 9}
         self.view.refresh_state(258)

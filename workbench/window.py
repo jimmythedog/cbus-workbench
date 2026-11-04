@@ -302,6 +302,9 @@ class MainWindow(QMainWindow):
             lambda node, layout=name: self.record_node_identity(layout, node)
         )
         node_view = self.layouts[name].node_view
+        node_view.details.cbus_service = service
+        service.nv_write.finished.connect(node_view.details.finish_nv_save)
+        service.nv_write.refresh_finished.connect(node_view.details.finish_nv_refresh)
         node_view.details.logical_layout = self.layout_settings[name]["logical_layout"]
         node_view.state_lookup = lambda node_number: service.node_states[node_number]
         service.node_state_updated.connect(node_view.refresh_state)
@@ -330,6 +333,9 @@ class MainWindow(QMainWindow):
         service.close()
         service.deleteLater()
         view = self.layouts[name]
+        view.node_view.details.connected = False
+        view.node_view.details.update_connection_details()
+        view.node_view.details.cbus_service = None
         view.node_view.clear_identities()
         logical_layout = self.layout_settings[name]["logical_layout"]
         view.node_view.details.logical_layout = logical_layout

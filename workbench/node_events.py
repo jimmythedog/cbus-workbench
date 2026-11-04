@@ -200,9 +200,11 @@ class NodeEvents(QSplitter):
             indices = range(1, ev_count + 1) if ev_count is not None else sorted(values)
             for ev_index in indices:
                 value = values.get(ev_index)
-                QTreeWidgetItem(
+                item = QTreeWidgetItem(
                     parent, [f"EV {ev_index}", "-" if value is None else str(value)]
                 )
+                item.setData(0, Qt.ItemDataRole.UserRole, value is not None)
+                item.setHidden(value is None)
             parent.setExpanded(index in expanded)
         self.set_editing(False)
 
@@ -220,6 +222,12 @@ class NodeEvents(QSplitter):
 
             for child_index in range(event.childCount()):
                 child = event.child(child_index)
+
+                # Show all supported EVs while editing.
+                # Otherwise, show only EVs with confirmed values.
+                confirmed = child.data(0, Qt.ItemDataRole.UserRole)
+                child.setHidden(not editing and not confirmed)
+
                 form = self.consumed_table.itemWidget(child, 1)
 
                 if form is not None:

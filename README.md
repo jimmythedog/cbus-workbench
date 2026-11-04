@@ -28,7 +28,18 @@ reflects discovery in the current connection, without ongoing liveness polling.
 After parameter 6 confirms an NV count, Workbench reads those NVs in the
 background through the same request queue. The selected live node's Raw Node
 Variables tab shows confirmed values as they arrive. Unread values show `-`;
-confirmed zero shows `0`. Live values are read-only.
+confirmed zero shows `0`. Once all NVs have been discovered, choose Edit to
+change values (0–255), then Save to write only changed NVs to the physical node.
+Each write waits for acknowledgement and matching readback before its confirmed
+value changes. Cancel discards edits without sending writes. Save stops at the
+first rejection, timeout or readback mismatch and reports how many NVs were
+verified; earlier verified writes remain applied. A failed Save may have changed
+hardware: reconnect to rediscover before retrying. Disconnect discards unsaved
+edits and reports any interrupted Save. Editing requires an active connection.
+After all changed NVs are verified, Workbench rereads every NV, then rediscovers
+stored events and their EV values to display firmware-generated changes.
+“Saving changes…” remains visible until refresh finishes. If refresh is incomplete,
+Workbench reports that changes were saved but some values could not be refreshed.
 The selected live node's Events tab shows known produced events alongside
 consumed events. Expand a consumed event to see its EV values. Discovered events
 and EVs update as replies arrive; an unconfirmed EV shows `-` and a confirmed

@@ -6,11 +6,13 @@ import unittest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QListWidgetItem
 
-from workbench.cbus_service import NodeState
+from workbench.cbus_service import CbusService, NodeState
 from workbench.node import Node
 from workbench.node_details import NodeDetails
 from workbench.node_details_form import NodeDetailsForm
+from workbench.node_view import NodeView
 from workbench.pnn import Pnn
+from workbench.tcp_connection import TcpConnection
 
 
 class NodeDetailsFormTests(unittest.TestCase):
@@ -40,6 +42,48 @@ class NodeDetailsFormTests(unittest.TestCase):
             with self.subTest(parameters=parameters):
                 self.details.show_parameters(parameters)
                 self.assertEqual(self.details.details_page.vlcb.text(), expected)
+
+    def test_stored_event_count_displays_unknown_zero_and_nonzero(self):
+        state = NodeState(Pnn(258, 13, 34, 0x03))
+        self.select(state.identity)
+        for count, expected in ((None, "-"), (0, "0"), (7, "7"), (None, "-")):
+            with self.subTest(count=count):
+                state.stored_event_count = count
+                self.details.show_live_state(state)
+                self.assertEqual(
+                    self.details.details_page.stored_events.text(), expected
+                )
+
+    def test_stored_event_count_refreshes_and_follows_selected_node(self):
+        view = NodeView({})
+        self.addCleanup(view.close)
+        connection = TcpConnection("test", view)
+        service = CbusService(connection, 100)
+        self.addCleanup(service.close)
+        first = NodeState(Pnn(258, 13, 34, 0x03), stored_event_count=7)
+        second = NodeState(Pnn(259, 13, 35, 0x03))
+        service.node_states = {258: first, 259: second}
+        view.state_lookup = service.node_states.__getitem__
+        service.node_state_updated.connect(view.refresh_state)
+        view.show_identity(first.identity)
+        view.show_identity(second.identity)
+        label = view.details.details_page.stored_events
+        self.assertEqual(label.text(), "7")
+        first.stored_event_count = 0
+        service.node_state_updated.emit(258)
+        self.assertEqual(label.text(), "0")
+        view.node_list.setCurrentRow(1)
+        self.assertEqual(label.text(), "-")
+        first.stored_event_count = 9
+        service.node_state_updated.emit(258)
+        self.assertEqual(label.text(), "-")
+        second.stored_event_count = 3
+        service.node_state_updated.emit(259)
+        self.assertEqual(label.text(), "3")
+        view.node_list.setCurrentRow(0)
+        self.assertEqual(label.text(), "9")
+        view.clear_identities()
+        self.assertEqual(label.text(), "-")
 
     def test_form_is_the_details_page_and_labels_remain_accessible(self):
         details = self.details
@@ -138,47 +182,13 @@ class NodeDetailsFormTests(unittest.TestCase):
             details.tabs.isTabEnabled(details.tabs.indexOf(details.variables_page))
         )
 
-    def test_configured_raw_values_remain_editable(self):
+    def test_configured_node_without_discovery_cannot_edit_nvs(self):
         node = Node(42, "Test module", 12, "1a", False, nv_values={1: 7})
         self.select(node)
-        details = self.details
-
-        details.start_editing()
-        self.assertNotEqual(
-            details.raw_values.editTriggers(),
-            details.raw_values.EditTrigger.NoEditTriggers,
-        )
-        details.raw_values.item(0, 1).setText("0")
-        details.save_editing()
-
-        self.assertEqual(node.nv_values, {1: 0})
-        self.assertEqual(details.raw_values.item(0, 1).text(), "0")
-
-    def test_live_configured_live_transition_restores_value_editability(self):
-        details = self.details
-        identity = Pnn(258, 13, 34, 0x03)
-        state = NodeState(identity, parameters={6: 1}, nv_values={1: 0})
-        configured = Node(42, "Test module", 12, "1a", False, nv_values={1: 7})
-
-        self.select(identity)
-        details.show_live_state(state)
-        table = details.raw_values
-        self.assertEqual(table.item(0, 1).text(), "0")
-        self.assertFalse(table.item(0, 1).flags() & Qt.ItemFlag.ItemIsEditable)
-        self.assertEqual(table.editTriggers(), table.EditTrigger.NoEditTriggers)
-
-        self.select(configured)
-        self.assertEqual(table.item(0, 1).text(), "7")
-        details.start_editing()
-        self.assertTrue(table.item(0, 1).flags() & Qt.ItemFlag.ItemIsEditable)
-        self.assertNotEqual(table.editTriggers(), table.EditTrigger.NoEditTriggers)
-        details.cancel_editing()
-
-        self.select(identity)
-        details.show_live_state(state)
-        self.assertEqual(table.item(0, 1).text(), "0")
-        self.assertFalse(table.item(0, 1).flags() & Qt.ItemFlag.ItemIsEditable)
-        self.assertEqual(table.editTriggers(), table.EditTrigger.NoEditTriggers)
+        self.assertFalse(self.details.edit_button.isEnabled())
+        self.details.start_editing()
+        self.assertIsNone(self.details.editing_values)
+        self.assertEqual(node.nv_values, {1: 7})
 
     def test_available_tabs_survive_configured_node_changes(self):
         details = self.details

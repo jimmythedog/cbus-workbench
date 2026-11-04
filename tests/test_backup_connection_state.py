@@ -157,13 +157,16 @@ class BackupConnectionTests(unittest.TestCase):
         self.view.node_view.refresh_state(42)
         assert_details("-", "Online")
         self.state.can_id = 7
+        self.state.stored_event_count = 4
         self.view.node_view.refresh_state(42)
         assert_details("7", "Online")
+        self.assertEqual(self.details.details_page.stored_events.text(), "4")
         self.view.set_connected(False)
         assert_details("7", "Offline")
         self.view.node_view.clear_identities()
         self.view.node_view.show_saved_nodes("yard")
         assert_details("-", "Offline")
+        self.assertEqual(self.details.details_page.stored_events.text(), "-")
 
     def test_selection_and_layout_changes(self):
         for connected in (False, True):

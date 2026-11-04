@@ -1,0 +1,189 @@
+"""One node's edited NVs, written sequentially and confirmed by readback.
+
+MERG Developer's Guide 6b, teaching/readback of NVs:
+https://www.merg.org.uk/merg_wiki/lib/exe/fetch.php?media=public%3Acbuspublic%3Adeveloper_6b.pdf
+"""
+
+import logging
+
+from PySide6.QtCore import QObject, QTimer, Signal
+
+from .logging_config import trace
+
+logger = logging.getLogger("workbench.cbus")
+WRITE_TIMEOUT_MS = 2000
+
+
+class NvWrite(QObject):
+    finished = Signal(int, bool, str)
+    refresh_finished = Signal(int, str)
+
+    def __init__(self, service):
+        super().__init__(service)
+        self.service = service
+        self.active = False
+        self.refreshing = False
+        self.stage = ""
+        self.node_number = 0
+        self.changes = []
+        self.verified = 0
+        # Late readbacks after failure must not silently confirm a failed write.
+        self.unverified: set[tuple[int, int]] = set()
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.timed_out)
+
+    def begin(self, node_number: int, changes: dict[int, int]) -> None:
+        self.node_number = node_number
+        self.changes = sorted(changes.items())
+        self.verified = 0
+        self.total = len(self.changes)
+        self.active = True
+        self.stage = "waiting for discovery reply"
+        self.log("NV Save accepted", changes=self.changes)
+        # The service finishes its current request before yielding the wire.
+        self.service._send_next_request()
+
+    def advance(self) -> None:
+        if self.stage != "waiting for discovery reply":
+            return
+        if not self.changes:
+            self.finish(True, "No changed NVs.")
+            return
+        index, value = self.changes[0]
+        self.unverified.add((self.node_number, index))
+        self.stage = "WRACK"
+        self.timer.start(WRITE_TIMEOUT_MS)
+        header = (0x580 | self.service.can_id) << 5
+        frame = (
+            f":S{header:04X}N96{self.node_number:04X}{index:02X}{value:02X};".encode()
+        )
+        self.log("Sending NVSET", nv_index=index, value=value)
+        try:
+            self.service.connection.send(frame)
+        except OSError:
+            logger.exception("NVSET send failed")
+            self.finish(False, f"NV {index}: could not transmit write.")
+
+    def acknowledge(self, node_number: int) -> None:
+        if not self.active or node_number != self.node_number or self.stage != "WRACK":
+            return
+        index, _value = self.changes[0]
+        self.log("WRACK received; verifying NV", nv_index=index)
+        self.stage = "NVANS"
+        self.timer.start(WRITE_TIMEOUT_MS)
+        try:
+            self.service.request_nv(node_number, index)
+        except OSError:
+            logger.exception("NV readback send failed")
+            self.finish(False, f"NV {index}: could not request verification.")
+
+    def receive_value(self, node_number: int, index: int, value: int) -> bool:
+        """Consume unverified write replies before normal discovery records them."""
+        if (node_number, index) not in self.unverified:
+            return False
+        if (
+            self.active
+            and node_number == self.node_number
+            and self.stage == "NVANS"
+            and index == self.changes[0][0]
+        ):
+            expected = self.changes[0][1]
+            self.log(
+                "NV readback received", nv_index=index, value=value, expected=expected
+            )
+            if value != expected:
+                self.finish(
+                    False, f"NV {index}: readback was {value}, expected {expected}."
+                )
+            else:
+                self.timer.stop()
+                self.unverified.remove((node_number, index))
+                self.service.record_nv(node_number, index, value)
+                self.verified += 1
+                self.changes.pop(0)
+                if self.changes:
+                    self.stage = "waiting for discovery reply"
+                    self.advance()
+                else:
+                    # Firmware may change other NVs as a side effect of NVSET.
+                    # Reuse discovery so every confirmed reply updates both views.
+                    self.refreshing = True
+                    self.service._start_nv_discovery(
+                        node_number, self.service.node_states[node_number].parameters[6]
+                    )
+                    self.finish(
+                        True,
+                        "Saving changes…",
+                    )
+        else:
+            self.log("Ignoring unverified NV reply", nv_index=index, value=value)
+        return True
+
+    def reject(self, node_number: int, code: int) -> bool:
+        if (
+            not self.active
+            or node_number != self.node_number
+            or self.stage not in ("WRACK", "NVANS")
+        ):
+            return False
+        index = self.changes[0][0]
+        self.finish(
+            False, f"NV {index}: node rejected {self.stage} with CMDERR {code}."
+        )
+        return True
+
+    def timed_out(self) -> None:
+        index = self.changes[0][0]
+        self.finish(False, f"NV {index}: timed out waiting for {self.stage}.")
+
+    def disconnect(self) -> None:
+        if self.refreshing:
+            self.finish_refresh(False, "Connection ended.")
+        if self.active:
+            self.finish(False, "Connection ended during NV Save.", resume=False)
+
+    def finish_refresh(self, success: bool, reason: str = "") -> None:
+        self.refreshing = False
+        message = (
+            "Changes saved successfully."
+            if success
+            else "Changes saved, but some values could not be refreshed."
+        )
+        self.log("Post-Save discovery finished", success=success, reason=reason)
+        self.refresh_finished.emit(self.node_number, message)
+
+    def finish(self, success: bool, message: str, *, resume: bool = True) -> None:
+        self.timer.stop()
+        self.active = False
+        self.log(
+            "NV Save writes finished",
+            success=success,
+            result=message,
+            verified=self.verified,
+            total=self.total,
+        )
+        if not success:
+            if self.verified:
+                message = f"{self.verified} of {self.total} changes saved. {message}"
+            else:
+                index = self.changes[0][0]
+                reason = message.removeprefix(f"NV {index}: ")
+                message = f"NV {index} could not be saved. {reason}"
+        self.finished.emit(self.node_number, success, message)
+        if resume:
+            self.service._send_next_request()
+
+    def log(self, message: str, **fields) -> None:
+        trace(
+            logger,
+            message,
+            extra={
+                "fields": {
+                    "layout": self.service.connection.layout_name,
+                    "node_number": self.node_number,
+                    "stage": self.stage,
+                    **fields,
+                }
+            },
+        )

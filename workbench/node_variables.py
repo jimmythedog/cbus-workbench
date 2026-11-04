@@ -32,7 +32,7 @@ class RawNodeVariables(QTableWidget):
         self.descriptions = (
             descriptions if descriptions is not None else node.nv_descriptions
         )
-        self.setRowCount(len(node.nv_values))
+        self.setRowCount(len(self.values))
 
         # setItem() emits itemChanged; rows must be complete before update_value runs.
         self.blockSignals(True)
