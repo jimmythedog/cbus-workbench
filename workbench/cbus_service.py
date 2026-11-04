@@ -7,6 +7,7 @@ from enum import Enum
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
+from . import response_timeout
 from .cmderr import decode_cmderr
 from .enrsp import decode_enrsp
 from .ev_write import EvWrite
@@ -23,7 +24,6 @@ from .tcp_connection import TcpConnection
 from .wrack import decode_wrack
 
 logger = logging.getLogger("workbench.cbus")
-AUTOMATIC_REQUEST_TIMEOUT_MS = 2000
 AUTOMATIC_PARAMETER_INDICES = (2, 4, 5, 6, 7, 8, 10, 20, 19, 9)
 RequestIndex = int | tuple[int, int]
 
@@ -56,6 +56,7 @@ class NodeState:
 
 
 class CbusService(QObject):
+    node_refresh_finished = Signal(int)
     discovery_status_changed = Signal(str)
     node_discovered = Signal(Pnn)
     node_updated = Signal(Pnn)
@@ -94,6 +95,11 @@ class CbusService(QObject):
         self.node_state_updated.connect(lambda _node: self._status_update.start(0))
         self.nv_write = NvWrite(self)
         self.ev_write = EvWrite(self)
+        self.refreshing_node = None
+        # Import after the service types are defined; serializers also use them.
+        from .node_restore import NodeRestore
+
+        self.restore = NodeRestore(self)
         connection.frame_received.connect(self._receive_frame)
 
     def close(self) -> None:
@@ -103,6 +109,7 @@ class CbusService(QObject):
         self._status_update.stop()
         self._set_discovery_status("Disconnected")
         self.connection.frame_received.disconnect(self._receive_frame)
+        self.restore.disconnect()
         self.nv_write.disconnect()
         self.ev_write.disconnect()
         self._request_timer.stop()
@@ -140,6 +147,7 @@ class CbusService(QObject):
             self._discovery_window.isActive()
             or self._outstanding_request is not None
             or self._request_queue
+            or self.restore.active
             or self.nv_write.active
             or self.nv_write.refreshing
             or self.ev_write.active
@@ -168,7 +176,7 @@ class CbusService(QObject):
     def discover_nodes(self) -> None:
         """Queue one QNN request; PNN responses arrive independently by signal."""
         self._set_discovery_status("Discovering configuration…")
-        self._discovery_window.start(AUTOMATIC_REQUEST_TIMEOUT_MS)
+        self._discovery_window.start(response_timeout.RESPONSE_TIMEOUT_MS)
         # The guide specifies major priority bits 0b10 and minor priority
         # bits 0b11 for a starting query. GridConnect left-justifies CAN bits.
         header = (0x580 | self.can_id) << 5
@@ -209,14 +217,95 @@ class CbusService(QObject):
             raise
         trace(logger, "RQNPN queued", extra={"fields": fields})
 
-    def write_nvs(self, node_number: int, values: dict[int, int]) -> None:
-        """Save an editor working copy; confirmed values change only on readback.
+    def writes_busy(self) -> bool:
+        return bool(
+            self.restore.active
+            or self.nv_write.active
+            or self.nv_write.refreshing
+            or self.ev_write.active
+            or self.ev_write.refreshing
+        )
+
+    def discovery_pending(self) -> bool:
+        return bool(
+            self._outstanding_request
+            or self._request_queue
+            or self.refreshing_node is not None
+        )
+
+    def rediscover_node(self, node_number: int) -> None:
+        """Read the entire selected node afresh, retaining its confirmed identity."""
+        if self._closed or self.connection.state != "Connected":
+            raise ValueError("Rediscovery requires an active connection")
+        if self.nv_write.active or self.ev_write.active:
+            raise ValueError("Wait for hardware writes and learn-mode cleanup")
+        state = self.node_states[node_number]
+        self._request_queue = deque(
+            r for r in self._request_queue if r[1] != node_number
+        )
+        state.parameters.clear()
+        state.nv_values.clear()
+        state.event_identities.clear()
+        state.ev_values.clear()
+        state.stored_event_count = None
+        state.parameter_progress = state.nv_progress = DiscoveryProgress.NOT_STARTED
+        state.event_progress = state.ev_progress = DiscoveryProgress.NOT_STARTED
+        self._nv_started.pop(node_number, None)
+        self._ev_started.discard(node_number)
+        self.refreshing_node = node_number
+        self._request_queue.append(("parameter", node_number, 0))
+        trace(
+            logger,
+            "Full node rediscovery queued",
+            extra={
+                "fields": {
+                    "layout": self.connection.layout_name,
+                    "node_number": node_number,
+                }
+            },
+        )
+        self.node_state_updated.emit(node_number)
+        self._send_next_request()
+
+    def write_nvs(
+        self,
+        node_number: int,
+        values: dict[int, int],
+        *,
+        owner=None,
+    ) -> None:
+        """Write one NV transaction; editor Saves enter through save_nvs().
 
         Validation rejects the whole Save before transmitting any write. A failed
         write requires rediscovery because its physical result may be unknown.
+        The owner argument reserves writes across the whole restore sequence.
         """
+        changes = self._nv_changes(node_number, values, owner=owner)
+        # The coordinator submits one changed index at a time for Save/Restore;
+        # reread higher NVs before its next comparison. Direct writes refresh all.
+        self.nv_write.begin(
+            node_number,
+            changes,
+            refresh_from=(
+                next(iter(changes)) + 1 if owner is self.restore and changes else 1
+            ),
+            refresh_events=owner is not self.restore,
+        )
+
+    def save_nvs(self, node_number: int, values: dict[int, int]) -> None:
+        """Apply the full editor working copy with Restore's bounded NV pass."""
+        self._nv_changes(node_number, values)
+        count = self.node_states[node_number].parameters[6]
+        if set(values) != set(range(1, count + 1)):
+            raise ValueError("NV Save requires the complete desired NV working copy")
+        self.restore.begin_nv_save(node_number, values)
+
+    def _nv_changes(self, node_number, values, *, owner=None) -> dict[int, int]:
+        """Validate before any transmission; compare only for a writer transaction."""
+        if self.restore.active and owner is not self.restore:
+            raise ValueError("Node restoration is in progress")
         state = self.node_states.get(node_number)
-        if self.connection.state != "Connected" or state is None:
+        if self._closed or self.connection.state != "Connected" or state is None:
             raise ValueError("NV editing requires a discovered, connected node")
         count = state.parameters.get(6)
         if state.nv_progress != DiscoveryProgress.COMPLETE or count is None:
@@ -241,15 +330,24 @@ class CbusService(QObject):
                 raise ValueError("NV value must be between 0 and 255")
             if index not in state.nv_values:
                 raise ValueError(f"NV {index} has no confirmed original value")
-        changes = {
-            i: value for i, value in values.items() if state.nv_values[i] != value
-        }
-        self.nv_write.begin(node_number, changes)
+        return {i: value for i, value in values.items() if state.nv_values[i] != value}
 
     def write_evs(
-        self, node_number: int, values: dict[tuple[int, int, int], int]
+        self,
+        node_number: int,
+        values: dict[tuple[int, int, int], int],
+        *,
+        owner=None,
+        unlearn: tuple[int, int] | None = None,
     ) -> None:
-        """Write explicit (event NN, event number, EV index) changes only."""
+        """Verify EVs by identity; restore may teach missing or unlearn an event.
+
+        Ordinary editor Saves require existing identities and send changed EVs.
+        Restore owns the connection and replays every numeric EV after unlearn,
+        even values that matched before the event was removed.
+        """
+        if self.restore.active and owner is not self.restore:
+            raise ValueError("Node restoration is in progress")
         state = self.node_states.get(node_number)
         if self.connection.state != "Connected" or state is None:
             raise ValueError("EV Save requires a discovered, connected node")
@@ -268,12 +366,19 @@ class CbusService(QObject):
             or not state.identity.is_consumer
             or state.can_id is None
             or state.event_progress != DiscoveryProgress.COMPLETE
-            or not state.parameters.get(5)
+            or (values and not state.parameters.get(5))
         ):
             raise ValueError(
                 "EV Save needs confirmed event identities, EV capacity and CAN ID on a FLiM consumer"
             )
         identities = {event: slot for slot, event in state.event_identities.items()}
+        replacing = (
+            owner is self.restore and self.restore.active and not self.restore.nv_only
+        )
+        if unlearn is not None and (not replacing or unlearn not in identities):
+            raise ValueError(
+                "Event unlearn requires restore ownership and a discovered event identity"
+            )
         changes = {}
         for key, value in values.items():
             if (
@@ -286,16 +391,20 @@ class CbusService(QObject):
             if (
                 not 0 <= event_node <= 65535
                 or not 0 <= event_number <= 65535
-                or key[:2] not in identities
+                or (key[:2] not in identities and not replacing)
                 or not 1 <= ev <= state.parameters[5]
             ):
                 raise ValueError("EV address is not confirmed by live discovery")
             if type(value) is not int or not 0 <= value <= 255:
                 raise ValueError("EV value must be between 0 and 255")
-            slot = identities[key[:2]]
-            if state.ev_values.get(slot, {}).get(ev) != value:
+            slot = identities.get(key[:2])
+            if (
+                key[:2] == unlearn
+                or slot is None
+                or state.ev_values.get(slot, {}).get(ev) != value
+            ):
                 changes[key] = value
-        self.ev_write.begin(node_number, changes)
+        self.ev_write.begin(node_number, changes, unlearn=unlearn)
 
     def request_nv(self, node_number: int, index: int) -> None:
         """Send NVRD for one numbered node variable (Developer's Guide 6b)."""
@@ -443,6 +552,7 @@ class CbusService(QObject):
         if (
             kind == "nv"
             and self.nv_write.refreshing
+            and self.nv_write.refresh_events
             and node_number == self.nv_write.node_number
             and progress == DiscoveryProgress.COMPLETE
         ):
@@ -575,7 +685,7 @@ class CbusService(QObject):
             },
         )
         if is_new:
-            self._discovery_window.start(AUTOMATIC_REQUEST_TIMEOUT_MS)
+            self._discovery_window.start(response_timeout.RESPONSE_TIMEOUT_MS)
             self._set_discovery_status("Discovering configuration…")
             self.node_discovered.emit(pnn)
             self.node_state_updated.emit(pnn.node_number)
@@ -670,16 +780,19 @@ class CbusService(QObject):
             )
         self._finish_request("parameter", node_number)
 
-    def _start_nv_discovery(self, node_number: int, count: int) -> None:
+    def _start_nv_discovery(
+        self, node_number: int, count: int, *, first: int = 1
+    ) -> None:
         self._nv_started[node_number] = count
-        if count == 0:
+        if self.nv_write.refreshing and self.nv_write.node_number == node_number:
+            # Even an empty range has a new completion transition. This also
+            # starts event refresh for a node with no NVs during final checking.
+            self._set_progress("nv", node_number, DiscoveryProgress.IN_PROGRESS)
+        if first > count:
             self._set_progress("nv", node_number, DiscoveryProgress.COMPLETE)
             return
-        if self.nv_write.refreshing and self.nv_write.node_number == node_number:
-            # Disable editing even while this refresh waits behind other nodes.
-            self._set_progress("nv", node_number, DiscoveryProgress.IN_PROGRESS)
         self._request_queue.extend(
-            ("nv", node_number, index) for index in range(1, count + 1)
+            ("nv", node_number, index) for index in range(first, count + 1)
         )
         trace(
             logger,
@@ -689,6 +802,7 @@ class CbusService(QObject):
                     "layout": self.connection.layout_name,
                     "node_number": node_number,
                     "count": count,
+                    "first_index": first,
                 }
             },
         )
@@ -792,7 +906,7 @@ class CbusService(QObject):
             self._finish_request("event", node_number)
         else:
             # NERD has no final response; each new index extends the wait for more.
-            self._request_timer.start(AUTOMATIC_REQUEST_TIMEOUT_MS)
+            self._request_timer.start(response_timeout.RESPONSE_TIMEOUT_MS)
 
     def _start_ev_discovery(self, node_number: int) -> None:
         if node_number in self._ev_started:
@@ -945,6 +1059,9 @@ class CbusService(QObject):
             self.ev_write.advance()
             return
         self._finish_ev_refresh_if_idle()
+        # Removal verification may resume the same writer for reconstruction.
+        if self.ev_write.active:
+            return
         self._finish_nv_refresh_if_idle()
         while self._request_queue:
             kind, node_number, index = self._request_queue.popleft()
@@ -985,12 +1102,16 @@ class CbusService(QObject):
                 continue
             self._outstanding_request = (kind, node_number, index)
             self._set_progress(kind, node_number, DiscoveryProgress.IN_PROGRESS)
-            self._request_timer.start(AUTOMATIC_REQUEST_TIMEOUT_MS)
+            self._request_timer.start(response_timeout.RESPONSE_TIMEOUT_MS)
             trace(logger, "Awaiting automatic reply", extra={"fields": fields})
             return
 
         self._finish_ev_refresh_if_idle()
         self._finish_nv_refresh_if_idle()
+        if self.refreshing_node is not None:
+            number = self.refreshing_node
+            self.refreshing_node = None
+            self.node_refresh_finished.emit(number)
 
     def _finish_ev_refresh_if_idle(self) -> None:
         writer = self.ev_write
@@ -1019,8 +1140,13 @@ class CbusService(QObject):
             complete = (DiscoveryProgress.COMPLETE, DiscoveryProgress.SKIPPED)
             self.nv_write.finish_refresh(
                 state.nv_progress == DiscoveryProgress.COMPLETE
-                and state.event_progress in complete
-                and state.ev_progress in complete
+                and (
+                    not self.nv_write.refresh_events
+                    or (
+                        state.event_progress in complete
+                        and state.ev_progress in complete
+                    )
+                )
             )
 
     def _request_timed_out(self) -> None:

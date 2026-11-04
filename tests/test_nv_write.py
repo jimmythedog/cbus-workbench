@@ -91,7 +91,7 @@ class NvWriteTests(unittest.TestCase):
         self.service.nv_write.refresh_finished.connect(
             lambda *args: refresh_results.append(args)
         )
-        with patch("workbench.cbus_service.AUTOMATIC_REQUEST_TIMEOUT_MS", 10):
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):
             self.service.write_nvs(258, {1: 9})
             self.reply("590102")
             self.reply("9701020109")
@@ -135,8 +135,11 @@ class NvWriteTests(unittest.TestCase):
         details.start_editing()
         details.raw_values.item(0, 1).setText("9")
         details.save_editing()
+        self.app.processEvents()
         self.reply("590102")
         self.reply("9701020109")
+        self.reply("9701020208")  # Higher NV reread before the next comparison.
+        QTest.qWait(1)
         self.reply("9701020109")
         self.reply("9701020208")
         self.assertEqual(details.nv_result.text(), "Saving changes…")
@@ -151,6 +154,7 @@ class NvWriteTests(unittest.TestCase):
         for slot in range(1, 4):
             self.assertEqual(details.nv_result.text(), "Saving changes…")
             self.reply(f"B50102{slot:02X}01{slot + 10:02X}")
+        QTest.qWait(1)
         self.assertEqual(
             self.state.event_identities, {1: (258, 1), 2: (0, 1000), 3: (259, 77)}
         )
@@ -197,7 +201,7 @@ class NvWriteTests(unittest.TestCase):
                 def reply(payload, connection=connection):
                     connection.frame_received.emit(f":SB040N{payload};".encode())
 
-                with patch("workbench.cbus_service.AUTOMATIC_REQUEST_TIMEOUT_MS", 10):
+                with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):
                     service.write_nvs(258, {1: 9})
                     reply("590102")
                     reply("9701020109")
@@ -252,7 +256,7 @@ class NvWriteTests(unittest.TestCase):
         for acknowledge in (False, True):
             with (
                 self.subTest(acknowledge=acknowledge),
-                patch("workbench.nv_write.WRITE_TIMEOUT_MS", 10),
+                patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10),
             ):
                 self.service.write_nvs(258, {1: 9})
                 if acknowledge:
@@ -338,7 +342,7 @@ class NvWriteTests(unittest.TestCase):
         self.assertIn("discarded", details.nv_result.text())
         self.assertEqual(self.connection.sent, [])
 
-    def test_raw_and_mdf_share_working_copy_cancel_and_confirmed_result(self):
+    def test_raw_and_mdf_show_firmware_side_effect_and_save_failure(self):
         details = NodeDetails({})
         self.addCleanup(details.close)
         details.connected = True
@@ -363,18 +367,51 @@ class NvWriteTests(unittest.TestCase):
         details.save_editing()
         self.assertFalse(details.cancel_button.isEnabled())
         self.assertEqual(self.state.nv_values[2], 8)
+        self.app.processEvents()
         self.reply("590102")
         self.reply("9701020109")
         self.assertEqual(details.raw_values.item(0, 1).text(), "9")
         self.assertEqual(details.mdf_values.global_settings.startup_delay.value(), 8)
         self.assertIn("Saving changes…", details.nv_result.text())
+        self.reply("9701020208")  # Higher NV initially still matches the desired 8.
+        QTest.qWait(1)
         self.reply("9701020109")
-        self.reply("9701020280")  # Firmware changed an NV after verification.
+        self.reply("9701020280")  # Firmware changes NV2 after the ascending pass.
+        refresh_start = len(self.connection.sent)
+        QTest.qWait(1)
+        self.assertFalse(self.results)  # Failure rediscovery must finish first.
+
+        # Answer the failure refresh with the actual hardware configuration.
+        parameters = {0: 8, 2: 97, 4: 0, 5: 0, 6: 2, 7: 1, 8: 4}
+        position = refresh_start
+        for _ in range(30):
+            self.app.processEvents()
+            if self.results:
+                break
+            self.assertLess(position, len(self.connection.sent))
+            frame = self.connection.sent[position]
+            position += 1
+            data = bytes.fromhex(frame.decode().split("N")[1][:-1])
+            if data[0] == 0x73:
+                self.reply(f"9B0102{data[3]:02X}{parameters[data[3]]:02X}")
+            elif data[0] == 0x71:
+                value = {1: 9, 2: 128}[data[3]]
+                self.reply(f"970102{data[3]:02X}{value:02X}")
+            else:
+                self.fail(
+                    f"Unexpected write or request during failure refresh: {frame}"
+                )
+        QTest.qWait(1)
         self.assertEqual(self.state.nv_values[2], 128)
         self.assertEqual(details.raw_values.item(1, 1).text(), "128")
         self.assertEqual(details.mdf_values.global_settings.startup_delay.value(), 128)
+        self.assertEqual(len(self.results), 1)
+        self.assertFalse(self.results[0][1])
+        self.assertIn("NV verification", details.nv_result.text())
+        self.assertNotIn("successfully", details.nv_result.text())
         self.assertEqual(
-            details.nv_result.text(), "Node 258: Changes saved successfully."
+            [frame for frame in self.connection.sent if b"N96" in frame],
+            [b":SBFC0N9601020109;"],
         )
 
 

@@ -8,21 +8,26 @@ import logging
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
+from . import response_timeout
 from .logging_config import trace
 
 logger = logging.getLogger("workbench.cbus")
-WRITE_TIMEOUT_MS = 2000
 
 
 class NvWrite(QObject):
     finished = Signal(int, bool, str)
     refresh_finished = Signal(int, str)
+    # Writer transactions can be steps within one coordinated editor Save.
+    write_finished = Signal(int, bool, str)
+    discovery_finished = Signal(int, str)
 
     def __init__(self, service):
         super().__init__(service)
         self.service = service
         self.active = False
+        self.coordinated_save = False
         self.refreshing = False
+        self.refresh_events = True
         self.stage = ""
         self.node_number = 0
         self.changes = []
@@ -33,7 +38,19 @@ class NvWrite(QObject):
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self.timed_out)
 
-    def begin(self, node_number: int, changes: dict[int, int]) -> None:
+    def begin(
+        self,
+        node_number: int,
+        changes: dict[int, int],
+        *,
+        refresh_from: int = 1,
+        refresh_events: bool = True,
+    ) -> None:
+        self.coordinated_save = (
+            self.service.restore.active and self.service.restore.nv_only
+        )
+        self.refresh_from = refresh_from
+        self.refresh_events = refresh_events
         self.node_number = node_number
         self.changes = sorted(changes.items())
         self.verified = 0
@@ -53,7 +70,7 @@ class NvWrite(QObject):
         index, value = self.changes[0]
         self.unverified.add((self.node_number, index))
         self.stage = "WRACK"
-        self.timer.start(WRITE_TIMEOUT_MS)
+        self.timer.start(response_timeout.RESPONSE_TIMEOUT_MS)
         header = (0x580 | self.service.can_id) << 5
         frame = (
             f":S{header:04X}N96{self.node_number:04X}{index:02X}{value:02X};".encode()
@@ -71,7 +88,7 @@ class NvWrite(QObject):
         index, _value = self.changes[0]
         self.log("WRACK received; verifying NV", nv_index=index)
         self.stage = "NVANS"
-        self.timer.start(WRITE_TIMEOUT_MS)
+        self.timer.start(response_timeout.RESPONSE_TIMEOUT_MS)
         try:
             self.service.request_nv(node_number, index)
         except OSError:
@@ -80,6 +97,14 @@ class NvWrite(QObject):
 
     def receive_value(self, node_number: int, index: int, value: int) -> bool:
         """Consume unverified write replies before normal discovery records them."""
+        # Restore's failure refresh may confirm physical state, but must retain
+        # the failed-write marker so ordinary Saves still require reconnecting.
+        if (
+            not self.active
+            and self.service.refreshing_node == node_number
+            and self.service._outstanding_request == ("nv", node_number, index)
+        ):
+            return False
         if (node_number, index) not in self.unverified:
             return False
         if (
@@ -106,16 +131,15 @@ class NvWrite(QObject):
                     self.stage = "waiting for discovery reply"
                     self.advance()
                 else:
-                    # Firmware may change other NVs as a side effect of NVSET.
-                    # Reuse discovery so every confirmed reply updates both views.
+                    # Restore rereads higher NVs before its next comparison;
+                    # ordinary Save rereads all NVs and events.
                     self.refreshing = True
                     self.service._start_nv_discovery(
-                        node_number, self.service.node_states[node_number].parameters[6]
+                        self.node_number,
+                        self.service.node_states[self.node_number].parameters[6],
+                        first=self.refresh_from,
                     )
-                    self.finish(
-                        True,
-                        "Saving changes…",
-                    )
+                    self.finish(True, "Saving changes…")
         else:
             self.log("Ignoring unverified NV reply", nv_index=index, value=value)
         return True
@@ -151,7 +175,11 @@ class NvWrite(QObject):
             else "Changes saved, but some values could not be refreshed."
         )
         self.log("Post-Save discovery finished", success=success, reason=reason)
-        self.refresh_finished.emit(self.node_number, message)
+        self.discovery_finished.emit(self.node_number, message)
+        # A coordinated Save has one public completion, after desired values
+        # have been checked. Intermediate rereads must not finish the editor.
+        if not self.coordinated_save:
+            self.refresh_finished.emit(self.node_number, message)
 
     def finish(self, success: bool, message: str, *, resume: bool = True) -> None:
         self.timer.stop()
@@ -170,7 +198,9 @@ class NvWrite(QObject):
                 index = self.changes[0][0]
                 reason = message.removeprefix(f"NV {index}: ")
                 message = f"NV {index} could not be saved. {reason}"
-        self.finished.emit(self.node_number, success, message)
+        self.write_finished.emit(self.node_number, success, message)
+        if not self.coordinated_save:
+            self.finished.emit(self.node_number, success, message)
         if resume:
             self.service._send_next_request()
 

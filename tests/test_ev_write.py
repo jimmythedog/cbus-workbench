@@ -9,6 +9,8 @@ from PySide6.QtWidgets import QApplication, QLineEdit, QListWidgetItem
 from test_nv_write import Connection
 
 from workbench.cbus_service import CbusService, DiscoveryProgress, NodeState
+from workbench.node_backup_diff import compare_live_node
+from workbench.node_backup_files import node_backup
 from workbench.node_details import NodeDetails
 from workbench.pnn import Pnn
 
@@ -52,6 +54,54 @@ class EvWriteTests(unittest.TestCase):
             self.connection.sent[-1], f":SBFC0NB2000003E8{ev:02X};".encode()
         )
         self.reply(f"D3000003E8{ev:02X}{value:02X}")
+
+    def test_short_event_readback_with_consumer_node_number(self):
+        self.enter()
+        self.assertEqual(self.connection.sent[-1], b":SBFC0ND2000003E8020D;")
+        self.reply("590102")
+        self.assertEqual(self.connection.sent[-1], b":SBFC0NB2000003E802;")
+        self.reply("D3010203E8020D")
+        self.assertEqual(self.state.ev_values[4][2], 13)
+        self.assertEqual(self.state.event_identities, {4: (0, 1000)})
+        self.exit()
+        self.reply("74010201")
+        self.reply("F20102000003E807")
+        for ev, value in enumerate((0, 13, 0), 1):
+            self.reply(f"B5010207{ev:02X}{value:02X}")
+        self.assertTrue(self.results[-1][1])
+
+    def test_short_event_ignores_unrelated_readbacks_and_compare_is_inconclusive(self):
+        self.state.parameter_progress = DiscoveryProgress.COMPLETE
+        self.state.ev_progress = DiscoveryProgress.COMPLETE
+        self.state.stored_event_count = 1
+        backup = node_backup(self.state)
+        self.assertTrue(backup["complete"])
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):
+            self.enter()
+            self.reply("590102")
+            for payload, header in (
+                ("D3010203E8020D", "B060"),  # Different source CAN ID.
+                ("D3010303E8020D", "B040"),  # Unrelated node number.
+                ("D3010203E9020D", "B040"),  # Different event number.
+                ("D3010203E8010D", "B040"),  # Different EV index.
+            ):
+                self.reply(payload, header)
+            self.assertNotIn(2, self.state.ev_values[4])
+            QTest.qWait(20)
+            self.exit()
+        self.assertFalse(self.results[-1][1])
+        self.assertIn("EV readback", self.results[-1][2])
+        self.assertEqual(compare_live_node(self.state, backup), ([], True))
+        self.assertFalse(node_backup(self.state)["complete"])
+
+    def test_long_event_does_not_accept_consumer_node_number(self):
+        self.state.event_identities[4] = (300, 1000)
+        self.enter({(300, 1000, 2): 13})
+        self.reply("590102")
+        self.reply("D3010203E8020D")
+        self.assertNotIn(2, self.state.ev_values[4])
+        self.reply("D3012C03E8020D")
+        self.assertEqual(self.state.ev_values[4][2], 13)
 
     def exit(self):
         self.assertEqual(
@@ -186,13 +236,13 @@ class EvWriteTests(unittest.TestCase):
         self.enter({(0, 1000, 1): 0, (0, 1000, 2): 13})
         self.assertEqual(self.connection.sent[-1], b":SBFC0ND2000003E8020D;")
         self.reply("D3000003E8020D")  # Before WRACK: cannot confirm a write.
-        self.assertEqual(self.state.ev_values[4][2], 12)
+        self.assertNotIn(2, self.state.ev_values[4])
         self.reply("59010200")  # Malformed WRACK.
         self.reply("590102")
         self.reply("D3000003E8020D", "B041")  # Invalid GridConnect SID.
         self.reply("D3000003E8020D", "B060")  # Wrong sender.
         self.reply("D3000003E9020D")  # Wrong identity.
-        self.assertEqual(self.state.ev_values[4][2], 12)
+        self.assertNotIn(2, self.state.ev_values[4])
         self.reply("D3000003E8020D")
         self.assertEqual(self.state.ev_values[4][2], 13)
         self.assertFalse(self.results)
@@ -217,9 +267,9 @@ class EvWriteTests(unittest.TestCase):
                 self.exit()
                 self.assertFalse(self.results[-1][1])
                 self.assertIn(explanation, self.results[-1][2])
-                self.assertEqual(self.state.ev_values[4][2], 12)
+                self.assertNotIn(2, self.state.ev_values[4])
                 self.reply("D3000003E8020D")
-                self.assertEqual(self.state.ev_values[4][2], 12)
+                self.assertNotIn(2, self.state.ev_values[4])
                 with self.assertRaisesRegex(ValueError, "Reconnect"):
                     self.service.write_evs(258, {(0, 1000, 2): 13})
                 self.service.close()
@@ -237,7 +287,7 @@ class EvWriteTests(unittest.TestCase):
         self.exit()
         self.assertIn("Another node acknowledged", self.results[-1][2])
         self.assertIn("exit is unconfirmed", self.results[-1][2])
-        self.assertEqual(self.state.ev_values[4][2], 12)
+        self.assertNotIn(2, self.state.ev_values[4])
 
     def test_write_transmission_error_attempts_exit(self):
         send = self.connection.send
@@ -251,7 +301,7 @@ class EvWriteTests(unittest.TestCase):
         self.enter()
         self.exit()
         self.assertIn("Could not transmit", self.results[-1][2])
-        self.assertEqual(self.state.ev_values[4][2], 12)
+        self.assertNotIn(2, self.state.ev_values[4])
 
     def test_exit_transmission_failure_warns_after_verified_write(self):
         self.enter()
@@ -269,7 +319,7 @@ class EvWriteTests(unittest.TestCase):
         self.assertIn("exit is unconfirmed", self.results[-1][2])
 
     def test_timeouts_and_unconfirmed_exit_are_bounded(self):
-        with patch("workbench.ev_write.WRITE_TIMEOUT_MS", 10):
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):
             self.enter()
             QTest.qWait(20)
             self.assertIn(b":SBFC0N540102;", self.connection.sent)
@@ -277,12 +327,12 @@ class EvWriteTests(unittest.TestCase):
         self.assertFalse(self.results[-1][1])
         self.assertIn("Timed out", self.results[-1][2])
         self.assertIn("exit is unconfirmed", self.results[-1][2])
-        self.assertEqual(self.state.ev_values[4][2], 12)
+        self.assertNotIn(2, self.state.ev_values[4])
 
     def test_partial_failure_and_interrupt_attempt_exit(self):
         self.enter({(0, 1000, 1): 1, (0, 1000, 2): 13})
         self.verify(1, 1)
-        self.assertEqual(self.state.ev_values[4], {1: 1, 2: 12, 3: None})
+        self.assertEqual(self.state.ev_values[4], {1: 1, 3: None})
         self.service.ev_write.interrupt()
         self.exit()
         self.assertFalse(self.results[-1][1])
@@ -294,14 +344,14 @@ class EvWriteTests(unittest.TestCase):
         self.verify(1, 1)
         self.reply("6F01020B")
         self.exit()
-        self.assertEqual(self.state.ev_values[4], {1: 1, 2: 12, 3: None})
+        self.assertEqual(self.state.ev_values[4], {1: 1, 3: None})
         self.assertIn("1 of 3 changes verified", self.results[-1][2])
         self.assertFalse(
             any(b"ND2000003E80309" in frame for frame in self.connection.sent)
         )
 
     def test_readback_timeout_and_still_learning_exit_are_failures(self):
-        with patch("workbench.ev_write.WRITE_TIMEOUT_MS", 10):
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):
             self.enter()
             self.reply("590102")
             QTest.qWait(20)
@@ -309,7 +359,7 @@ class EvWriteTests(unittest.TestCase):
             self.reply("9B01020825")
         self.assertIn("EV readback", self.results[-1][2])
         self.assertIn("still reports learn mode", self.results[-1][2])
-        self.assertEqual(self.state.ev_values[4][2], 12)
+        self.assertNotIn(2, self.state.ev_values[4])
 
     def test_disconnect_and_send_failure_report_uncertain_exit(self):
         self.enter()
@@ -334,7 +384,7 @@ class EvWriteTests(unittest.TestCase):
         details.save_events_editing()
         self.reply("9B01020805")  # Legacy flags do not report learn mode.
         self.assertEqual(self.connection.sent[-1], b":SBFC0ND2000003E8020D;")
-        self.assertEqual(self.state.ev_values[4][2], 12)
+        self.assertNotIn(2, self.state.ev_values[4])
         self.verify()
         self.assertEqual(
             self.connection.sent[-2:], [b":SBFC0N540102;", b":SBFC0N580102;"]
@@ -363,10 +413,10 @@ class EvWriteTests(unittest.TestCase):
         self.assertFalse(self.results[-1][1])
         self.assertIn("rejected", self.results[-1][2])
         self.assertIn("exit cannot be confirmed", self.results[-1][2])
-        self.assertEqual(self.state.ev_values[4][2], 12)
+        self.assertNotIn(2, self.state.ev_values[4])
 
     def test_legacy_readback_timeout_still_sends_exit(self):
-        with patch("workbench.ev_write.WRITE_TIMEOUT_MS", 10):
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):
             self.service.write_evs(258, {(0, 1000, 2): 13})
             self.reply("9B01020805")
             self.reply("590102")
@@ -374,12 +424,12 @@ class EvWriteTests(unittest.TestCase):
         self.assertEqual(self.connection.sent[-1], b":SBFC0N540102;")
         self.assertIn("Timed out waiting for EV readback", self.results[-1][2])
         self.assertIn("exit cannot be confirmed", self.results[-1][2])
-        self.assertEqual(self.state.ev_values[4][2], 12)
+        self.assertNotIn(2, self.state.ev_values[4])
 
     def test_refresh_failure_is_distinct_from_verified_writes(self):
         self.enter()
         self.verify()
-        with patch("workbench.cbus_service.AUTOMATIC_REQUEST_TIMEOUT_MS", 10):
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):
             self.exit()
             QTest.qWait(30)
         self.assertIn("Changes saved, but", self.results[-1][2])

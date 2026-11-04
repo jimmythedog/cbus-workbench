@@ -320,6 +320,8 @@ class MainWindow(QMainWindow):
         )
         node_view = self.layouts[name].node_view
         node_view.details.cbus_service = service
+        service.restore.changed.connect(node_view.details.show_restore_progress)
+        service.restore.finished.connect(node_view.details.finish_restore)
         service.ev_write.finished.connect(node_view.details.finish_ev_save)
         service.nv_write.finished.connect(node_view.details.finish_nv_save)
         service.nv_write.refresh_finished.connect(node_view.details.finish_nv_refresh)
@@ -469,10 +471,12 @@ class MainWindow(QMainWindow):
         connection = self.connections.get(name)
         service = self.cbus_services.get(name)
         if service is not None and (
-            service.ev_write.active or service.ev_write.refreshing
+            service.restore.active
+            or service.ev_write.active
+            or service.ev_write.refreshing
         ):
             self.statusBar().showMessage(
-                "Wait for EV Save to finish before sending raw frames.", 5000
+                "Wait for Save or restore to finish before sending raw frames.", 5000
             )
             return
         if isinstance(connection, (TcpConnection, SerialConnection)):

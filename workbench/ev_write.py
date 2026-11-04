@@ -5,7 +5,10 @@ https://github.com/Versatile-LCB/VLCB-documents
 NNLRN/NNULN have no acknowledgement. The learn flag is proposed in CBUS 6c,
 but specified by VLCB Event Teach §14.1. A legacy clear bit proves neither mode.
 WRACK plus matching EVANS verifies teaching even without a reported mode.
-REQEV/EVANS use the event identity; EVANS identifies its sender only by CAN ID.
+REQEV/EVANS use the event identity; EVANS identifies its sender by CAN ID.
+VLCB Opcode §3.7.9 specifies the event NN in EVANS. Legacy CBUSlib
+FliM.c doReqev() uses cbusSendOpcMyNN(), substituting the consumer NN.
+For short events only, accept that consumer NN as well as the specified zero.
 """
 
 import logging
@@ -13,10 +16,10 @@ import re
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
+from . import response_timeout
 from .logging_config import trace
 
 logger = logging.getLogger("workbench.cbus")
-WRITE_TIMEOUT_MS = 2000
 
 
 class EvWrite(QObject):
@@ -31,6 +34,9 @@ class EvWrite(QObject):
         self.stage = ""
         self.node_number = 0
         self.changes = []
+        self.unlearn = None
+        self.removals_transmitted = 0
+        self.removed = 0
         self.verified = 0
         self.learn_requested = False
         self.failure = ""
@@ -40,9 +46,39 @@ class EvWrite(QObject):
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self.timed_out)
 
-    def begin(self, node_number: int, changes: dict[tuple[int, int, int], int]) -> None:
+    def begin(
+        self,
+        node_number: int,
+        changes: dict[tuple[int, int, int], int],
+        *,
+        unlearn=None,
+    ) -> None:
         self.node_number = node_number
         self.changes = sorted(changes.items())
+        self.unlearn = unlearn
+        existing = set(self.service.node_states[node_number].event_identities.values())
+        creating = {key[:2] for key in changes if key[:2] not in existing}
+        if unlearn is not None:
+            creating.add(unlearn)
+        # A zero EVLRN can be acknowledged without creating the identity. Move
+        # one saved nonzero EV first; its normal WRACK/REQEV/EVANS verification
+        # must finish before teaching the remaining values (including zeros).
+        for identity in sorted(creating):
+            nonzero = next(
+                (
+                    i
+                    for i, (key, value) in enumerate(self.changes)
+                    if key[:2] == identity and value != 0
+                ),
+                None,
+            )
+            if nonzero is not None:
+                first = next(
+                    i for i, (key, _) in enumerate(self.changes) if key[:2] == identity
+                )
+                self.changes.insert(first, self.changes.pop(nonzero))
+        self.removals_transmitted = 0
+        self.removed = 0
         self.total = len(self.changes)
         self.verified = 0
         self.failure = ""
@@ -60,7 +96,7 @@ class EvWrite(QObject):
     def advance(self):
         if self.stage != "waiting for discovery reply":
             return
-        if not self.changes:
+        if not self.changes and self.unlearn is None:
             self.finish(True, "No changed EVs.")
             return
         # Sending NNLRN requests entry; only replies provide evidence. Probe a
@@ -72,9 +108,12 @@ class EvWrite(QObject):
             else:
                 self.write_next()
 
-    def send(self, payload, stage):
+    def send(self, payload, stage, *, expect_response=True):
         self.stage = stage
-        self.timer.start(WRITE_TIMEOUT_MS)
+        if expect_response:
+            self.timer.start(response_timeout.RESPONSE_TIMEOUT_MS)
+        else:
+            self.timer.stop()
         header = (0x580 | self.service.can_id) << 5
         self.log("Sending EV operation", payload=payload)
         try:
@@ -116,7 +155,29 @@ class EvWrite(QObject):
         return True
 
     def write_next(self):
+        if self.unlearn is not None:
+            event_node, event_number = self.unlearn
+            # EVULN has no specified acknowledgement. Exit learn mode and use
+            # event rediscovery to prove absence before any replacement EVLRN.
+            if self.send(
+                f"95{event_node:04X}{event_number:04X}",
+                "unlearning event",
+                expect_response=False,
+            ):
+                self.removals_transmitted = 1
+                self.log(
+                    "EVULN transmitted; removal not yet verified", identity=self.unlearn
+                )
+                self.leave_learn()
+            return
         (event_node, event_number, ev), value = self.changes[0]
+        # Once teaching is attempted, the old value is no longer evidence of
+        # physical state. Missing keys already mean unknown to backups/Compare.
+        state = self.service.node_states[self.node_number]
+        for slot, identity in state.event_identities.items():
+            if identity == (event_node, event_number):
+                state.ev_values.get(slot, {}).pop(ev, None)
+        self.log("Invalidating cached EV before teaching", identity=self.changes[0][0])
         self.send(f"D2{event_node:04X}{event_number:04X}{ev:02X}{value:02X}", "WRACK")
 
     def acknowledge(self, node_number):
@@ -155,7 +216,14 @@ class EvWrite(QObject):
         payload = bytes.fromhex(match[2].decode())
         key = (int.from_bytes(payload[1:3]), int.from_bytes(payload[3:5]), payload[5])
         expected_key, expected = self.changes[0]
-        if can_id != state.can_id or key != expected_key:
+        # Do not ignore NN generally: only a requested short event permits the
+        # legacy consumer-NN reply. Source CAN ID, EN and EV remain mandatory.
+        short_reply = expected_key[0] == 0 and key[0] == self.node_number
+        if (
+            can_id != state.can_id
+            or key[1:] != expected_key[1:]
+            or (key[0] != expected_key[0] and not short_reply)
+        ):
             self.log("Ignoring unrelated EVANS", can_id=can_id, identity=key)
             return
         value = payload[6]
@@ -168,9 +236,17 @@ class EvWrite(QObject):
         self.timer.stop()
         # Resolve the slot from current live discovery; never retain it in edits.
         slot = next(
-            i for i, event in state.event_identities.items() if event == key[:2]
+            (
+                i
+                for i, event in state.event_identities.items()
+                if event == expected_key[:2]
+            ),
+            None,
         )
-        state.ev_values.setdefault(slot, {})[key[2]] = value
+        # A new/reconstructed event has no discovered slot yet. Its EVANS still
+        # verifies this identity/value; the normal refresh will find its new slot.
+        if slot is not None:
+            state.ev_values.setdefault(slot, {})[key[2]] = value
         self.verified += 1
         self.changes.pop(0)
         self.service.node_state_updated.emit(self.node_number)
@@ -194,7 +270,9 @@ class EvWrite(QObject):
             )
         else:
             self.fail(
-                "Node rejected the EV write."
+                "Node rejected event unlearn."
+                if self.unlearn is not None
+                else "Node rejected the EV write."
                 if self.stage == "WRACK"
                 else "Node rejected EV verification or learn-mode entry."
             )
@@ -247,10 +325,14 @@ class EvWrite(QObject):
 
     def interrupt(self):
         """Stop further writes, but keep the connection open for bounded cleanup."""
-        if self.active:
+        if self.refreshing and self.unlearn is not None:
+            # Let the outstanding discovery finish, but never resume teaching.
+            self.failure = "Save interrupted during event verification."
+            self.log("EV refresh interrupted; pending teaching cancelled")
+        elif self.active:
             self.fail(
                 "Save interrupted; remaining changes were not confirmed."
-                if self.verified < self.total
+                if self.unlearn is not None or self.verified < self.total
                 else "EV writes verified; Save interrupted before refresh."
             )
 
@@ -277,6 +359,37 @@ class EvWrite(QObject):
 
     def finish_refresh(self, success):
         self.refreshing = False
+        if self.unlearn is not None:
+            state = self.service.node_states[self.node_number]
+            absent = success and self.unlearn not in state.event_identities.values()
+            self.log(
+                "Event removal verification finished",
+                identity=self.unlearn,
+                discovery_complete=success,
+                absent=absent,
+            )
+            if absent:
+                self.removed = 1
+            if self.failure or not absent:
+                self.finish(
+                    False,
+                    self.failure
+                    or "Event removal could not be confirmed by rediscovery; no further EVs written.",
+                    resume=False,
+                )
+                return
+            self.unlearn = None
+            if self.changes:
+                # Keep write ownership across verification. Re-enter learn mode
+                # only after absence is proven; ordinary teaching is unchanged.
+                self.active = True
+                self.exit_confirmed = False
+                self.stage = "waiting for discovery reply"
+                self.advance()
+                return
+        if self.failure:
+            self.finish(False, self.failure, resume=False)
+            return
         message = (
             "Changes saved successfully."
             if success

@@ -47,7 +47,7 @@ class CbusServiceTests(unittest.TestCase):
 
     def test_discovery_status_waits_for_qnn_and_reply_triggered_phases(self):
         app = QApplication.instance() or QApplication([])
-        with patch.object(cbus_service, "AUTOMATIC_REQUEST_TIMEOUT_MS", 30):
+        with patch.object(cbus_service.response_timeout, "RESPONSE_TIMEOUT_MS", 30):
             self.service.discover_nodes()
             self.assertEqual(
                 self.service.discovery_status, "Discovering configuration…"
@@ -69,7 +69,7 @@ class CbusServiceTests(unittest.TestCase):
 
     def test_discovery_timeout_and_no_nodes_are_incomplete(self):
         app = QApplication.instance() or QApplication([])
-        with patch.object(cbus_service, "AUTOMATIC_REQUEST_TIMEOUT_MS", 20):
+        with patch.object(cbus_service.response_timeout, "RESPONSE_TIMEOUT_MS", 20):
             self.service.discover_nodes()
             QTest.qWait(50)
             self.assertEqual(self.service.discovery_status, "Discovery incomplete")
@@ -86,7 +86,7 @@ class CbusServiceTests(unittest.TestCase):
 
     def test_idle_queue_with_unknown_nv_count_is_incomplete(self):
         app = QApplication.instance() or QApplication([])
-        with patch.object(cbus_service, "AUTOMATIC_REQUEST_TIMEOUT_MS", 20):
+        with patch.object(cbus_service.response_timeout, "RESPONSE_TIMEOUT_MS", 20):
             self.service.discover_nodes()
             self.connection.frame_received.emit(b":SB040NB601020D2203;")
             self.finish_short_parameter_pass()
@@ -98,7 +98,7 @@ class CbusServiceTests(unittest.TestCase):
 
     def test_ev_phase_started_by_late_capacity_reply_reopens_status(self):
         app = QApplication.instance() or QApplication([])
-        with patch.object(cbus_service, "AUTOMATIC_REQUEST_TIMEOUT_MS", 20):
+        with patch.object(cbus_service.response_timeout, "RESPONSE_TIMEOUT_MS", 20):
             self.service.discover_nodes()
             self.connection.frame_received.emit(b":SB040NB601020D2203;")
             self.connection.frame_received.emit(b":SB040N9B01020600;")
@@ -1252,7 +1252,7 @@ class CbusServiceTests(unittest.TestCase):
 
     def test_qt_event_loop_fires_request_timeout(self):
         app = QApplication.instance() or QApplication([])
-        with patch.object(cbus_service, "AUTOMATIC_REQUEST_TIMEOUT_MS", 0):
+        with patch.object(cbus_service.response_timeout, "RESPONSE_TIMEOUT_MS", 0):
             self.connection.frame_received.emit(b":SB040NB601020D2203;")
             self.connection.frame_received.emit(b":SB040NB601030D2203;")
             with self.assertLogs("workbench.cbus", level="WARNING") as captured:

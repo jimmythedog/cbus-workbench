@@ -218,6 +218,9 @@ class NodeDetails(QWidget):
         # Backups action buttons
         backups_actions = QWidget()
         backups_layout = QHBoxLayout(backups_actions)
+        self.restore_result = QLabel()
+        self.restore_result.setWordWrap(True)
+        backups_layout.addWidget(self.restore_result, 1)
         backups_layout.addStretch()
 
         self.backup_buttons = {}
@@ -253,13 +256,15 @@ class NodeDetails(QWidget):
         self.cancel_button.setEnabled(False)
         self.nv_result.setText("Saving changes…")
         try:
-            self.cbus_service.write_nvs(
+            self.cbus_service.save_nvs(
                 self.live_state.identity.node_number, self.editing_values
             )
         except ValueError as error:
             self.finish_nv_save(self.live_state.identity.node_number, False, str(error))
 
     def finish_nv_save(self, node_number: int, success: bool, message: str) -> None:
+        if self.cbus_service is not None and self.cbus_service.restore.active:
+            return
         if (
             self.live_state is None
             or self.live_state.identity.node_number != node_number
@@ -276,11 +281,15 @@ class NodeDetails(QWidget):
         self.editing_values = None
         self.editing_descriptions = None
         self.stop_editing()
+        self.update_backup_buttons()
 
     def finish_nv_refresh(self, node_number: int, message: str) -> None:
+        if self.cbus_service is not None and self.cbus_service.restore.active:
+            return
         if self.live_state and self.live_state.identity.node_number == node_number:
             self.nv_result.setText(f"Node {node_number}: {message}")
             self.edit_button.setEnabled(self.can_edit_nvs())
+            self.update_backup_buttons()
 
     def can_edit_nvs(self) -> bool:
         state = self.live_state
@@ -289,6 +298,7 @@ class NodeDetails(QWidget):
             and self.cbus_service is not None
             and state is not None
             and state.identity.node_number != 0
+            and not self.cbus_service.restore.active
             and not self.cbus_service.nv_write.refreshing
             and not self.cbus_service.ev_write.active
             and not self.cbus_service.ev_write.refreshing
@@ -424,6 +434,7 @@ class NodeDetails(QWidget):
             and state.event_progress == DiscoveryProgress.COMPLETE
             and state.event_identities
             and state.parameters.get(5, 0) > 0
+            and not service.restore.active
             and not service.ev_write.active
             and not service.ev_write.refreshing
             and not service.ev_write.blocked
@@ -480,6 +491,8 @@ class NodeDetails(QWidget):
             self.finish_ev_save(self.live_state.identity.node_number, False, str(error))
 
     def finish_ev_save(self, node_number: int, success: bool, message: str) -> None:
+        if self.cbus_service is not None and self.cbus_service.restore.active:
+            return
         if (
             self.live_state is None
             or self.live_state.identity.node_number != node_number
@@ -494,6 +507,9 @@ class NodeDetails(QWidget):
         self.events_result.setText(f"Node {node_number}: {message}")
         self.events_edit_button.setEnabled(self.can_edit_evs())
         self.edit_button.setEnabled(self.can_edit_nvs())
+        # The last discovery update precedes writer cleanup. Recheck write
+        # availability now, even when the backup selection has not changed.
+        self.update_backup_buttons()
 
     def show_parameters(self, parameters: dict[int, int]) -> None:
         """Display confirmed PARAN values; absent indices remain unknown."""
@@ -671,7 +687,14 @@ class NodeDetails(QWidget):
         self.backup_buttons["New"].setEnabled(self.connected and live_node)
         self.backup_buttons["View"].setEnabled(selected)
         self.backup_buttons["Compare"].setEnabled(self.connected and selected)
-        self.backup_buttons["Restore"].setEnabled(False)
+        self.backup_buttons["Restore"].setEnabled(
+            self.connected
+            and selected
+            and isinstance(self.node, Pnn)
+            and self.live_state is not None
+            and self.cbus_service is not None
+            and not self.cbus_service.writes_busy()
+        )
         self.backup_buttons["Delete"].setEnabled(False)
 
     def view_backup(self):
@@ -694,7 +717,30 @@ class NodeDetails(QWidget):
             self.backup_workflow.create(self.node)
 
     def restore_backup(self):
-        self.backup_workflow.restore(self.node)
+        if isinstance(self.node, Pnn):
+            if (
+                self.connected
+                and self.live_state is not None
+                and self.cbus_service is not None
+            ):
+                self.backup_workflow.restore_live(self.node, self.cbus_service)
+        elif not isinstance(self.node, int):
+            self.backup_workflow.restore(self.node)
+
+    def show_restore_progress(self, node_number: int, message: str) -> None:
+        self.restore_result.setText(message)
+        self.editing_changed.emit(True)
+        self.edit_button.setEnabled(False)
+        self.events_edit_button.setEnabled(False)
+        for name in ("New", "Compare", "Restore"):
+            self.backup_buttons[name].setEnabled(False)
+
+    def finish_restore(self, node_number: int, success: bool, message: str) -> None:
+        self.restore_result.setText(f"Node {node_number}: {message}")
+        self.editing_changed.emit(False)
+        self.edit_button.setEnabled(self.can_edit_nvs())
+        self.events_edit_button.setEnabled(self.can_edit_evs())
+        self.update_backup_buttons()
 
     def delete_backup(self):
         self.backup_workflow.delete(self.node)

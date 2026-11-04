@@ -31,6 +31,23 @@ The repository's `.envrc` loads `.shell.nix`, which provides Python, PySide6, uv
 
 The NixOS setup is a development-environment exception, not a separate application implementation. The application code remains cross-platform. Dependencies installed only into uv's `.venv/` will not automatically be available to Nix-provided Python; when adding dependencies, verify the NixOS setup as well.
 
+### Experimental hardware response timeout
+
+Set `CBUS_WORKBENCH_RESPONSE_TIMEOUT_MS` before launching to override the default
+2,000 ms response timeout, for example:
+
+```sh
+CBUS_WORKBENCH_RESPONSE_TIMEOUT_MS=4000 python main.py
+```
+
+This temporary hardware-testing setting is read once per process and shared by
+NV writes, EV writes and the CBUS service's request and discovery response timers.
+It must be a positive integer in milliseconds, at most 2147483647 (Qt's timer
+limit). Invalid configuration stops startup with a clear error in stderr and the
+application log. Startup logs the effective timeout, including the default.
+Restart to change it; unset it to restore the default. It changes only response
+windows, with no changes to matching, verification, concurrency, retries or pacing.
+
 ## Quality checks
 
 The project provides a `Makefile` with convenient commands for common development tasks.
@@ -100,7 +117,8 @@ store through `LayoutView` for their demo data. Live nodes instead use
 format. `NodeDetails` retains the selected live state and logical layout;
 `NodeBackupWorkflow` requests acknowledgement for incomplete discovery before
 writing. Filenames provide timestamps; listing reads actual files from the Qt
-Data directory. Live restore and other unfinished backup actions are disabled.
+Data directory. Live node restore uses the verified writers as described below;
+backup deletion and layout restore remain disabled.
 
 Live layout saves capture the selected view's service states with the same
 `node_backup` serializer. The manifest contains `format_version`, `complete`,
@@ -142,7 +160,7 @@ associated-file loader, including identity and ownership checks. Differences ret
 the existing node/section/event hierarchy. Incomplete saved or current values make
 the result inconclusive while confirmed differences remain visible. A node seen on
 only one side is also inconclusive: neither a manifest nor the current connection
-proves absence elsewhere on the logical layout. Restore and Delete remain disabled.
+proves absence elsewhere on the logical layout. Layout Restore and Delete remain disabled.
 
 Incomplete records use `complete: false` and positional YAML `null` for
 unconfirmed known values. Descriptions are omitted when blank. Live snapshots do
@@ -150,6 +168,111 @@ not include local annotations; discovery completeness cannot establish that all
 physical nodes were found.
 
 Filesystem failures propagate to the existing UI exception reporter.
+
+### Restoring a live node
+
+`NodeBackupWorkflow` loads the selected YAML through the existing validator, opens
+`BackupCompare` and requests explicit confirmation. It rechecks the connection and
+target after the modal dialogs. `NodeRestore`, owned by the connection's service,
+coordinates the existing `NvWrite` and `EvWrite` operations without implementing
+another protocol writer. It reserves service writes until the final result;
+`NodeDetails` displays progress and uses the existing editing signal to lock node
+selection. Raw sending is also guarded during restore.
+
+    file + complete target -> Compare -> confirm (extra warning if incomplete)
+      -> visit saved numeric NVs in ascending order
+           matching confirmed live value -> skip
+           different -> NvWrite(one NV), acknowledgement + readback
+                     -> reread all higher NVs -> continue from next saved NV
+      -> full NV reread + event/EV refresh -> verify all known saved NVs
+           mismatch / incomplete -> stop before event restoration
+      -> remove extra events by identity (EVULN), freeing event-table capacity
+      -> process backed-up identities (NN, EN)
+           missing -> EVLRN numeric EVs
+           matching -> no operation
+           numeric differences -> EVLRN changed EVs
+           confirmed extra EV -> EVULN -> learn exit -> event/EV rediscovery
+             absence confirmed -> re-enter learn -> EVLRN all saved numeric EVs
+             present / incomplete discovery -> stop without teaching
+         each operation -> existing learn exit -> event/EV refresh -> verify
+      -> full parameter/NV/event/EV rediscovery -> compare known backup data
+           complete backup + no uncertainty/differences -> full success
+           incomplete + known data verified -> success with explicit uncertainty
+           otherwise -> partial result with write/removal counts
+      failure -> stop writes, existing learn cleanup -> rediscover -> partial result
+      disconnect -> existing writer cleanup -> unverified partial result
+
+Restore compares each saved numeric NV with confirmed live state and writes only
+when it differs. Unknown saved NVs are skipped; unknown live values or incomplete
+discovery stop restoration. After each verified write, the shared discovery queue
+rereads all higher NVs (including indices missing from an incomplete backup) before
+the next comparison. Intermediate refreshes do not reread events. Once the scan
+ends, a full NV reread and event/EV refresh verify the saved NVs and obtain current
+event identities before any event replacement.
+
+Each saved index is visited once. Firmware may also change earlier NVs: the full
+verification detects these differences and fails without retry or rollback. The
+ascending order is a generic policy, not an assumption about firmware dependencies.
+The final full configuration discovery after event restoration remains required;
+EV teaching that changes an NV cannot produce a successful result.
+
+TRACE records comparisons, refresh ranges, verified write counts and failures.
+Ordinary NV Save shares this ascending pass and final NV/event refresh, but stops
+before event restoration; firmware-generated event changes are displayed as found.
+
+`node_restore_events` plans each backed-up event from the latest post-NV or
+post-write discovery. It stops
+comparing an event when confirmed absence requires reconstruction, discarding
+partial edits in favour of replaying all its numeric EVs. Extras are collected
+from post-NV discovery and removed first, so a full event table can accept missing
+backed-up events. Each removal is verified before processing backed-up events.
+`EvWrite` accepts a restore-owned EVULN before any replacement teaching. EVULN
+has no specified acknowledgement: transmission starts no WRACK wait and is counted
+separately from verified removal. The writer leaves learn mode and reuses event/EV
+discovery without rereading NVs. Only complete discovery showing the identity
+absent verifies removal. A retained identity, incomplete discovery, send failure
+or interrupted verification stops further teaching. For reconstruction the same
+writer retains its pending EVs and connection ownership across discovery, then
+re-enters learn mode after absence is confirmed. Disconnect reports transmitted
+and verified removals separately; a late reply cannot resume reconstruction.
+
+EVLRN keeps its existing WRACK/error/timeout and learn-mode cleanup paths. It teaches a
+missing identity using a saved nonzero EV first: some nodes acknowledge a zero
+EVLRN without creating the event. WRACK followed by REQEV/EVANS verifies that
+first write before the remaining saved EVs, including zeros, are taught. Existing
+events retain EV-index ordering unless they must be unlearned and reconstructed.
+A missing or reconstructed event with no nonzero saved EV is reported as
+unreconstructable before removing it; no value is invented. No
+slot is invented for new events; rediscovery obtains their current slots. The
+coordinator checks each event's known values (or removal) after refresh, then
+performs the final full-node comparison.
+
+Protocol: CBUS Guide 6b §7.2.7 and VLCB Opcode §3.5.14/§3.7.8 specify EVULN and
+EVLRN. EVULN removes all EVs; there is no individual EV removal command. EVLRN
+requires an EV index from 1 through capacity, so an empty event cannot be taught
+without inventing an EV. Such an event is reported before removing it or teaching
+an invented value.
+
+Incomplete files require explicit destructive-restore confirmation. The YAML
+format cannot distinguish absent from unread EV nulls within an incomplete file;
+nulls and trailing omissions therefore remain unknown and never trigger unlearn.
+Complete-file nulls/omissions prove absence. Final success for an incomplete file
+requires complete target discovery, matching numeric backup data and matching
+restored event membership, with a separate message denying full equivalence.
+The ordinary Compare UI remains inconclusive for incomplete files. Backups record
+only the target node number, so module/firmware provenance remains an explicit
+operator confirmation rather than an inferred compatibility guarantee.
+
+`rediscover_node()` clears the node's configuration and reuses automatic discovery,
+retaining its PNN identity/CAN ID. Completion is emitted after the request queue
+has exhausted follow-on work, including failures. During a failure refresh,
+matching NVRD replies can reveal an unverified NV's physical value without clearing
+the failed-write marker that requires reconnecting before another ordinary Save.
+The coordinator advances through a single-shot Qt timer so writer completion
+callbacks finish their queue cleanup before the next operation begins. TRACE
+records restore stages, target, write counts, failure reasons and final differences.
+
+### Application settings and connections
 
 `workbench.paths` resolves Qt's application directories for `cbus-workbench`;
 the display name remains `CBUS Workbench`. `workbench.app_settings` owns the
@@ -234,58 +357,54 @@ uses the same status and existing progress state.
 
 ### Node discovery lifecycle
 
-NV Save uses the existing editor working copy, leaving `NodeState` confirmed
-values untouched until each matching readback. `CbusService.write_nvs()` validates
-the working copy against the discovered NV count and selects changed values.
-The NV-specific `NvWrite` operation waits for any outstanding discovery request
-to finish, then pauses the shared discovery queue for sequential writes:
+NV Save passes the complete editor working copy to `CbusService.save_nvs()`.
+The service validates every value and requires every discovered NV index before
+`NodeRestore.begin_nv_save()` copies the desired values. Save and Restore use
+one ascending reconciliation loop, with connection ownership held across writes,
+intermediate discovery and deferred Qt callbacks:
 
 ```text
 Edit -> working copy -> Cancel -> discard (no writes)
-                     -> Save -> finish current discovery request
-                                  |
-                 for each changed NV: NVSET (96)
-                                  -> WRACK (59), same node
-                                  -> NVRD (71), same NV
-                                  -> NVANS (97), matching node/index/value
-                                  -> update confirmed NV -> next write
-                                  |
-                    CMDERR / timeout / mismatch / send failure
-                                  -> stop; keep earlier verified writes
-                 all writes verified -> queue full NV reread
-                                      -> each NVANS updates confirmed views
-                                      -> clear saved node's event slots and EVs
-                                      -> RQEVN -> NERD/ENRSP -> REVAL/NEVAL
-                                      -> one final success / refresh uncertainty
-                 write failure -> report result -> resume discovery
+                     -> Save -> compare next desired NV with confirmed live value
+                                  matching -> next NV
+                                  different -> NvWrite: NVSET -> WRACK -> NVRD -> NVANS
+                                            -> reread higher NVs -> next comparison
+                             -> full NV reread + event/EV rediscovery
+                             -> compare all desired NVs -> finish Save
+                                  mismatch/incomplete -> fail, no retry
+                 write failure -> stop -> full node rediscovery -> report failure
                  disconnect -> stop and report; service is then discarded
 ```
 
-The Developer's Guide 6b teaching/readback sections define this sequence; no learn
-mode is needed. Successful discovery provides evidence that NVRD is supported,
-so every write requires readback rather than falling back to acknowledgement
-alone. WRACK and CMDERR have only a node number, with no NV index or transaction
-identifier. Serialisation prevents ambiguity between Workbench's own requests;
-another configuration tool must not write the same node concurrently. Each reply
-has a two-second timeout. There are no automatic retries or rollbacks. An
-unverified written NV retains its previous confirmed value; late NVANS for it
-are ignored, and another Save requires reconnecting to rediscover physical state.
-After verified writes, the shared discovery queue rereads every NV because
-firmware can change other NVs as a side effect. The editor working copy is released
-at write completion so both views display each confirmed reread immediately.
-After the NV reread, the saved node's old event identities and EV values are
-cleared: firmware can rebuild its event table, so old slot indices cannot safely
-identify current EVs. Its event/EV progress and EV-start guard are reset, and the
-existing shared queue performs RQEVN, NERD/ENRSP and REVAL/NEVAL again. Work for
-other nodes is preserved. Zero events completes without NERD or EV reads.
-The inline saving message remains until the node's queued refresh work ends.
-Success requires complete NV, event and EV discovery (or non-consumer event
-skips); timeouts, unknown EV capacity and disconnects report saved changes with
-refresh uncertainty. Confirmed replies remain available; sparse EV semantics
-are unchanged. Detailed stages and failure reasons remain in diagnostics.
-No full reread is started after a failed write or unchanged Save.
-During writes the
-working copy and node selection are locked; Cancel is available before Save.
+The same loop continues into event replacement for Restore. NV Save never enters
+those stages: it displays firmware-generated event changes without teaching or
+unlearning events. Each desired index is visited once. A later write that changes
+an earlier NV fails final verification rather than starting another pass.
+Initially matching higher NVs remain in the desired configuration, so firmware
+resets can be corrected when their turn is reached.
+
+`NvWrite` remains the hardware transaction boundary. It waits for an outstanding
+discovery reply before writing, requires matching acknowledgement and readback,
+and rereads higher indices after each coordinator-owned write. Its transaction
+signals advance the coordinator; editor completion signals are emitted only when
+the whole NV Save finishes. The editor working copy stays locked until then.
+The service's existing `restore.active` ownership also covers coordinated NV Save,
+including raw-frame exclusion and the gaps between writer transactions.
+
+The Developer's Guide 6b teaching/readback sections define the wire sequence;
+no learn mode is needed. WRACK and CMDERR carry no NV index or transaction ID.
+Serialisation prevents ambiguity between Workbench's own requests; another tool
+must not write the same node concurrently. Each reply uses the shared response
+timeout. There are no automatic retries or rollbacks. Failed writes retain their
+uncertainty markers: failure rediscovery can reveal physical values without
+allowing another Save before reconnecting.
+
+Final NV discovery clears old event slots and EVs, then uses the existing
+RQEVN, NERD/ENRSP and REVAL/NEVAL discovery. Work for other nodes is preserved.
+Zero events completes without NERD or EV reads. Success requires matching desired
+NVs and complete NV/event/EV discovery (or non-consumer event skips). Confirmed
+zero EVs, confirmed absences and unread values retain their existing meanings.
+Detailed logs identify Save versus Restore, comparisons, stages and failures.
 
 Each new numbered PNN starts a parameter pass. A confirmed parameter 6 can
 queue NV reads before that pass ends; the shared queue serialises the requests.
@@ -455,8 +574,15 @@ writer uses that sequence directly. A failed flags query remains a failure;
 there is no timeout/error fallback. Sending NNLRN never establishes entry or
 write success. EVLRN uses the event identity, not the consumer node number;
 WRACK/CMDERR identify the consumer. REQEV/EVANS verify the
-same event identity in learn mode, avoiding stale event-table indices. EVANS has
-no consumer node number, so its source CAN ID must match current discovery.
+same event identity in learn mode, avoiding stale event-table indices. Its source
+CAN ID must match current discovery. VLCB Opcode specification §3.7.9 defines
+EVANS NN as the event's NN. Legacy
+[CBUSlib `doReqev()`](https://github.com/MERG-DEV/CBUSlib/blob/bec37f9d634b31668d2d71b2615bf7e8b566e0ed/FliM.c#L892)
+instead sends EVANS through `cbusSendOpcMyNN()`, replacing NN with the consumer's
+own number. For a requested short event (NN=0), Workbench accepts either zero or
+that consumer's NN, while still matching CAN ID, event number and EV index
+exactly. Long events retain exact event-NN matching; arbitrary NN values are
+never accepted.
 VLCB adds GRSP alongside WRACK/CMDERR; those duplicate responses are not needed
 for this sequence. REVAL is not required for write verification.
 
@@ -483,6 +609,10 @@ The shared queue resumes after exit handling. A failed Save blocks further write
 on that connection because physical results may be uncertain. A verified Save
 with no flag support remains usable after refresh, with a simple success message;
 reconnecting cannot add a reporting capability that the protocol does not require.
+Before attempting an EV write, its cached value is removed: a missing key means
+unknown, so Compare and backups cannot present the pre-write value as confirmed
+after a failed Save. Matching readback restores the confirmed value; untouched
+EVs and earlier verified writes remain available.
 NNULN is always attempted, and no clear legacy bit or missing reply is presented
 as proof of exit. Requested
 Disconnect waits for bounded cleanup before closing the transport. Unexpected

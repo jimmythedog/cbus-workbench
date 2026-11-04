@@ -12,10 +12,10 @@ Early development. Currently implemented:
 - Reading node variables (NVs), stored events and event variables (EVs), with verified
   writes for live NV and EV edits.
 - Node and layout backups, optional descriptions, incomplete-backup warnings,
-  offline viewing and comparison with current discovery.
+  offline viewing, comparison and node restoration with final verification.
 - Messages / Diagnostics, raw GridConnect frame sending and persistent logs.
 
-Node and layout backup restoration and backup deletion are not available yet.
+Layout backup restoration and backup deletion are not available yet.
 See [Requirements](REQUIREMENTS.md) for intended capabilities, including planned work.
 
 ## Installation and running

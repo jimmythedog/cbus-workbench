@@ -5,7 +5,6 @@ from PySide6.QtWidgets import QApplication
 
 from workbench.logging_config import configure_logging, trace
 from workbench.paths import APP_NAME, DISPLAY_NAME
-from workbench.window import MainWindow
 
 
 def main():
@@ -15,6 +14,14 @@ def main():
     log_path = configure_logging()
     logger = logging.getLogger("workbench.app")
     logger.info("Application starting", extra={"fields": {"log_file": str(log_path)}})
+    try:
+        from workbench.response_timeout import RESPONSE_TIMEOUT_MS
+    except ValueError as error:
+        logger.exception("Invalid CBUS response timeout configuration")
+        sys.exit(str(error))
+    logger.info("CBUS response timeout: %s ms", RESPONSE_TIMEOUT_MS)
+    from workbench.window import MainWindow
+
     trace(logger, "Constructing Qt application and main window")
     window = MainWindow()
     previous_excepthook = sys.excepthook

@@ -108,7 +108,7 @@ class WindowStartupTests(unittest.TestCase):
         save_settings(settings, self.path)
         with (
             patch("workbench.window.TcpConnection", RecordingTcpConnection),
-            patch("workbench.cbus_service.AUTOMATIC_REQUEST_TIMEOUT_MS", 30),
+            patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 30),
         ):
             window = self.open_window()
             window.connect_layout()
@@ -141,7 +141,7 @@ class WindowStartupTests(unittest.TestCase):
         save_settings(settings, self.path)
         with (
             patch("workbench.window.TcpConnection", RecordingTcpConnection),
-            patch("workbench.cbus_service.AUTOMATIC_REQUEST_TIMEOUT_MS", 30),
+            patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 30),
         ):
             window = self.open_window()
             window.show()

@@ -141,6 +141,70 @@ class NodeBackupWorkflow:
         )
         self._show_status("Node backup created")
 
+    def restore_live(self, node, service) -> None:
+        number = node.node_number
+        try:
+            backup = self._selected_backup(node)
+            if backup is None:
+                return
+            service.restore.check(number, backup)
+            target = service.node_states[number]
+            identity = (target.identity, target.can_id)
+            BackupCompare(target, backup, self.parent).exec()
+            message = (
+                f"Restore this backup to live node {number}?\n\n"
+                "Every backup NV will be written in ascending order, including matching values. "
+                "Firmware may reset dependent configuration. Missing events will be taught, "
+                "events may be reconstructed to remove EVs, and events absent from the backup "
+                "will be removed. There is no rollback. Do not use another "
+                "configuration tool during restoration.\n\n"
+                "The backup records a node number, not its manufacturer or firmware; "
+                "confirm that this backup belongs to the connected module."
+            )
+            if not backup["complete"]:
+                message += (
+                    "\n\nWARNING: This backup is incomplete. Replacement may remove "
+                    "configuration that was not captured. Unknown NV/EV values will not "
+                    "be written as zero, but dependent values may be reset. "
+                    "Full equivalence to this backup cannot be established. "
+                    "Continue with this destructive partial restore?"
+                )
+            if backup["partOfLayoutBackup"]:
+                message += (
+                    "\n\nThis backup is part of a layout backup. Restoring this "
+                    "node independently may leave it inconsistent with other nodes."
+                )
+            answer = QMessageBox.question(
+                self.parent,
+                "Restore node backup",
+                message,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                trace(
+                    logger,
+                    "Live node restore declined",
+                    extra={"fields": {"node_number": number}},
+                )
+                return
+            # Dialogs process network events. Revalidate both connection and target
+            # after confirmation rather than trusting the preview's earlier state.
+            if identity != (target.identity, target.can_id):
+                raise ValueError(
+                    "Target identity changed while confirming restoration."
+                )
+            service.restore.begin(
+                number, backup, allow_incomplete=not backup["complete"]
+            )
+        except ValueError as error:
+            trace(
+                logger,
+                "Live node restore rejected",
+                extra={"fields": {"node_number": number, "reason": str(error)}},
+            )
+            QMessageBox.warning(self.parent, "Cannot restore node backup", str(error))
+
     def restore(self, node):
         if isinstance(node, Pnn):
             return
