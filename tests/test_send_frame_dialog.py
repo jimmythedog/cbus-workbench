@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from workbench.cbus_service import DiscoveryProgress, NodeState
 from workbench.pnn import Pnn
 from workbench.send_frame_dialog import SendFrameDialog
 from workbench.window import MainWindow
@@ -59,6 +60,33 @@ class SendFrameDialogTests(unittest.TestCase):
         self.peer = self.server.nextPendingConnection()
         self.wait_for(lambda: self.peer.bytesAvailable() >= len(b":SBFC0N0D;"))
         self.assertEqual(bytes(self.peer.readAll()), b":SBFC0N0D;")
+
+    def test_requested_disconnect_waits_for_ev_learn_exit(self):
+        self.connect_home()
+        service = self.window.cbus_services["Home"]
+        service.node_states[258] = NodeState(
+            Pnn(258, 13, 34, 5),
+            parameters={5: 2, 8: 5},
+            event_identities={4: (0, 1000)},
+            ev_values={4: {2: 12}},
+            event_progress=DiscoveryProgress.COMPLETE,
+            can_id=2,
+        )
+        service.write_evs(258, {(0, 1000, 2): 13})
+        expected = b":SBFC0N530102;:SBFC0N73010208;"
+        self.wait_for(lambda: self.peer.bytesAvailable() >= len(expected))
+        self.assertEqual(bytes(self.peer.readAll()), expected)
+        self.peer.write(b":SB040N9B01020825;")
+        expected = b":SBFC0ND2000003E8020D;"
+        self.wait_for(lambda: self.peer.bytesAvailable() >= len(expected))
+        self.assertEqual(bytes(self.peer.readAll()), expected)
+        self.window.disconnect_layout()
+        expected = b":SBFC0N540102;:SBFC0N73010208;"
+        self.wait_for(lambda: self.peer.bytesAvailable() >= len(expected))
+        self.assertEqual(bytes(self.peer.readAll()), expected)
+        self.assertEqual(self.window.connection_status.text(), "Connected")
+        self.peer.write(b":SB040N9B01020805;")
+        self.wait_for(lambda: self.window.connection_status.text() == "Disconnected")
 
     def test_menu_action_requires_connected_tcp_layout(self):
         self.assertFalse(self.window.send_frame_action.isEnabled())

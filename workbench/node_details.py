@@ -42,6 +42,7 @@ class NodeDetails(QWidget):
         self.editing_descriptions = None
         self.cbus_service = None
         self.saving_nvs = False
+        self.saving_evs = False
 
         layout = QVBoxLayout(self)
 
@@ -186,6 +187,9 @@ class NodeDetails(QWidget):
         events_buttons.addWidget(edit_buttons)
 
         self.events_buttons = events_buttons
+        self.events_result = QLabel()
+        self.events_result.setWordWrap(True)
+        events_layout.addWidget(self.events_result, 1)
         events_layout.addLayout(events_buttons)
 
         # Tabs
@@ -286,6 +290,9 @@ class NodeDetails(QWidget):
             and state is not None
             and state.identity.node_number != 0
             and not self.cbus_service.nv_write.refreshing
+            and not self.cbus_service.ev_write.active
+            and not self.cbus_service.ev_write.refreshing
+            and not self.cbus_service.ev_write.blocked
             and state.nv_progress == DiscoveryProgress.COMPLETE
             and state.parameters.get(6, 0) > 0
             and all(i in state.nv_values for i in range(1, state.parameters[6] + 1))
@@ -403,7 +410,32 @@ class NodeDetails(QWidget):
         self.tabs.setTabEnabled(self.tabs.indexOf(self.events_page), not editing)
         self.tabs.setTabEnabled(self.tabs.indexOf(self.node_backups), not editing)
 
+    def can_edit_evs(self) -> bool:
+        state = self.live_state
+        service = self.cbus_service
+        return bool(
+            self.connected
+            and service is not None
+            and state is not None
+            and state.identity.node_number
+            and state.identity.is_flim
+            and state.identity.is_consumer
+            and state.can_id is not None
+            and state.event_progress == DiscoveryProgress.COMPLETE
+            and state.event_identities
+            and state.parameters.get(5, 0) > 0
+            and not service.ev_write.active
+            and not service.ev_write.refreshing
+            and not service.ev_write.blocked
+            and not service.nv_write.active
+            and not service.nv_write.refreshing
+            and not service.nv_write.unverified
+        )
+
     def start_events_editing(self):
+        if self.live_state is not None and not self.can_edit_evs():
+            return
+        self.events_result.clear()
         self.node_events.begin_edit()
         self.events_buttons.setCurrentIndex(1)
 
@@ -414,6 +446,8 @@ class NodeDetails(QWidget):
         self.editing_changed.emit(True)
 
     def cancel_events_editing(self):
+        if self.saving_evs:
+            return
         self.node_events.cancel_edit()
         self.finish_events_editing()
 
@@ -426,8 +460,40 @@ class NodeDetails(QWidget):
         self.editing_changed.emit(False)
 
     def save_events_editing(self):
-        self.node_events.save_edit()
+        if self.saving_evs:
+            return
+        if self.live_state is None:
+            self.node_events.save_edit()
+            self.finish_events_editing()
+            return
+        self.saving_evs = True
+        self.node_events.setEnabled(False)
+        self.events_save_button.setEnabled(False)
+        self.events_cancel_button.setEnabled(False)
+        self.events_result.setText("Saving changes…")
+        try:
+            self.cbus_service.write_evs(
+                self.live_state.identity.node_number,
+                self.node_events.changed_live_values(),
+            )
+        except ValueError as error:
+            self.finish_ev_save(self.live_state.identity.node_number, False, str(error))
+
+    def finish_ev_save(self, node_number: int, success: bool, message: str) -> None:
+        if (
+            self.live_state is None
+            or self.live_state.identity.node_number != node_number
+        ):
+            return
+        self.saving_evs = False
+        self.node_events.setEnabled(True)
+        self.events_save_button.setEnabled(True)
+        self.events_cancel_button.setEnabled(True)
+        self.node_events.cancel_edit()
         self.finish_events_editing()
+        self.events_result.setText(f"Node {node_number}: {message}")
+        self.events_edit_button.setEnabled(self.can_edit_evs())
+        self.edit_button.setEnabled(self.can_edit_nvs())
 
     def show_parameters(self, parameters: dict[int, int]) -> None:
         """Display confirmed PARAN values; absent indices remain unknown."""
@@ -466,8 +532,11 @@ class NodeDetails(QWidget):
         )
 
     def show_node(self, current):
+        if self.node_events.editing_values is not None and not self.saving_evs:
+            self.cancel_events_editing()
         if self.editing_values is not None:
             self.cancel_editing()
+        self.events_result.clear()
         selected_page = self.tabs.currentWidget()
         previous_live_node = (
             self.node.node_number if isinstance(self.node, Pnn) else None
@@ -556,6 +625,32 @@ class NodeDetails(QWidget):
                 "Connection ended; NV edits discarded without writing."
             )
         self.edit_button.setEnabled(self.can_edit_nvs())
+        if (
+            not self.connected
+            and self.node_events.editing_values is not None
+            and not self.saving_evs
+        ):
+            self.cancel_events_editing()
+            self.events_result.setText(
+                "Connection ended; EV edits discarded without writing."
+            )
+        if isinstance(self.node, Pnn) or self.live_state is not None:
+            self.events_edit_button.setEnabled(self.can_edit_evs())
+            if (
+                self.live_state is not None
+                and self.live_state.parameters.get(5) is not None
+                and self.events_result.text().startswith("EV editing unavailable:")
+            ):
+                self.events_result.clear()
+            if (
+                self.live_state is not None
+                and not self.saving_evs
+                and not self.events_result.text()
+                and self.live_state.parameters.get(5) is None
+            ):
+                self.events_result.setText(
+                    "EV editing unavailable: EV capacity is unconfirmed."
+                )
         can_id = self.live_state.can_id if self.live_state is not None else None
         status = "-"
         if self.node is not None:

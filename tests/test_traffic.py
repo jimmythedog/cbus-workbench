@@ -24,6 +24,12 @@ class TrafficTests(unittest.TestCase):
             ("9C", "REVAL"),
             ("B5", "NEVAL"),
             ("B6", "PNN"),
+            ("53", "NNLRN"),
+            ("54", "NNULN"),
+            ("95", "EVULN"),
+            ("B2", "REQEV"),
+            ("D2", "EVLRN"),
+            ("D3", "EVANS"),
             ("F2", "ENRSP"),
         )
         for opcode, mnemonic in cases:

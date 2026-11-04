@@ -42,13 +42,31 @@ stored events and their EV values to display firmware-generated changes.
 Workbench reports that changes were saved but some values could not be refreshed.
 The selected live node's Events tab shows known produced events alongside
 consumed events. Expand a consumed event to see its EV values. Discovered events
-and EVs update as replies arrive; an unconfirmed EV shows `-` and a confirmed
-zero shows `0`. For confirmed legacy CBUS nodes, a same-node CMDERR 5 during
+and EVs update as replies arrive. Normal view shows only confirmed EV values,
+including zero. Edit exposes every position up to the confirmed parameter 5
+capacity. Absent and unread values display as blank cells; blank means unchanged,
+not zero. Entering zero explicitly assigns zero. The underlying distinction
+between absent and unread is preserved. For confirmed legacy CBUS nodes, a same-node CMDERR 5 during
 an outstanding EV read is treated as an absent EV, assuming the error belongs to
-that request. Absent EVs also display `-` and save as `null`, but do not make a
+that request. Absent EVs save as `null`, but do not make a
 backup incomplete. Trailing confirmed-absent EVs are omitted from saved lists;
 internal gaps and unknown positions are preserved. VLCB or unidentified nodes retain unknown EVs after CMDERR 5.
-Live events are read-only.
+Choose Edit / Save / Cancel to change live EVs (0–255). Only explicitly changed
+values are sent; Cancel sends nothing. Save requires a connected, discovered
+FLiM consumer with confirmed event identities, EV capacity and CAN ID.
+Workbench requests learn mode, waits for each write acknowledgement and verifies
+each EV by event identity before recording it. Learn-mode flags are checked for
+VLCB nodes and CBUS nodes that report the flag set. Legacy CBUS nodes need not
+report this flag: their writes are still verified. After the exit command is sent
+and rediscovery completes, Workbench reports “Changes saved successfully.”
+Exit confirmation details remain in Diagnostics and TRACE logs.
+Events and EVs are rediscovered before the final Save result. The existing discovery
+uses REVAL; nodes rejecting it can verify writes using REQEV but report an
+incomplete refresh. Failures stop remaining writes and attempt learn-mode exit;
+partial success and uncertain exit are reported inline. Check any uncertain node
+state, then reconnect to rediscover before retrying. Requested disconnects allow
+a bounded cleanup attempt; an unexpected connection loss may prevent exit.
+See [the EV hardware check](docs/ev-hardware-check.md) for the manual test sequence.
 The live node's Backups tab saves discovered configuration as YAML and lists saved
 files. Incomplete discovery requires Cancel / Save Anyway; partial files contain
 `complete: false` and `null` for unconfirmed known positions. Files are stored under

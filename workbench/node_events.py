@@ -1,12 +1,14 @@
 from copy import deepcopy
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIntValidator, QValidator
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
     QFormLayout,
     QGroupBox,
+    QLineEdit,
     QSpinBox,
     QSplitter,
     QStyle,
@@ -37,27 +39,39 @@ class NoHoverDelegate(QStyledItemDelegate):
         return super().createEditor(parent, option, index)
 
 
+class EvValueValidator(QIntValidator):
+    """Allow an unchanged empty cell as well as a byte value."""
+
+    def validate(self, text, position):
+        if not text:
+            return QValidator.State.Acceptable, text, position
+        return super().validate(text, position)
+
+
 class RawEvDelegate(NoHoverDelegate):
     def createEditor(self, parent, option, index):
         if index.column() == 0:
             return None
 
         if index.parent().isValid():
-            editor = QSpinBox(parent)
-            editor.setRange(0, 255)
+            editor = QLineEdit(parent)
+            editor.setValidator(EvValueValidator(0, 255, editor))
             return editor
 
         return super().createEditor(parent, option, index)
 
     def setEditorData(self, editor, index):
-        if isinstance(editor, QSpinBox):
-            editor.setValue(int(index.data()))
+        if isinstance(editor, QLineEdit):
+            editor.setText(str(index.data()))
         else:
             super().setEditorData(editor, index)
 
     def setModelData(self, editor, model, index):
-        if isinstance(editor, QSpinBox):
-            model.setData(index, editor.value())
+        if isinstance(editor, QLineEdit):
+            # Empty is an unchanged field, including when zero was its original
+            # value. Do not let opening/closing an empty editor invent a value.
+            if not editor.text() or editor.hasAcceptableInput():
+                model.setData(index, editor.text())
         else:
             super().setModelData(editor, model, index)
 
@@ -68,6 +82,7 @@ class NodeEvents(QSplitter):
 
         self.events = events if events is not None else {}
         self.node = None
+        self.live_state = None
         self.editing_descriptions = None
         self.editing_values = None
 
@@ -97,6 +112,7 @@ class NodeEvents(QSplitter):
         self.setSizes([400, 600])
 
     def show_node(self, node):
+        self.live_state = None
         self.produced_table.setRowCount(0)
         expanded_events = set()
 
@@ -127,6 +143,7 @@ class NodeEvents(QSplitter):
                 continue
 
             details = QTreeWidgetItem(parent)
+            details.setData(0, Qt.ItemDataRole.UserRole, True)
             details.setFlags(details.flags() & ~Qt.ItemFlag.ItemIsSelectable)
 
             form = QWidget()
@@ -171,7 +188,10 @@ class NodeEvents(QSplitter):
             self.produced_table.setItem(row, 1, QTableWidgetItem(description))
 
     def show_live_state(self, state: NodeState) -> None:
-        """Show discovered consumed events using their internal table indices."""
+        """Use stable event identities in the UI; indices belong to discovery only."""
+        self.live_state = state
+        if self.editing_values is not None:
+            return
         same_node = (
             isinstance(self.node, Pnn)
             and self.node.node_number == state.identity.node_number
@@ -195,17 +215,22 @@ class NodeEvents(QSplitter):
             )
             event = f"{event_node}:{event_number}"
             parent = QTreeWidgetItem(self.consumed_table, [event, description])
-            parent.setData(0, Qt.ItemDataRole.UserRole, index)
+            parent.setData(0, Qt.ItemDataRole.UserRole, (event_node, event_number))
             values = state.ev_values.get(index, {})
             indices = range(1, ev_count + 1) if ev_count is not None else sorted(values)
             for ev_index in indices:
                 value = values.get(ev_index)
                 item = QTreeWidgetItem(
-                    parent, [f"EV {ev_index}", "-" if value is None else str(value)]
+                    parent,
+                    [
+                        f"EV {ev_index}",
+                        "" if value is None else str(value),
+                    ],
                 )
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
                 item.setData(0, Qt.ItemDataRole.UserRole, value is not None)
                 item.setHidden(value is None)
-            parent.setExpanded(index in expanded)
+            parent.setExpanded((event_node, event_number) in expanded)
         self.set_editing(False)
 
     def set_editing(self, editing):
@@ -236,9 +261,32 @@ class NodeEvents(QSplitter):
                             control.setEnabled(editing)
 
     def begin_edit(self):
+        if self.live_state is not None:
+            self.editing_values = {
+                (*event, ev): value
+                for slot, event in self.live_state.event_identities.items()
+                for ev, value in self.live_state.ev_values.get(slot, {}).items()
+            }
+            self.set_editing(True)
+            return
         self.editing_descriptions = self.node.consumed_events.copy()
         self.editing_values = deepcopy(self.node.ev_values)
         self.set_editing(True)
+
+    def changed_live_values(self) -> dict[tuple[int, int, int], int]:
+        """Collect only explicit numeric edits, retaining unknown/absent originals."""
+        changes = {}
+        for row in range(self.consumed_table.topLevelItemCount()):
+            event = self.consumed_table.topLevelItem(row)
+            identity = event.data(0, Qt.ItemDataRole.UserRole)
+            for child_index in range(event.childCount()):
+                text = event.child(child_index).text(1)
+                if text.isdecimal():
+                    key = (*identity, child_index + 1)
+                    value = int(text)
+                    if self.editing_values.get(key) != value:
+                        changes[key] = value
+        return changes
 
     def save_edit(self):
         for index in range(self.consumed_table.topLevelItemCount()):
@@ -252,6 +300,8 @@ class NodeEvents(QSplitter):
                     child = item.child(child_index)
 
                     number = child.data(0, Qt.ItemDataRole.UserRole)
+                    if not child.text(1):
+                        continue
                     value = int(child.text(1))
 
                     self.editing_values[event][number] = value
@@ -278,4 +328,8 @@ class NodeEvents(QSplitter):
 
     def cancel_edit(self):
         self.editing_descriptions = None
-        self.show_node(self.node)
+        self.editing_values = None
+        if self.live_state is not None:
+            self.show_live_state(self.live_state)
+        else:
+            self.show_node(self.node)

@@ -1,0 +1,314 @@
+"""Sequential EV teaching, identity-based verification, and bounded learn exit.
+
+MERG Developer's Guide 6b §7.2.7 and VLCB Event Teach / Opcode specifications:
+https://github.com/Versatile-LCB/VLCB-documents
+NNLRN/NNULN have no acknowledgement. The learn flag is proposed in CBUS 6c,
+but specified by VLCB Event Teach §14.1. A legacy clear bit proves neither mode.
+WRACK plus matching EVANS verifies teaching even without a reported mode.
+REQEV/EVANS use the event identity; EVANS identifies its sender only by CAN ID.
+"""
+
+import logging
+import re
+
+from PySide6.QtCore import QObject, QTimer, Signal
+
+from .logging_config import trace
+
+logger = logging.getLogger("workbench.cbus")
+WRITE_TIMEOUT_MS = 2000
+
+
+class EvWrite(QObject):
+    finished = Signal(int, bool, str)
+
+    def __init__(self, service):
+        super().__init__(service)
+        self.service = service
+        self.active = False
+        self.refreshing = False
+        self.blocked = False  # An uncertain write/exit requires a new connection.
+        self.stage = ""
+        self.node_number = 0
+        self.changes = []
+        self.verified = 0
+        self.learn_requested = False
+        self.failure = ""
+        self.flag_reliable = False
+        self.exit_confirmed = False
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.timed_out)
+
+    def begin(self, node_number: int, changes: dict[tuple[int, int, int], int]) -> None:
+        self.node_number = node_number
+        self.changes = sorted(changes.items())
+        self.total = len(self.changes)
+        self.verified = 0
+        self.failure = ""
+        self.learn_requested = False
+        flags = self.service.node_states[node_number].parameters.get(8, 0)
+        # VLCB specifies the flag; a CBUS set bit is also positive evidence.
+        # A legacy clear bit says nothing about whether the flag is implemented.
+        self.flag_reliable = bool(flags & (0x40 | 0x20))
+        self.exit_confirmed = False
+        self.active = True
+        self.stage = "waiting for discovery reply"
+        self.log("EV Save accepted", changes=self.changes)
+        self.service._send_next_request()
+
+    def advance(self):
+        if self.stage != "waiting for discovery reply":
+            return
+        if not self.changes:
+            self.finish(True, "No changed EVs.")
+            return
+        # Sending NNLRN requests entry; only replies provide evidence. Probe a
+        # known flags parameter, otherwise use standard WRACK/EVANS verification.
+        self.learn_requested = True
+        if self.send(f"53{self.node_number:04X}", "entering learn mode"):
+            if 8 in self.service.node_states[self.node_number].parameters:
+                self.check_mode("confirming learn mode")
+            else:
+                self.write_next()
+
+    def send(self, payload, stage):
+        self.stage = stage
+        self.timer.start(WRITE_TIMEOUT_MS)
+        header = (0x580 | self.service.can_id) << 5
+        self.log("Sending EV operation", payload=payload)
+        try:
+            self.service.connection.send(f":S{header:04X}N{payload};".encode())
+            return True
+        except OSError:
+            logger.exception("EV operation transmission failed")
+            if stage in ("leaving learn mode", "confirming learn-mode exit"):
+                self.finish(
+                    False, self.exit_uncertain("Could not transmit learn-mode exit.")
+                )
+            else:
+                self.fail(f"Could not transmit while {stage}.")
+            return False
+
+    def check_mode(self, stage):
+        self.send(f"73{self.node_number:04X}08", stage)
+
+    def receive_mode(self, node_number: int, index: int, value: int) -> bool:
+        if not self.active or node_number != self.node_number or index != 8:
+            return False
+        if self.stage not in ("confirming learn mode", "confirming learn-mode exit"):
+            return False
+        self.timer.stop()
+        self.log("Learn-mode flags received", flags=value)
+        if self.stage == "confirming learn mode":
+            if value & 0x20:
+                self.flag_reliable = True
+            elif self.flag_reliable:
+                self.fail("Node did not confirm learn mode; no EVs written.")
+                return True
+            self.log("Starting teaching", learn_flag_reliable=self.flag_reliable)
+            self.write_next()
+        elif value & 0x20:
+            self.finish(False, self.exit_uncertain("Node still reports learn mode."))
+        else:
+            self.exit_confirmed = True
+            self.complete_exit()
+        return True
+
+    def write_next(self):
+        (event_node, event_number, ev), value = self.changes[0]
+        self.send(f"D2{event_node:04X}{event_number:04X}{ev:02X}{value:02X}", "WRACK")
+
+    def acknowledge(self, node_number):
+        if not self.active or self.stage != "WRACK":
+            return
+        if node_number != self.node_number:
+            # A second learner may have accepted this broadcast write. Stop and
+            # release both nodes, as recommended by the developer's guide.
+            header = (0x580 | self.service.can_id) << 5
+            self.log("Releasing unexpected learner", unexpected_node=node_number)
+            try:
+                self.service.connection.send(
+                    f":S{header:04X}N54{node_number:04X};".encode()
+                )
+            except OSError:
+                logger.exception("Could not release unexpected learner")
+            self.fail(
+                "Another node acknowledged the write; its learn-mode exit is unconfirmed. Check both nodes before retrying."
+            )
+            return
+        (event_node, event_number, ev), _value = self.changes[0]
+        self.log("EV write acknowledged; requesting identity-based readback")
+        self.send(f"B2{event_node:04X}{event_number:04X}{ev:02X}", "EVANS")
+
+    def receive_frame(self, frame: bytes) -> None:
+        """Handle EVANS only after an acknowledged write and from this node."""
+        if not self.active or self.stage != "EVANS":
+            return
+        match = re.fullmatch(
+            rb":S([0-9A-Fa-f]{4})N(D3[0-9A-Fa-f]{12});", frame, re.IGNORECASE
+        )
+        if match is None or int(match[1], 16) & 0x1F:
+            return
+        can_id = (int(match[1], 16) >> 5) & 0x7F
+        state = self.service.node_states[self.node_number]
+        payload = bytes.fromhex(match[2].decode())
+        key = (int.from_bytes(payload[1:3]), int.from_bytes(payload[3:5]), payload[5])
+        expected_key, expected = self.changes[0]
+        if can_id != state.can_id or key != expected_key:
+            self.log("Ignoring unrelated EVANS", can_id=can_id, identity=key)
+            return
+        value = payload[6]
+        self.log("EV readback received", identity=key, value=value, expected=expected)
+        if value != expected:
+            self.fail(
+                f"EV {key[2]}: readback mismatch (received {value}, expected {expected})."
+            )
+            return
+        self.timer.stop()
+        # Resolve the slot from current live discovery; never retain it in edits.
+        slot = next(
+            i for i, event in state.event_identities.items() if event == key[:2]
+        )
+        state.ev_values.setdefault(slot, {})[key[2]] = value
+        self.verified += 1
+        self.changes.pop(0)
+        self.service.node_state_updated.emit(self.node_number)
+        if self.changes:
+            self.write_next()
+        else:
+            self.leave_learn()
+
+    def reject(self, node_number: int, code: int) -> bool:
+        if (
+            not self.active
+            or node_number != self.node_number
+            or self.stage == "waiting for discovery reply"
+        ):
+            return False
+        self.log("EV operation rejected", code=code)
+        if self.stage in ("leaving learn mode", "confirming learn-mode exit"):
+            self.finish(
+                False,
+                self.exit_uncertain("Node rejected learn-mode exit confirmation."),
+            )
+        else:
+            self.fail(
+                "Node rejected the EV write."
+                if self.stage == "WRACK"
+                else "Node rejected EV verification or learn-mode entry."
+            )
+        return True
+
+    def fail(self, reason):
+        self.failure = reason
+        self.blocked = True
+        self.log("EV Save failed; attempting learn-mode exit", reason=reason)
+        if self.learn_requested:
+            self.leave_learn()
+        else:
+            self.finish(False, reason)
+
+    def leave_learn(self):
+        if self.send(f"54{self.node_number:04X}", "leaving learn mode"):
+            if self.flag_reliable:
+                self.check_mode("confirming learn-mode exit")
+            else:
+                self.complete_exit()
+
+    def complete_exit(self):
+        """Resume discovery after cleanup; retain any lack of exit evidence."""
+        self.timer.stop()
+        self.log("Learn-mode exit attempted", confirmed=self.exit_confirmed)
+        if self.failure:
+            message = self.failure
+            if not self.exit_confirmed:
+                message += " Learn-mode exit cannot be confirmed by this node."
+            self.finish(False, message)
+            return
+        self.active = False
+        self.refreshing = True
+        self.stage = "refreshing events"
+        self.service._restart_event_discovery(self.node_number)
+        self.service._send_next_request()
+
+    def exit_uncertain(self, reason):
+        return f"{self.failure or 'EV writes verified.'} {reason} Learn-mode exit is unconfirmed; check the node before reconnecting."
+
+    def timed_out(self):
+        if self.stage == "confirming learn-mode exit":
+            self.finish(False, self.exit_uncertain("Timed out confirming exit."))
+        else:
+            description = {
+                "WRACK": "write acknowledgement",
+                "EVANS": "EV readback",
+            }.get(self.stage, self.stage)
+            self.fail(f"Timed out waiting for {description}.")
+
+    def interrupt(self):
+        """Stop further writes, but keep the connection open for bounded cleanup."""
+        if self.active:
+            self.fail(
+                "Save interrupted; remaining changes were not confirmed."
+                if self.verified < self.total
+                else "EV writes verified; Save interrupted before refresh."
+            )
+
+    def disconnect(self):
+        if self.active:
+            self.failure = "Connection ended during EV Save."
+            if self.learn_requested:
+                # Unexpected disconnect may already have closed the transport.
+                # Try once; there can be no confirmation on a closed connection.
+                header = (0x580 | self.service.can_id) << 5
+                self.log("Attempting learn exit after connection interruption")
+                try:
+                    self.service.connection.send(
+                        f":S{header:04X}N54{self.node_number:04X};".encode()
+                    )
+                except OSError:
+                    logger.exception(
+                        "Learn-mode exit could not be sent after disconnect"
+                    )
+                self.failure = self.exit_uncertain("Connection unavailable.")
+            self.finish(False, self.failure, resume=False)
+        elif self.refreshing:
+            self.finish_refresh(False)
+
+    def finish_refresh(self, success):
+        self.refreshing = False
+        message = (
+            "Changes saved successfully."
+            if success
+            else "Changes saved, but the displayed configuration may be incomplete (refresh failed)."
+        )
+        self.finish(success, message, resume=False)
+
+    def finish(self, success, message, *, resume=True):
+        self.timer.stop()
+        self.active = False
+        if not success:
+            self.blocked = True
+            if self.verified:
+                message = f"{self.verified} of {self.total} changes verified. {message}"
+            message += " Reconnect to rediscover before another Save."
+        self.log(
+            "EV Save finished", success=success, verified=self.verified, result=message
+        )
+        self.finished.emit(self.node_number, success, message)
+        if resume:
+            self.service._send_next_request()
+
+    def log(self, message, **fields):
+        trace(
+            logger,
+            message,
+            extra={
+                "fields": {
+                    "layout": self.service.connection.layout_name,
+                    "node_number": self.node_number,
+                    "stage": self.stage,
+                    **fields,
+                }
+            },
+        )

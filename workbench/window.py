@@ -62,6 +62,7 @@ class MainWindow(QMainWindow):
         self.layout_settings = {}
         self.connections: dict[str, TcpConnection | SerialConnection] = {}
         self.cbus_services: dict[str, CbusService] = {}
+        self.pending_ev_disconnects: set[str] = set()
 
         saved_settings = {"default_layout": None, "layouts": {}}
 
@@ -303,6 +304,7 @@ class MainWindow(QMainWindow):
         )
         node_view = self.layouts[name].node_view
         node_view.details.cbus_service = service
+        service.ev_write.finished.connect(node_view.details.finish_ev_save)
         service.nv_write.finished.connect(node_view.details.finish_nv_save)
         service.nv_write.refresh_finished.connect(node_view.details.finish_nv_refresh)
         node_view.details.logical_layout = self.layout_settings[name]["logical_layout"]
@@ -426,7 +428,21 @@ class MainWindow(QMainWindow):
             connection_logger.info(
                 "Disconnecting layout", extra={"fields": {"layout": name}}
             )
-            connection.disconnect()
+            service = self.cbus_services.get(name)
+            if service is not None and service.ev_write.active:
+                if name in self.pending_ev_disconnects:
+                    return
+                self.pending_ev_disconnects.add(name)
+
+                def disconnect_after_exit(_node, _success, _message):
+                    service.ev_write.finished.disconnect(disconnect_after_exit)
+                    self.pending_ev_disconnects.discard(name)
+                    connection.disconnect()
+
+                service.ev_write.finished.connect(disconnect_after_exit)
+                service.ev_write.interrupt()
+            else:
+                connection.disconnect()
 
     def show_send_frame_dialog(self) -> None:
         action = self.layout_group.checkedAction()
@@ -434,6 +450,14 @@ class MainWindow(QMainWindow):
             return
         name = action.data()
         connection = self.connections.get(name)
+        service = self.cbus_services.get(name)
+        if service is not None and (
+            service.ev_write.active or service.ev_write.refreshing
+        ):
+            self.statusBar().showMessage(
+                "Wait for EV Save to finish before sending raw frames.", 5000
+            )
+            return
         if isinstance(connection, (TcpConnection, SerialConnection)):
             SendFrameDialog(name, connection, self).exec()
 

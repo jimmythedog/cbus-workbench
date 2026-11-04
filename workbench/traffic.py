@@ -8,6 +8,8 @@ from .pnn import decode_pnn
 # generic frame summaries use the same CBUS mnemonic.
 OPCODE_NAMES = {
     0x0D: "QNN",
+    0x53: "NNLRN",
+    0x54: "NNULN",
     0x57: "NERD",
     0x58: "RQEVN",
     0x59: "WRACK",
@@ -17,14 +19,18 @@ OPCODE_NAMES = {
     0x74: "NUMEV",
     0x90: "ACON",
     0x91: "ACOF",
+    0x95: "EVULN",
     0x96: "NVSET",
     0x97: "NVANS",
     0x98: "ASON",
     0x99: "ASOF",
     0x9B: "PARAN",
     0x9C: "REVAL",
+    0xB2: "REQEV",
     0xB5: "NEVAL",
     0xB6: "PNN",
+    0xD2: "EVLRN",
+    0xD3: "EVANS",
     0xF2: "ENRSP",
 }
 

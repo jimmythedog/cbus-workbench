@@ -404,8 +404,82 @@ unread indices when parameter 6 provides the count. Edit becomes available after
 complete NV discovery while the connection is active.
 The node Events tab uses the same side-by-side widget for configured nodes and
 live nodes. For live nodes, it reads `NodeState` on selection and state-update
-signals. Consumed event rows use discovered identities and keep the internal
-event index so each expanded EV list reads the matching values. The layout event
+signals. Consumed event rows and editor working copies use stable event identities;
+internal table indices are resolved from current discovery only. Expanded rows
+remain associated with their event even when rediscovery changes its index. The layout event
 catalogue supplies known produced events and any available descriptions. The
 display clears with the selected identity on disconnect; it keeps no separate
 discovery model.
+
+
+### Saving live EV edits
+
+`NodeEvents` retains a working copy while editing; background discovery cannot
+replace edited cells. Only explicit numeric differences are passed to
+`CbusService.write_evs`, keyed by `(event NN, event number, EV index)`. Absent
+(`None`), unread (missing), and zero retain their separate meanings. Live nodes
+use the raw EV rows; the configured-node MDF form remains prototype data, not a
+live MDF mapping. No event indices are persisted.
+
+`EvWrite` owns the connection after the current automatic request completes,
+excluding NV Saves and automatic discovery until teaching and cleanup finish.
+NNLRN and NNULN have no acknowledgement. Parameter 8 bit 5 is not a universal
+CBUS requirement: Guide 6b's teaching sequence does not require it, and Guide
+6c §7.2.3 / §7.2.8.4 still describes it as proposed. CBUS 5.0 Rev A1 likewise
+specifies no response to NNLRN/NNULN. VLCB Event Teach §14.1 specifies the learn
+flag as service data; Minimum Node §9 specifies bit 6 to advertise VLCB.
+
+After NNLRN, the writer queries parameter 8 only if discovery has confirmed that
+parameter. A set bit 5 establishes reliable reporting for this Save. A confirmed
+VLCB node or a CBUS node already observed with the bit set must confirm entry;
+a clear bit then stops teaching. For other CBUS nodes, a clear bit cannot
+distinguish normal mode from an unimplemented flag, so the standard EVLRN /
+WRACK / REQEV / EVANS sequence is used. If parameter 8 is unavailable, the
+writer uses that sequence directly. A failed flags query remains a failure;
+there is no timeout/error fallback. Sending NNLRN never establishes entry or
+write success. EVLRN uses the event identity, not the consumer node number;
+WRACK/CMDERR identify the consumer. REQEV/EVANS verify the
+same event identity in learn mode, avoiding stale event-table indices. EVANS has
+no consumer node number, so its source CAN ID must match current discovery.
+VLCB adds GRSP alongside WRACK/CMDERR; those duplicate responses are not needed
+for this sequence. REVAL is not required for write verification.
+
+```text
+Save -> validate explicit changes -> wait for outstanding discovery
+  -> NNLRN -> known parameter 8? RQNPN(8)
+       reliable flag (VLCB or observed set) -> require learn bit set
+       legacy clear flag / no parameter 8 -> no mode conclusion; standard teaching
+  -> EVLRN(identity, EV, value) -> WRACK(consumer)
+  -> REQEV(identity, EV) -> EVANS(identity, EV, value, matching CAN ID)
+       mismatch / CMDERR / timeout / send error -> stop remaining changes
+       match -> record confirmed value -> repeat for next changed EV
+  -> NNULN (on success and failure)
+       reliable flag -> RQNPN(8): require learn bit clear
+                       failure -> report uncertainty; require reconnect
+       no reliable flag -> record lack of exit confirmation in TRACE
+       earlier failure -> report verified count and failure; require reconnect
+       all verified -> clear old slots -> RQEVN / NERD / existing EV discovery
+                         complete -> Changes saved successfully
+                         incomplete -> saved, displayed configuration incomplete
+```
+
+The shared queue resumes after exit handling. A failed Save blocks further writes
+on that connection because physical results may be uncertain. A verified Save
+with no flag support remains usable after refresh, with a simple success message;
+reconnecting cannot add a reporting capability that the protocol does not require.
+NNULN is always attempted, and no clear legacy bit or missing reply is presented
+as proof of exit. Requested
+Disconnect waits for bounded cleanup before closing the transport. Unexpected
+transport loss and application shutdown attempt NNULN but cannot confirm exit;
+no successful outcome is inferred from a queued frame. A WRACK from another node
+while teaching stops the Save and sends NNULN to both nodes; the operator must
+check both configurations. Separate configuration applications must not teach
+simultaneously. TRACE includes stage, node, event identity, values, replies and
+failure/cleanup outcomes; frame traffic remains in Diagnostics.
+
+The existing event refresh uses REVAL and may be incomplete on VLCB nodes that
+reject it. This is reported as saved changes with incomplete refresh, never full
+success. No compatibility fallback or second discovery system is introduced.
+Protocol references: [CBUS Guide 6c and CBUS 5.0 Rev A1](https://github.com/cbus-traincontrol/cbus-traincontrol.github.io),
+[MERG Developer’s Guide 6b, §7.2.7 and opcode definitions](https://www.merg.org.uk/merg_wiki/lib/exe/fetch.php?media=public%3Acbuspublic%3Adeveloper_6b.pdf),
+[VLCB Event Teach and Opcode specifications](https://github.com/Versatile-LCB/VLCB-documents).

@@ -9,6 +9,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from .cmderr import decode_cmderr
 from .enrsp import decode_enrsp
+from .ev_write import EvWrite
 from .logging_config import trace
 from .neval import decode_neval
 from .numev import decode_numev
@@ -78,12 +79,14 @@ class CbusService(QObject):
         self._request_timer.setSingleShot(True)
         self._request_timer.timeout.connect(self._request_timed_out)
         self.nv_write = NvWrite(self)
+        self.ev_write = EvWrite(self)
         connection.frame_received.connect(self._receive_frame)
 
     def close(self) -> None:
         """Stop observing frames when this connection's live state ends."""
         self.connection.frame_received.disconnect(self._receive_frame)
         self.nv_write.disconnect()
+        self.ev_write.disconnect()
         self._request_timer.stop()
         self._request_queue.clear()
         self._outstanding_request = None
@@ -146,9 +149,16 @@ class CbusService(QObject):
         count = state.parameters.get(6)
         if state.nv_progress != DiscoveryProgress.COMPLETE or count is None:
             raise ValueError("NV discovery must be complete before editing")
-        if self.nv_write.active or self.nv_write.refreshing:
+        if (
+            self.nv_write.active
+            or self.nv_write.refreshing
+            or self.ev_write.active
+            or self.ev_write.refreshing
+        ):
             raise ValueError("An NV Save is already in progress")
-        if any(node == node_number for node, _index in self.nv_write.unverified):
+        if self.ev_write.blocked or any(
+            node == node_number for node, _index in self.nv_write.unverified
+        ):
             raise ValueError("Reconnect to rediscover this node before another NV Save")
         for index, value in values.items():
             if type(index) is not int or not 1 <= index <= min(count, 255):
@@ -163,6 +173,57 @@ class CbusService(QObject):
             i: value for i, value in values.items() if state.nv_values[i] != value
         }
         self.nv_write.begin(node_number, changes)
+
+    def write_evs(
+        self, node_number: int, values: dict[tuple[int, int, int], int]
+    ) -> None:
+        """Write explicit (event NN, event number, EV index) changes only."""
+        state = self.node_states.get(node_number)
+        if self.connection.state != "Connected" or state is None:
+            raise ValueError("EV Save requires a discovered, connected node")
+        if (
+            self.ev_write.active
+            or self.ev_write.refreshing
+            or self.nv_write.active
+            or self.nv_write.refreshing
+        ):
+            raise ValueError("Another Save is in progress")
+        if self.ev_write.blocked or self.nv_write.unverified:
+            raise ValueError("Reconnect to rediscover before another Save")
+        if (
+            not node_number
+            or not state.identity.is_flim
+            or not state.identity.is_consumer
+            or state.can_id is None
+            or state.event_progress != DiscoveryProgress.COMPLETE
+            or not state.parameters.get(5)
+        ):
+            raise ValueError(
+                "EV Save needs confirmed event identities, EV capacity and CAN ID on a FLiM consumer"
+            )
+        identities = {event: slot for slot, event in state.event_identities.items()}
+        changes = {}
+        for key, value in values.items():
+            if (
+                not isinstance(key, tuple)
+                or len(key) != 3
+                or any(type(part) is not int for part in key)
+            ):
+                raise ValueError("EV address must be an event identity and EV index")
+            event_node, event_number, ev = key
+            if (
+                not 0 <= event_node <= 65535
+                or not 0 <= event_number <= 65535
+                or key[:2] not in identities
+                or not 1 <= ev <= state.parameters[5]
+            ):
+                raise ValueError("EV address is not confirmed by live discovery")
+            if type(value) is not int or not 0 <= value <= 255:
+                raise ValueError("EV value must be between 0 and 255")
+            slot = identities[key[:2]]
+            if state.ev_values.get(slot, {}).get(ev) != value:
+                changes[key] = value
+        self.ev_write.begin(node_number, changes)
 
     def request_nv(self, node_number: int, index: int) -> None:
         """Send NVRD for one numbered node variable (Developer's Guide 6b)."""
@@ -329,7 +390,16 @@ class CbusService(QObject):
         state.event_progress = DiscoveryProgress.NOT_STARTED
         state.ev_progress = DiscoveryProgress.NOT_STARTED
         self._ev_started.discard(node_number)
-        self.nv_write.log("Post-Save event state cleared; restarting discovery")
+        trace(
+            logger,
+            "Post-Save event state cleared; restarting discovery",
+            extra={
+                "fields": {
+                    "layout": self.connection.layout_name,
+                    "node_number": node_number,
+                }
+            },
+        )
         self.node_state_updated.emit(node_number)
         self._queue_event_count(node_number)
 
@@ -338,7 +408,9 @@ class CbusService(QObject):
             wrack = decode_wrack(frame)
             if wrack is not None:
                 self.nv_write.acknowledge(wrack.node_number)
+                self.ev_write.acknowledge(wrack.node_number)
                 return
+            self.ev_write.receive_frame(frame)
             pnn = decode_pnn(frame)
             paran = decode_paran(frame) if pnn is None else None
             nvans = decode_nvans(frame) if pnn is None and paran is None else None
@@ -453,6 +525,8 @@ class CbusService(QObject):
             self.node_state_updated.emit(pnn.node_number)
 
     def _receive_paran(self, node_number: int, index: int, value: int) -> None:
+        if self.ev_write.receive_mode(node_number, index, value):
+            return
         state = self.node_states.get(node_number)
         fields = {
             "layout": self.connection.layout_name,
@@ -713,6 +787,8 @@ class CbusService(QObject):
         self._finish_request("ev", node_number)
 
     def _receive_cmderr(self, node_number: int, code: int) -> None:
+        if self.ev_write.reject(node_number, code):
+            return
         if self.nv_write.reject(node_number, code):
             return
         if (
@@ -790,6 +866,10 @@ class CbusService(QObject):
         if self.nv_write.active:
             self.nv_write.advance()
             return
+        if self.ev_write.active:
+            self.ev_write.advance()
+            return
+        self._finish_ev_refresh_if_idle()
         self._finish_nv_refresh_if_idle()
         while self._request_queue:
             kind, node_number, index = self._request_queue.popleft()
@@ -834,7 +914,19 @@ class CbusService(QObject):
             trace(logger, "Awaiting automatic reply", extra={"fields": fields})
             return
 
+        self._finish_ev_refresh_if_idle()
         self._finish_nv_refresh_if_idle()
+
+    def _finish_ev_refresh_if_idle(self) -> None:
+        writer = self.ev_write
+        if writer.refreshing and not any(
+            node == writer.node_number for _kind, node, _index in self._request_queue
+        ):
+            state = self.node_states[writer.node_number]
+            writer.finish_refresh(
+                state.event_progress == DiscoveryProgress.COMPLETE
+                and state.ev_progress == DiscoveryProgress.COMPLETE
+            )
 
     def _finish_nv_refresh_if_idle(self) -> None:
         """Report the result after this node has exhausted its shared queue work."""
