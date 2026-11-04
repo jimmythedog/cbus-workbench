@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .parameter_names import cpu_name, firmware_version, transport_name
+from .parameter_names import cpu_name, firmware_version, transport_name, vlcb_compatible
 
 
 class NodeDetailsForm(QWidget):
@@ -175,6 +175,8 @@ class NodeDetailsForm(QWidget):
 
     def show_parameters(self, parameters: dict[int, int]) -> str:
         """Display confirmed PARAN values and return the formatted firmware."""
+        vlcb = vlcb_compatible(parameters.get(8))
+        self.vlcb.setText("-" if vlcb is None else "Yes" if vlcb else "No")
         firmware = firmware_version(parameters) or "-"
         self.firmware.setText(firmware)
         self.interface.setText(transport_name(parameters.get(10)) or "-")

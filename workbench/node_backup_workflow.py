@@ -9,7 +9,9 @@ from PySide6.QtWidgets import QInputDialog, QMainWindow, QMessageBox, QWidget
 
 from .backup_compare import BackupCompare
 from .backup_view import BackupView, backup_contents
+from .cbus_service import NodeState
 from .logging_config import trace
+from .node_backup_files import node_backup, save_backup
 from .node_backups import NodeBackups
 from .node_snapshot import create_node_snapshot, restore_node_snapshot
 
@@ -66,6 +68,25 @@ class NodeBackupWorkflow:
             extra={"fields": {"node_number": node.number}},
         )
         BackupCompare(node, backup, self.parent).exec()
+
+    def create_live(self, state: NodeState, logical_layout: str) -> None:
+        backup = node_backup(state)
+        if not backup["complete"]:
+            dialog = QMessageBox(self.parent)
+            dialog.setWindowTitle("Incomplete node discovery")
+            dialog.setText(
+                "Discovery is incomplete. Save the confirmed configuration anyway?"
+            )
+            dialog.addButton(QMessageBox.StandardButton.Cancel)
+            save = dialog.addButton("Save Anyway", QMessageBox.ButtonRole.AcceptRole)
+            dialog.setDefaultButton(QMessageBox.StandardButton.Cancel)
+            dialog.exec()
+            if dialog.clickedButton() is not save:
+                trace(logger, "Incomplete node backup cancelled")
+                return
+        path = save_backup(logical_layout, backup)
+        self.backups.show_live_node(logical_layout, state.identity.node_number)
+        self._show_status(f"Node backup saved: {path}")
 
     def create(self, node):
         if node is None:

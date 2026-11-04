@@ -16,7 +16,8 @@ node shows its confirmed number, manufacturer, module type, flags, mode, produce
 and consumer capabilities, own-event consumption, bootloading support, firmware,
 CPU name, interface, events supported, event variables and node variables. A
 confirmed nonzero beta build is shown beside the firmware version. Unconfirmed
-fields show `-`. Workbench requests one automatic parameter at a time per
+fields show `-`. VLCB compatibility is shown as Yes/No from confirmed parameter 8,
+or `-` when unavailable. Workbench requests one automatic parameter at a time per
 connection, starting with each node's parameter count. Matching replies advance
 a FIFO queue; a missing reply times out after two seconds, skips that node's
 remaining automatic requests and lets other nodes continue. Reconnecting starts
@@ -28,7 +29,18 @@ confirmed zero shows `0`. Live values are read-only.
 The selected live node's Events tab shows known produced events alongside
 consumed events. Expand a consumed event to see its EV values. Discovered events
 and EVs update as replies arrive; an unconfirmed EV shows `-` and a confirmed
-zero shows `0`. Live events are read-only.
+zero shows `0`. For confirmed legacy CBUS nodes, a same-node CMDERR 5 during
+an outstanding EV read is treated as an absent EV, assuming the error belongs to
+that request. Absent EVs also display `-` and save as `null`, but do not make a
+backup incomplete. Trailing confirmed-absent EVs are omitted from saved lists;
+internal gaps and unknown positions are preserved. VLCB or unidentified nodes retain unknown EVs after CMDERR 5.
+Live events are read-only.
+The live node's Backups tab saves discovered configuration as YAML and lists saved
+files. Incomplete discovery requires Cancel / Save Anyway; partial files contain
+`complete: false` and `null` for unconfirmed known positions. Files are stored under
+Data → `layouts/<logical-layout>/nodes/<node-number>/backups/<timestamp>.yaml`.
+Find the Data directory in Help → Application Directories. Live backup restore is
+not implemented.
 Messages / Diagnostics also shows sent and received CBUS frames, including parameter
 requests and replies. It labels supported opcodes and shows raw frames for others.
 Layout → New, Edit and Delete save changes to that file. The first layout is the

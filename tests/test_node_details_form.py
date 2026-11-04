@@ -29,6 +29,18 @@ class NodeDetailsFormTests(unittest.TestCase):
         self.details.show_node(item)
         return item
 
+    def test_vlcb_identification_uses_confirmed_parameter_8(self):
+        self.select(Pnn(258, 13, 34, 0x43))
+        for parameters, expected in (
+            ({}, "-"),
+            ({8: 0}, "No"),
+            ({8: 0x43}, "Yes"),
+            ({}, "-"),
+        ):
+            with self.subTest(parameters=parameters):
+                self.details.show_parameters(parameters)
+                self.assertEqual(self.details.details_page.vlcb.text(), expected)
+
     def test_form_is_the_details_page_and_labels_remain_accessible(self):
         details = self.details
         self.assertIsInstance(details.details_page, NodeDetailsForm)
@@ -198,7 +210,7 @@ class NodeDetailsFormTests(unittest.TestCase):
         self.select(Node(43, "Other", 13, "1b", False))
         self.assertIs(details.tabs.currentWidget(), details.variables_page)
 
-    def test_unavailable_live_backup_tab_falls_back_to_node_details(self):
+    def test_live_backup_tab_remains_available(self):
         details = self.details
         configured = Node(42, "Configured", 12, "1a", False)
         live = Pnn(258, 13, 34, 0x03)
@@ -210,8 +222,8 @@ class NodeDetailsFormTests(unittest.TestCase):
 
         details.tabs.setCurrentWidget(details.node_backups)
         self.select(live)
-        self.assertFalse(
+        self.assertTrue(
             details.tabs.isTabEnabled(details.tabs.indexOf(details.node_backups))
         )
-        self.assertIs(details.tabs.currentWidget(), details.details_page)
+        self.assertIs(details.tabs.currentWidget(), details.node_backups)
         self.select(configured)

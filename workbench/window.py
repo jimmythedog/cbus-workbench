@@ -301,6 +301,7 @@ class MainWindow(QMainWindow):
             lambda node, layout=name: self.record_node_identity(layout, node)
         )
         node_view = self.layouts[name].node_view
+        node_view.details.logical_layout = self.layout_settings[name]["logical_layout"]
         node_view.state_lookup = lambda node_number: service.node_states[node_number]
         service.node_state_updated.connect(node_view.refresh_state)
         self.cbus_services[name] = service

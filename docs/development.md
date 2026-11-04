@@ -96,7 +96,13 @@ Top-level UI actions that need an error dialog can call `ErrorReporter.run(descr
 `NodeBackupWorkflow` helper handles the selected backup's dialogs, snapshots and
 changes to `NodeBackups`. After a restore, one callback to `NodeDetails` refreshes
 the variable and event displays; layout backups still use the same `NodeBackups`
-store through `LayoutView`.
+store through `LayoutView` for their demo data. Live nodes instead use
+`node_backup_files` to capture confirmed `NodeState` values in the issue #44 YAML
+format. `NodeDetails` retains the selected live state and logical layout;
+`NodeBackupWorkflow` requests acknowledgement for incomplete discovery before
+writing. Filenames provide timestamps; listing reads actual files from the Qt
+Data directory. Live restore and other unfinished backup actions are disabled.
+Filesystem failures propagate to the existing UI exception reporter.
 
 `workbench.paths` resolves Qt's application directories for `cbus-workbench`;
 the display name remains `CBUS Workbench`. `workbench.app_settings` owns the
@@ -218,10 +224,17 @@ explicitly defined. Only a completed event enumeration can start REVAL reads,
 using the internal indices confirmed by ENRSP. EV indices run from 1 through
 parameter 5; missing parameter 5 stays unknown and can start reads if a
 PARAN(5) later arrives. Only a matching NEVAL records a value; a missing key
-means unconfirmed, while zero is a confirmed value. Same-node CMDERR 5 advances
-the queue but cannot identify the EV or prove that our REVAL caused it, so EV
-progress becomes INCOMPLETE. Timeouts and send failures also leave progress
-INCOMPLETE and retain confirmed values. A backup caller can check the existing
+means unconfirmed, zero is a confirmed value, and a present `None` means confirmed
+absent. Parameter 8 bit 6 identifies VLCB compatibility and is requested during
+automatic parameter discovery. For a confirmed legacy CBUS node (bit clear),
+same-node CMDERR 5 while REVAL is outstanding records `None` for that EV and
+advances normally. This deliberately assumes the error belongs to our outstanding
+REVAL: CMDERR itself contains no event or EV index. VLCB or unknown parameter 8
+retains the conservative behaviour: leave the EV unknown and mark discovery
+INCOMPLETE. Timeouts and send failures also leave progress INCOMPLETE and retain
+confirmed values. Backup completeness checks EV key presence, so absent EVs are
+complete while unknown EVs are not; both serialize as positional YAML `null`. Only trailing confirmed-absent EVs
+are omitted from the saved list; unknown positions and internal gaps remain. A backup caller can check the existing
 parameter, NV, event and EV progress (COMPLETE or SKIPPED where applicable) and
 the sparse mappings to identify unconfirmed data. Discovery is read-only and
 live values are separate from configured node data.
@@ -232,8 +245,9 @@ event enumeration COMPLETE
   +-> parameter 5 unknown -> EV NOT_STARTED; await PARAN(5)
   +-> parameter 5 > 0 -> REVAL for each confirmed event and EV index
                          matching NEVAL -> record confirmed value, advance
-                         same-node CMDERR 5 -> EV INCOMPLETE, advance
-                         all replies confirmed -> EV COMPLETE
+                         same-node CMDERR 5 -> legacy: record absent, advance
+                                           -> VLCB/unknown: INCOMPLETE, advance
+                         all values/absences confirmed -> EV COMPLETE
                          timeout/send failure -> EV INCOMPLETE; keep values
 event enumeration INCOMPLETE -> no automatic REVAL
 ```
@@ -244,8 +258,9 @@ Each `CbusService` has one FIFO, one outstanding request and one single-shot
 `QTimer`. Timeouts and send failures abandon remaining requests of the same kind
 for that node, preserve confirmed data and let other queued work proceed.
 NERD keeps its slot while new ENRSP indices arrive; each one restarts the timer.
-Each REVAL advances on a matching NEVAL or a same-node CMDERR 5. The latter
-leaves the value unconfirmed, marks the pass incomplete and moves to the next request.
+Each REVAL advances on a matching NEVAL or a same-node CMDERR 5. CMDERR 5 records
+absence only for confirmed legacy CBUS nodes, as described above; otherwise it
+leaves the value unknown and marks the pass incomplete.
 
 ```text
 per-layout FIFO -> pop/send
@@ -259,8 +274,9 @@ per-layout FIFO -> pop/send
                                   +-> NERD: conflict -> stop timer;
                                             INCOMPLETE -> advance
                                   +-> REVAL: matching NEVAL -> record, advance
-                                  +-> REVAL: same-node CMDERR 5 -> INCOMPLETE;
-                                             advance to next request
+                                  +-> REVAL: same-node CMDERR 5
+                                             legacy -> record absent, advance
+                                             VLCB/unknown -> INCOMPLETE, advance
 ```
 
 Diagnostics observes each connection's queued and received frame signals, so it

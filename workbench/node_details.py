@@ -32,6 +32,8 @@ class NodeDetails(QWidget):
     def __init__(self, events):
         super().__init__()
 
+        self.live_state = None
+        self.logical_layout = None
         self.node = None
         self.node_list_item = None
         self.editing_values = None
@@ -356,6 +358,8 @@ class NodeDetails(QWidget):
 
     def show_live_state(self, state: NodeState) -> None:
         """Refresh the selected identity from confirmed service values."""
+        self.live_state = state
+        self.backup_buttons["New"].setEnabled(self.logical_layout is not None)
         self.show_parameters(state.parameters)
         self.raw_values.show_live_values(state.parameters.get(6), state.nv_values)
         self.node_events.show_live_state(state)
@@ -385,7 +389,11 @@ class NodeDetails(QWidget):
         live_identity = isinstance(self.node, Pnn)
         if not live_identity or self.node.node_number != previous_live_node:
             self.node_events.show_node(None if live_identity else self.node)
-        self.node_backups.show_node(None if live_identity else self.node)
+        self.live_state = None
+        if live_identity and self.logical_layout is not None:
+            self.node_backups.show_live_node(self.logical_layout, self.node.node_number)
+        else:
+            self.node_backups.show_node(None if live_identity else self.node)
         self.backup_buttons["New"].setEnabled(
             self.node is not None and not live_identity
         )
@@ -396,7 +404,7 @@ class NodeDetails(QWidget):
         self.details_edit_button.setEnabled(enabled and not live_identity)
         self.events_edit_button.setEnabled(enabled and not live_identity)
         self.tabs.setTabEnabled(self.tabs.indexOf(self.variables_page), True)
-        self.tabs.setTabEnabled(self.tabs.indexOf(self.node_backups), not live_identity)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.node_backups), True)
         self.tabs.setCurrentWidget(
             selected_page
             if self.tabs.isTabEnabled(self.tabs.indexOf(selected_page))
@@ -448,7 +456,7 @@ class NodeDetails(QWidget):
 
         for name, button in self.backup_buttons.items():
             if name != "New":
-                button.setEnabled(selected)
+                button.setEnabled(selected and not isinstance(self.node, Pnn))
 
     def view_backup(self):
         self.backup_workflow.view(self.node)
@@ -457,7 +465,11 @@ class NodeDetails(QWidget):
         self.backup_workflow.compare(self.node)
 
     def new_backup(self):
-        self.backup_workflow.create(self.node)
+        if isinstance(self.node, Pnn):
+            if self.live_state is not None and self.logical_layout is not None:
+                self.backup_workflow.create_live(self.live_state, self.logical_layout)
+        else:
+            self.backup_workflow.create(self.node)
 
     def restore_backup(self):
         self.backup_workflow.restore(self.node)

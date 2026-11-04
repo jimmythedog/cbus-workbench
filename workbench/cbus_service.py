@@ -13,6 +13,7 @@ from .logging_config import trace
 from .neval import decode_neval
 from .numev import decode_numev
 from .nvans import decode_nvans
+from .parameter_names import vlcb_compatible
 from .paran import decode_paran
 from .pnn import Pnn, decode_pnn
 from .serial_connection import SerialConnection
@@ -20,7 +21,7 @@ from .tcp_connection import TcpConnection
 
 logger = logging.getLogger("workbench.cbus")
 AUTOMATIC_REQUEST_TIMEOUT_MS = 2000
-AUTOMATIC_PARAMETER_INDICES = (2, 4, 5, 6, 7, 10, 20, 19, 9)
+AUTOMATIC_PARAMETER_INDICES = (2, 4, 5, 6, 7, 8, 10, 20, 19, 9)
 RequestIndex = int | tuple[int, int]
 
 
@@ -42,8 +43,8 @@ class NodeState:
     stored_event_count: int | None = None
     # The index identifies a slot in this node's event table, not the event number.
     event_identities: dict[int, tuple[int, int]] = field(default_factory=dict)
-    # Zero is the assumed default until NEVAL confirms a value for that EV.
-    ev_values: dict[int, dict[int, int]] = field(default_factory=dict)
+    # Integer: confirmed value; None: confirmed absent; missing key: unknown.
+    ev_values: dict[int, dict[int, int | None]] = field(default_factory=dict)
     parameter_progress: DiscoveryProgress = DiscoveryProgress.NOT_STARTED
     nv_progress: DiscoveryProgress = DiscoveryProgress.NOT_STARTED
     event_progress: DiscoveryProgress = DiscoveryProgress.NOT_STARTED
@@ -635,26 +636,31 @@ class CbusService(QObject):
         self._finish_request("ev", node_number)
 
     def _receive_cmderr(self, node_number: int, code: int) -> None:
-        # CMDERR has no event or EV index. A matching node while REVAL is
-        # outstanding allows the queue to advance, but cannot confirm which EV
-        # failed or whether our request caused the error.
         if (
             code != 5
             or not self._outstanding_request
             or self._outstanding_request[:2] != ("ev", node_number)
         ):
             return
-        logger.debug(
-            "CMDERR 5 received with REVAL outstanding; EV remains unconfirmed",
-            extra={
-                "fields": {
-                    "layout": self.connection.layout_name,
-                    "node_number": node_number,
-                    "request": self._outstanding_request,
-                }
-            },
-        )
-        self._set_progress("ev", node_number, DiscoveryProgress.INCOMPLETE)
+        state = self.node_states[node_number]
+        fields = {
+            "layout": self.connection.layout_name,
+            "node_number": node_number,
+            "request": self._outstanding_request,
+        }
+        if vlcb_compatible(state.parameters.get(8)) is False:
+            # Legacy CBUS assumption: the same-node CMDERR belongs to our
+            # outstanding REVAL. CMDERR itself carries no event or EV index.
+            event_index, ev_index = self._outstanding_request[2]
+            state.ev_values.setdefault(event_index, {})[ev_index] = None
+            trace(logger, "Legacy EV confirmed absent", extra={"fields": fields})
+            self.node_state_updated.emit(node_number)
+        else:
+            logger.debug(
+                "CMDERR 5 received with REVAL outstanding; EV remains unconfirmed",
+                extra={"fields": fields},
+            )
+            self._set_progress("ev", node_number, DiscoveryProgress.INCOMPLETE)
         self._finish_request("ev", node_number)
 
     def _queue_event_count(self, node_number: int) -> None:

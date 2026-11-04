@@ -1,6 +1,8 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
 
+from .node_backup_files import list_backups
+
 
 class NodeBackups(QTreeWidget):
     def __init__(self):
@@ -13,8 +15,20 @@ class NodeBackups(QTreeWidget):
         self.backups_by_node = {}
         self.layout_backups = None
 
+    def show_live_node(self, logical_layout, node_number):
+        self.clear()
+        self.setHeaderLabels(["Filename", "Discovery"])
+        self.setColumnWidth(0, 340)
+        for path, complete in list_backups(logical_layout, node_number):
+            item = QTreeWidgetItem(
+                self, [path.name, "Complete" if complete else "Incomplete"]
+            )
+            item.setToolTip(0, str(path))
+
     def show_node(self, node):
         self.clear()
+        self.setHeaderLabels(["Created", "Description"])
+        self.setColumnWidth(0, 200)
 
         if node is None:
             return

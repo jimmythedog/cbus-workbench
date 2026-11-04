@@ -77,3 +77,8 @@ def firmware_version(parameters: dict[int, int]) -> str | None:
     if beta is not None and beta != 0:
         version += f" Beta {beta}"
     return version
+
+
+def vlcb_compatible(flags: int | None) -> bool | None:
+    """Decode parameter 8 bit 6; unavailable flags must remain unknown."""
+    return None if flags is None else bool(flags & 0x40)

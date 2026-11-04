@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QApplication
 
 from workbench import cbus_service
 from workbench.cbus_service import CbusService, DiscoveryProgress, NodeState
+from workbench.node_backup_files import node_backup
 from workbench.pnn import Pnn
 
 
@@ -54,9 +55,13 @@ class CbusServiceTests(unittest.TestCase):
         """Complete a one-request parameter pass for a discovered node."""
         self.connection.frame_received.emit(f":SB040N9B{node_number:04X}0000;".encode())
 
-    def start_ev_reads(self, ev_count: int, indices: tuple[int, ...] = (7,)) -> None:
+    def start_ev_reads(
+        self, ev_count: int, indices: tuple[int, ...] = (7,), flags: int | None = None
+    ) -> None:
         self.connection.frame_received.emit(b":SB040NB601020D2203;")
         self.connection.frame_received.emit(f":SB040N9B010205{ev_count:02X};".encode())
+        if flags is not None:
+            self.connection.frame_received.emit(f":SB040N9B010208{flags:02X};".encode())
         self.finish_short_parameter_pass()
         self.connection.frame_received.emit(
             f":SB040N740102{len(indices):02X};".encode()
@@ -96,6 +101,52 @@ class CbusServiceTests(unittest.TestCase):
                 self.assertEqual(state.ev_progress, DiscoveryProgress.IN_PROGRESS)
         self.assertEqual(state.ev_values, {2: {1: 0, 2: 9}, 7: {1: 3, 2: 4}})
         self.assertEqual(state.ev_progress, DiscoveryProgress.COMPLETE)
+
+    def test_legacy_sparse_ev_can_complete_discovery_and_backup(self):
+        self.start_ev_reads(3, flags=0)
+        self.connection.frame_received.emit(b":SB040N9B01020600;")
+        state = self.service.node_states[258]
+        for frame in (b":SB040N6F010305;", b":SB040N6F010206;"):
+            self.connection.frame_received.emit(frame)
+        self.assertEqual(state.ev_values, {})
+        self.connection.frame_received.emit(b":SB040NB50102070100;")
+        self.connection.frame_received.emit(b":SB040N6F010205;")
+        self.assertEqual(state.ev_values, {7: {1: 0, 2: None}})
+        self.assertFalse(node_backup(state)["complete"])
+        self.connection.frame_received.emit(b":SB040NB50102070309;")
+        self.assertEqual(state.ev_progress, DiscoveryProgress.COMPLETE)
+        backup = node_backup(state)
+        self.assertTrue(backup["complete"])
+        self.assertEqual(
+            backup["events"],
+            [{"nodeNumber": 10, "eventNumber": 20, "eventVariables": [0, None, 9]}],
+        )
+        self.connection.frame_received.emit(b":SB040N6F010205;")
+        self.assertEqual(state.ev_values, {7: {1: 0, 2: None, 3: 9}})
+
+    def test_vlcb_cmderr_remains_unknown(self):
+        self.start_ev_reads(2, flags=0x40)
+        self.connection.frame_received.emit(b":SB040N9B01020600;")
+        self.connection.frame_received.emit(b":SB040N6F010205;")
+        self.connection.frame_received.emit(b":SB040NB50102070200;")
+        state = self.service.node_states[258]
+        self.assertEqual(state.ev_values, {7: {2: 0}})
+        self.assertEqual(state.ev_progress, DiscoveryProgress.INCOMPLETE)
+        self.assertFalse(node_backup(state)["complete"])
+
+    def test_legacy_timeout_leaves_unknown_after_confirmed_absence(self):
+        self.start_ev_reads(3, flags=0)
+        self.connection.frame_received.emit(b":SB040N9B01020600;")
+        self.connection.frame_received.emit(b":SB040N6F010205;")
+        with self.assertLogs("workbench.cbus", level="WARNING"):
+            self.service._request_timer.timeout.emit()
+        state = self.service.node_states[258]
+        self.assertEqual(state.ev_values, {7: {1: None}})
+        self.assertEqual(state.ev_progress, DiscoveryProgress.INCOMPLETE)
+        self.assertFalse(node_backup(state)["complete"])
+        self.assertEqual(
+            node_backup(state)["events"][0]["eventVariables"], [None, None, None]
+        )
 
     def test_unrelated_malformed_and_late_neval_do_not_confirm_values(self):
         self.start_ev_reads(1)
@@ -878,8 +929,8 @@ class CbusServiceTests(unittest.TestCase):
 
         self.service.node_state_updated.connect(record_parameter_progress)
 
-        values = {2: 0, 4: 0, 5: 0, 6: 0, 7: 0, 10: 1, 20: 1, 19: 1, 9: 13}
-        expected_indices = (0, 2, 4, 5, 6, 7, 10, 20, 19, 9)
+        values = {2: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 10: 1, 20: 1, 19: 1, 9: 13}
+        expected_indices = (0, 2, 4, 5, 6, 7, 8, 10, 20, 19, 9)
         for index in expected_indices[1:]:
             with self.subTest(index=index):
                 self.connection.frame_received.emit(
@@ -911,7 +962,7 @@ class CbusServiceTests(unittest.TestCase):
         self.connection.frame_received.emit(b":SB040NB601020D2203;")
         self.connection.frame_received.emit(b":SB040N9B01020013;")
 
-        expected_indices = (0, 2, 4, 5, 6, 7, 10, 19, 9)
+        expected_indices = (0, 2, 4, 5, 6, 7, 8, 10, 19, 9)
         for index in expected_indices[1:]:
             self.connection.frame_received.emit(f":SB040N9B0102{index:02X}00;".encode())
 
