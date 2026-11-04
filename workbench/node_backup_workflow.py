@@ -105,6 +105,14 @@ class NodeBackupWorkflow:
             if dialog.clickedButton() is not save:
                 trace(logger, "Incomplete node backup cancelled")
                 return
+        description, accepted = QInputDialog.getText(
+            self.parent, "New node backup", "Description (optional):"
+        )
+        if not accepted:
+            trace(logger, "Node backup creation cancelled")
+            return
+        if description.strip():
+            backup["description"] = description.strip()
         path = save_backup(logical_layout, backup)
         self.backups.show_live_node(logical_layout, state.identity.node_number)
         self._show_status(f"Node backup saved: {path}")

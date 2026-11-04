@@ -23,6 +23,12 @@ class NodeBackupFilesTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        description = patch(
+            "workbench.node_backup_workflow.QInputDialog.getText",
+            return_value=("", True),
+        )
+        self.description = description.start()
+        self.addCleanup(description.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         paths = patch(
@@ -46,6 +52,35 @@ class NodeBackupFilesTests(unittest.TestCase):
         self.details.show_node(item)
         self.details.show_live_state(self.state)
 
+    def test_description_yaml_and_list_display(self):
+        for kind in ("parameter", "nv", "event", "ev"):
+            setattr(self.state, f"{kind}_progress", DiscoveryProgress.COMPLETE)
+        self.state.nv_values = {1: 0, 2: 4, 3: 8}
+        self.state.ev_values[7] = {1: 0, 2: 5, 3: 9, 4: None}
+        for entered, expected in (("  Before changes  ", "Before changes"), ("  ", "")):
+            with self.subTest(description=entered):
+                self.description.return_value = (entered, True)
+                self.details.new_backup()
+                row = self.details.node_backups.topLevelItem(0)
+                path = row.data(0, Qt.ItemDataRole.UserRole)
+                saved = yaml.safe_load(path.read_text())
+                self.assertEqual(saved.get("description", ""), expected)
+                if not expected:
+                    self.assertNotIn("description", saved)
+                self.assertEqual(row.text(0), path.name)
+                self.assertEqual(row.text(1), expected)
+                self.assertTrue(row.icon(0).isNull())
+                self.assertEqual(row.toolTip(0), str(path))
+
+    def test_cancel_description_writes_no_files(self):
+        self.description.return_value = ("Ignored", False)
+        self.state.nv_values[2] = 4
+        self.state.ev_values[7][2] = 5
+        for kind in ("parameter", "nv", "event", "ev"):
+            setattr(self.state, f"{kind}_progress", DiscoveryProgress.COMPLETE)
+        self.details.new_backup()
+        self.assertEqual(self.files(), [])
+
     def test_live_backup_view_compare_and_disabled_destructive_actions(self):
         from PySide6.QtWidgets import QTreeWidget
 
@@ -53,7 +88,9 @@ class NodeBackupFilesTests(unittest.TestCase):
         from workbench.backup_view import BackupView
         from workbench.node_backup_files import save_backup
 
-        path = save_backup("Yard", node_backup(self.state))
+        backup = node_backup(self.state)
+        backup["description"] = "Before changes"
+        path = save_backup("Yard", backup)
         self.details.node_backups.show_live_node("Yard", 42)
         row = self.details.node_backups.topLevelItem(0)
         self.assertEqual(row.data(0, Qt.ItemDataRole.UserRole), path)
@@ -154,8 +191,15 @@ class NodeBackupFilesTests(unittest.TestCase):
         self.details.node_backups.clear()
         self.details.show_node(self.details.node_list_item)
         self.assertEqual(self.details.node_backups.topLevelItem(0).text(0), path.name)
+        row = self.details.node_backups.topLevelItem(0)
+        self.assertEqual(self.details.node_backups.columnCount(), 2)
+        self.assertEqual(self.details.node_backups.headerItem().text(0), "Filename")
+        self.assertEqual(self.details.node_backups.headerItem().text(1), "Description")
+        self.assertEqual(row.text(1), "")
+        self.assertFalse(row.icon(0).isNull())
         self.assertEqual(
-            self.details.node_backups.topLevelItem(0).text(1), "Incomplete"
+            row.toolTip(0),
+            "Configuration discovery was incomplete when this backup was created.",
         )
         self.assertFalse(self.details.backup_buttons["Restore"].isEnabled())
 

@@ -81,6 +81,19 @@ The live node's Backups tab saves discovered configuration as YAML and lists sav
 files. Incomplete discovery requires Cancel / Save Anyway; partial files contain
 `complete: false` and `null` for unconfirmed known positions. Files are stored under
 Data → `layouts/<logical-layout>/nodes/<node-number>/backups/<timestamp>.yaml`.
+You can enter an optional description when creating a node or layout backup.
+Descriptions appear beside timestamp filenames in backup lists; layout descriptions
+are stored only in the manifest and also shown for its linked node backups.
+Blank descriptions are omitted from YAML.
+
+In both node and layout backup lists, no icon beside a filename means discovery
+was complete when the backup was created. A warning icon means some configuration
+information was missing or unconfirmed. Typical causes include node variables
+(NVs) or event variables (EVs) that had not been read, unavailable configuration
+counts, or interrupted discovery. Incomplete backups retain successfully discovered
+values, but may not reproduce the complete configuration when restored. Hover over
+the warning icon to see an explanatory tooltip.
+
 Select a saved backup in the live node’s Backups tab to View its configuration or
 Compare it with the current discovered values. Comparisons identify events by
 node number and event number. Unknown values make the result inconclusive; they

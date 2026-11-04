@@ -114,7 +114,7 @@ def save_backup(logical_layout: str, backup: dict, filename: str | None = None) 
 
 def list_backups(
     logical_layout: str, node_number: int | None = None
-) -> list[tuple[Path, bool]]:
+) -> list[tuple[Path, bool, str]]:
     directory = backup_directory(logical_layout, node_number)
     if not directory.exists():
         return []
@@ -122,7 +122,28 @@ def list_backups(
     for path in sorted(directory.glob("*.yaml"), reverse=True):
         with path.open(encoding="utf-8") as stream:
             backup = yaml.safe_load(stream)
-        backups.append((path, backup["complete"]))
+        description = backup.get("description", "")
+        if node_number is not None and backup.get("partOfLayoutBackup") is True:
+            # Layout members share their parent's filename, not its description.
+            manifest_path = backup_directory(logical_layout) / path.name
+            try:
+                with manifest_path.open(encoding="utf-8") as stream:
+                    manifest = yaml.safe_load(stream)
+                description = manifest.get("description", "")
+            except FileNotFoundError:
+                description = ""
+            trace(
+                logger,
+                "Layout member description resolved",
+                extra={
+                    "fields": {
+                        "manifest": str(manifest_path),
+                        "node_number": node_number,
+                        "has_description": bool(description),
+                    }
+                },
+            )
+        backups.append((path, backup["complete"], description))
     trace(
         logger,
         "Configuration backups listed",

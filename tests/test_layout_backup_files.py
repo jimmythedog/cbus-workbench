@@ -15,6 +15,7 @@ from workbench.backup_view import BackupView
 from workbench.cbus_service import DiscoveryProgress, NodeState
 from workbench.layout_view import LayoutView
 from workbench.node_backup_files import load_node_backup, node_backup, save_backup
+from workbench.node_backups import NodeBackups
 from workbench.pnn import Pnn
 from workbench.ui_errors import ErrorReporter
 
@@ -26,6 +27,12 @@ class LayoutBackupTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        description = patch(
+            "workbench.layout_backup_workflow.QInputDialog.getText",
+            return_value=("", True),
+        )
+        self.description = description.start()
+        self.addCleanup(description.stop)
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
@@ -65,6 +72,68 @@ class LayoutBackupTests(unittest.TestCase):
         QTimer.singleShot(0, click)
         self.view.backup_buttons["New"].click()
 
+    def test_description_yaml_and_list_display(self):
+        for kind in ("parameter", "nv", "event", "ev"):
+            setattr(self.state, f"{kind}_progress", DiscoveryProgress.COMPLETE)
+        self.state.nv_values = {1: 0, 2: 4, 3: 8}
+        self.state.ev_values[7] = {1: 0, 2: 5, 3: 9, 4: None}
+        for entered, expected in (("  Before changes  ", "Before changes"), ("  ", "")):
+            with self.subTest(description=entered):
+                self.description.return_value = (entered, True)
+                self.view.new_backup()
+                row = self.view.layout_backups.topLevelItem(0)
+                path = row.data(0, Qt.ItemDataRole.UserRole)
+                saved = yaml.safe_load(path.read_text())
+                self.assertEqual(saved.get("description", ""), expected)
+                if not expected:
+                    self.assertNotIn("description", saved)
+                self.assertEqual(row.text(0), path.name)
+                self.assertEqual(row.text(1), expected)
+                self.assertTrue(row.icon(0).isNull())
+                self.assertEqual(row.toolTip(0), str(path))
+                linked = self.root / "layouts/Yard/nodes/42/backups" / path.name
+                self.assertNotIn("description", load_node_backup(linked))
+
+    def test_node_list_inherits_only_its_matching_manifest_description(self):
+        tree = NodeBackups()
+        self.addCleanup(tree.close)
+        expected = {}
+        for description in ("First layout", "Second layout", ""):
+            self.description.return_value = (description, True)
+            self.view.new_backup()
+            row = self.view.layout_backups.topLevelItem(0)
+            manifest = row.data(0, Qt.ItemDataRole.UserRole)
+            expected[manifest.name] = description
+
+        # A retained node file remains listable after its manifest is removed.
+        self.description.return_value = ("Removed parent", True)
+        self.view.new_backup()
+        manifest = self.view.layout_backups.topLevelItem(0).data(
+            0, Qt.ItemDataRole.UserRole
+        )
+        expected[manifest.name] = ""
+        manifest.unlink()
+
+        standalone = node_backup(self.state)
+        standalone["description"] = "Standalone node"
+        path = save_backup("Yard", standalone)
+        expected[path.name] = "Standalone node"
+        tree.show_live_node("Yard", 42)
+        displayed = {
+            tree.topLevelItem(index).text(0): tree.topLevelItem(index).text(1)
+            for index in range(tree.topLevelItemCount())
+        }
+        self.assertEqual(displayed, expected)
+        for node_path in (self.root / "layouts/Yard/nodes/42/backups").glob("*.yaml"):
+            backup = load_node_backup(node_path)
+            if backup["partOfLayoutBackup"]:
+                self.assertNotIn("description", backup)
+
+    def test_cancel_description_writes_no_files(self):
+        self.description.return_value = ("Ignored", False)
+        self.view.new_backup()
+        self.assertEqual(list((self.root / "layouts/Yard/backups").glob("*.yaml")), [])
+
     def test_save_repeatedly_and_list_only_selected_layout(self):
         other = NodeState(Pnn(99, 2, 3, 4))
         other.parameters = {6: 0}
@@ -101,7 +170,7 @@ class LayoutBackupTests(unittest.TestCase):
         self.view.show_live_layout("Yard", lambda: [self.state])
         self.assertEqual(self.view.layout_backups.topLevelItemCount(), 2)
         row = self.view.layout_backups.topLevelItem(0)
-        self.assertEqual(row.text(1), "Complete")
+        self.assertEqual(row.text(1), "")
         self.view.layout_backups.setCurrentItem(row)
         self.assertTrue(self.view.backup_buttons["View"].isEnabled())
         for name in ("Restore", "Delete"):
@@ -230,7 +299,16 @@ class LayoutBackupTests(unittest.TestCase):
         backup = yaml.safe_load(self.files()[0].read_text())
         self.assertFalse(backup["complete"])
         self.assertEqual(backup["nodeNumbers"], [42])
-        self.assertEqual(self.view.layout_backups.topLevelItem(0).text(1), "Incomplete")
+        row = self.view.layout_backups.topLevelItem(0)
+        self.assertEqual(self.view.layout_backups.columnCount(), 2)
+        self.assertEqual(self.view.layout_backups.headerItem().text(0), "Filename")
+        self.assertEqual(self.view.layout_backups.headerItem().text(1), "Description")
+        self.assertEqual(row.text(1), "")
+        self.assertFalse(row.icon(0).isNull())
+        self.assertEqual(
+            row.toolTip(0),
+            "Configuration discovery was incomplete when this backup was created.",
+        )
 
     def test_empty_discovery_requires_confirmation_and_stays_incomplete(self):
         self.view.show_live_layout("Empty", list)

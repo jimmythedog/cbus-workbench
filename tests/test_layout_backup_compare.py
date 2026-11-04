@@ -24,6 +24,12 @@ class LayoutBackupCompareTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        description = patch(
+            "workbench.layout_backup_workflow.QInputDialog.getText",
+            return_value=("Before layout changes", True),
+        )
+        self.description = description.start()
+        self.addCleanup(description.stop)
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)

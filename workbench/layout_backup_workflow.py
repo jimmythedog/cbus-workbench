@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtWidgets import QMessageBox, QWidget
+from PySide6.QtWidgets import QInputDialog, QMessageBox, QWidget
 
 from .cbus_service import NodeState
 from .logging_config import trace
@@ -58,6 +58,23 @@ def create_layout_backup(
                 extra={"fields": {"layout": logical_layout}},
             )
             return None
+    description, accepted = QInputDialog.getText(
+        parent, "New layout backup", "Description (optional):"
+    )
+    if not accepted:
+        trace(
+            logger,
+            "Layout backup creation cancelled",
+            extra={"fields": {"layout": logical_layout}},
+        )
+        return None
+    manifest = {
+        "format_version": 1,
+        "complete": complete,
+        "nodeNumbers": [node["node"] for node in nodes],
+    }
+    if description.strip():
+        manifest["description"] = description.strip()
     filename = f"{datetime.now():%Y-%m-%d_%H-%M-%S-%f}.yaml"
     # Publish the manifest only after all associated node files have been written.
     # Failed writes propagate to the existing reporter; earlier files are retained.
@@ -66,10 +83,6 @@ def create_layout_backup(
         save_backup(logical_layout, node, filename)
     return save_backup(
         logical_layout,
-        {
-            "format_version": 1,
-            "complete": complete,
-            "nodeNumbers": [node["node"] for node in nodes],
-        },
+        manifest,
         filename,
     )

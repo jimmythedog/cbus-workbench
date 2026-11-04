@@ -113,8 +113,9 @@ writing. Filenames provide timestamps; listing reads actual files from the Qt
 Data directory. Live restore and other unfinished backup actions are disabled.
 
 Live layout saves capture the selected view's service states with the same
-`node_backup` serializer. The manifest contains only `format_version`, `complete`
-and `nodeNumbers`. Each node record carries `partOfLayoutBackup: true` (standalone
+`node_backup` serializer. The manifest contains `format_version`, `complete`,
+`nodeNumbers` and an optional `description` (never copied to linked node files).
+Each node record carries `partOfLayoutBackup: true` (standalone
 records use `false`). One filename identifies the manifest and all associated node
 files in their existing backup directories. The common writer accepts that filename.
 This retains the prototype's relationship between a layout backup and node snapshots
@@ -122,7 +123,9 @@ without embedding or duplicating node configuration in the manifest.
 
 No new discovery or hardware writes are triggered. Completeness describes the
 included discovered nodes, not whether undiscovered hardware exists; an empty set
-is incomplete. The confirmation lists incomplete node numbers.
+is incomplete. The confirmation lists incomplete node numbers. After acknowledgement
+(or directly for complete discovery), an optional description dialog allows saving
+or cancelling before any files are written.
 
     selected states -> node_backup for each node -> completeness check
                                                     |             |

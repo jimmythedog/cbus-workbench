@@ -1,5 +1,5 @@
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
+from PySide6.QtWidgets import QStyle, QTreeWidget, QTreeWidgetItem
 
 from .node_backup_files import list_backups
 
@@ -17,13 +17,22 @@ class NodeBackups(QTreeWidget):
 
     def show_live_node(self, logical_layout, node_number):
         self.clear()
-        self.setHeaderLabels(["Filename", "Discovery"])
+        self.setHeaderLabels(["Filename", "Description"])
         self.setColumnWidth(0, 340)
-        for path, complete in list_backups(logical_layout, node_number):
-            item = QTreeWidgetItem(
-                self, [path.name, "Complete" if complete else "Incomplete"]
-            )
+        for path, complete, description in list_backups(logical_layout, node_number):
+            item = QTreeWidgetItem(self, [path.name, description])
             item.setToolTip(0, str(path))
+            if not complete:
+                item.setIcon(
+                    0,
+                    self.style().standardIcon(
+                        QStyle.StandardPixmap.SP_MessageBoxWarning
+                    ),
+                )
+                item.setToolTip(
+                    0,
+                    "Configuration discovery was incomplete when this backup was created.",
+                )
             item.setData(0, Qt.ItemDataRole.UserRole, path)
 
     def show_node(self, node):
