@@ -20,6 +20,7 @@ from .app_settings import (
     load_settings,
     save_settings,
 )
+from .application_directories_dialog import ApplicationDirectoriesDialog
 from .cbus_service import CbusService
 from .diagnostics import Diagnostics
 from .layout_settings import LayoutSettingsDialog
@@ -191,6 +192,12 @@ class MainWindow(QMainWindow):
             action.setChecked(level == current_level)
 
         help_menu = self.menuBar().addMenu("&Help")
+
+        directories_action = QAction("Application Directories…", self)
+        directories_action.triggered.connect(
+            lambda: ApplicationDirectoriesDialog(self).exec()
+        )
+        help_menu.addAction(directories_action)
 
         about_action = QAction("&About CBUS Workbench…", self)
         about_action.triggered.connect(self.show_about)

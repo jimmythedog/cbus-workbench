@@ -3,19 +3,19 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from workbench.app_settings import APP_NAME
 from workbench.logging_config import configure_logging, trace
+from workbench.paths import APP_NAME, DISPLAY_NAME
 from workbench.window import MainWindow
 
 
 def main():
+    app = QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
+    app.setApplicationDisplayName(DISPLAY_NAME)
     log_path = configure_logging()
     logger = logging.getLogger("workbench.app")
     logger.info("Application starting", extra={"fields": {"log_file": str(log_path)}})
     trace(logger, "Constructing Qt application and main window")
-    app = QApplication(sys.argv)
-    app.setApplicationName(APP_NAME)
-
     window = MainWindow()
     previous_excepthook = sys.excepthook
     sys.excepthook = window.error_reporter.handle_unexpected

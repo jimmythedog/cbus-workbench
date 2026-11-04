@@ -4,12 +4,12 @@ import logging
 from pathlib import Path
 
 import yaml
-from PySide6.QtCore import QIODeviceBase, QSaveFile, QStandardPaths
+from PySide6.QtCore import QIODeviceBase, QSaveFile
 
 from .logging_config import trace
+from .paths import application_directories
 
 logger = logging.getLogger("workbench.settings")
-APP_NAME = "CBUS Workbench"
 
 
 class SettingsError(ValueError):
@@ -17,11 +17,8 @@ class SettingsError(ValueError):
 
 
 def settings_path() -> Path:
-    """Use Qt's per-user application data location on each platform."""
-    directory = QStandardPaths.writableLocation(
-        QStandardPaths.StandardLocation.AppDataLocation
-    )
-    return Path(directory) / "settings.yaml"
+    """Return the settings file in Qt's configuration directory."""
+    return application_directories()["Configuration"] / "settings.yaml"
 
 
 def _validate_layout(name: object, value: object) -> dict:

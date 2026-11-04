@@ -23,7 +23,7 @@ class AppSettingsTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.path = Path(temporary.name) / "data" / "settings.yaml"
 
-    def test_path_uses_qt_application_data_location(self):
+    def test_path_uses_qt_application_config_location(self):
         previous_name = QCoreApplication.applicationName()
         self.addCleanup(QCoreApplication.setApplicationName, previous_name)
         QCoreApplication.setApplicationName("Settings Path Test")
@@ -34,7 +34,7 @@ class AppSettingsTests(unittest.TestCase):
             path,
             Path(
                 QStandardPaths.writableLocation(
-                    QStandardPaths.StandardLocation.AppDataLocation
+                    QStandardPaths.StandardLocation.AppConfigLocation
                 )
             )
             / "settings.yaml",

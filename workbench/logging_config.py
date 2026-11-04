@@ -1,10 +1,11 @@
 """Configure the application's persistent, plain-text log."""
 
 import logging
-import os
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+from .paths import application_directories
 
 TRACE = 5
 logging.addLevelName(TRACE, "TRACE")
@@ -20,14 +21,8 @@ def trace(
 
 
 def log_directory() -> Path:
-    """Return the per-user log directory for the current operating system."""
-    if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return base / "CBUS Workbench" / "Logs"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Logs" / "CBUS Workbench"
-    base = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
-    return base / "cbus-workbench" / "logs"
+    """Return the log directory within Qt's per-user state location."""
+    return application_directories()["State"] / "logs"
 
 
 class _PlainTextFormatter(logging.Formatter):

@@ -43,30 +43,48 @@ The NixOS setup is a development-environment exception, not a separate applicati
 
 ## Quality checks
 
-Ruff handles Python linting and formatting:
+The project provides a `Makefile` with convenient commands for common development tasks.
+
+| Command | Purpose |
+|---|---|
+| `make` | Show available commands |
+| `make run` | Run the application |
+| `make test` | Run the full Python test suite |
+| `make lint` | Run Ruff lint checks |
+| `make format` | Format Python source files |
+| `make check` | Run tests, linting, formatting checks and `git diff --check` |
+
+The Makefile automatically uses `nix-shell .shell.nix` on NixOS, ensuring tests run with Nix-provided Python and PySide6. On other platforms, tests use the uv-managed environment.
+
+To run the full validation before committing:
 
 ```sh
+make check
+```
+
+The equivalent commands can also be run individually. For example, on NixOS:
+
+```sh
+nix-shell .shell.nix --run 'python -m unittest discover -s tests'
 ruff check .
 ruff format --check .
+git diff --check
 ```
 
-On systems where Ruff is installed through uv as a development dependency, use `uv run ruff` instead.
+On other platforms, use `uv run python -m unittest discover -s tests` for the tests.
 
-Run the focused TCP connection and frame checks with:
+The Makefile requires GNU Make. Windows developers can use an environment such as MSYS2 or run the underlying commands directly.
 
-```sh
-python -m unittest discover -s tests -v
-```
+GitHub Actions continues to run its own validation commands.
 
 ## Logs
 
 The application configures standard Python logging before constructing the Qt UI. Development runs start at TRACE; PyInstaller packaged releases start at INFO. Logs go to a rotating plain-text file (5 MiB per file, three backups). The first `configure_logging()` call sets the initial level and log destination; the View → Logging Level menu can change the `workbench` logger's level for the current session.
 
-The file is `cbus-workbench.log` in the per-user log directory:
-
-- Windows: `%LOCALAPPDATA%\CBUS Workbench\Logs`
-- macOS: `~/Library/Logs/CBUS Workbench`
-- Linux: `${XDG_STATE_HOME:-~/.local/state}/cbus-workbench/logs`
+The file is `cbus-workbench.log` in the `logs` subdirectory of Qt's
+`StateLocation`. On Linux this defaults to
+`${XDG_STATE_HOME:-~/.local/state}/cbus-workbench/logs`. Help → Application
+Directories shows the locations resolved on the current platform.
 
 Use a logger named `workbench.<area>`. For detailed records, call `trace(logger, "Opening %s", name)` from `workbench.logging_config`. Pass identifying fields as `extra={"fields": {"layout_id": 12}}`; they appear as `layout_id=12` after the message. Keep sensitive values out of log messages and fields.
 
@@ -80,8 +98,9 @@ changes to `NodeBackups`. After a restore, one callback to `NodeDetails` refresh
 the variable and event displays; layout backups still use the same `NodeBackups`
 store through `LayoutView`.
 
-`workbench.app_settings` owns the single `settings.yaml` in Qt's `AppDataLocation`
-for the application name `CBUS Workbench`. Its YAML mapping uses display names as
+`workbench.paths` resolves Qt's application directories for `cbus-workbench`;
+the display name remains `CBUS Workbench`. `workbench.app_settings` owns the
+single `settings.yaml` in `AppConfigLocation`. Its YAML mapping uses display names as
 layout keys and keeps TCP and serial connection fields together so switching types
 does not discard the inactive endpoint. It validates before saving and uses Qt's
 `QSaveFile` to replace an existing file atomically. `MainWindow` loads these settings

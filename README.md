@@ -50,3 +50,7 @@ CBUS Workbench will be developed using Python and PySide6 (Qt).
 Development follows an outside-in approach, starting with the user interface before implementing CBUS communications.
 
 See [Requirements](REQUIREMENTS.md) for the intended capabilities and [Development Guidelines](AGENTS.md) for the project's development principles.
+
+Application directories are available under **Help → Application Directories…**.
+Settings are stored in Qt's configuration directory; logs are in its state
+directory. Move an existing `settings.yaml` to the configuration directory manually.

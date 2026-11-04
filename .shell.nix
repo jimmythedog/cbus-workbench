@@ -14,4 +14,5 @@ pkgs.mkShell {
   ];
 
   UV_PYTHON_DOWNLOADS = "never";
+  QT_QPA_PLATFORM = "xcb";
 }
