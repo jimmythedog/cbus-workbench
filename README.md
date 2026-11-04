@@ -27,9 +27,8 @@ Variables tab shows confirmed values as they arrive. Unread values show `-`;
 confirmed zero shows `0`. Live values are read-only.
 The selected live node's Events tab shows known produced events alongside
 consumed events. Expand a consumed event to see its EV values. Discovered events
-and EVs update as replies arrive; an unknown EV shows `-`. Displayed zero EVs
-may be assumed defaults where no reply was received. Hide zero EVs filters the
-display without changing stored values. Live events are read-only.
+and EVs update as replies arrive; an unconfirmed EV shows `-` and a confirmed
+zero shows `0`. Live events are read-only.
 Messages / Diagnostics also shows sent and received CBUS frames, including parameter
 requests and replies. It labels supported opcodes and shows raw frames for others.
 Layout → New, Edit and Delete save changes to that file. The first layout is the

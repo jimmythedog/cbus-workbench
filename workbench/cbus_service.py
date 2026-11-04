@@ -591,16 +591,13 @@ class CbusService(QObject):
             return
         self._ev_started.add(node_number)
         for event_index in sorted(state.event_identities):
-            state.ev_values[event_index] = {
-                ev_index: 0 for ev_index in range(1, count + 1)
-            }
             self._request_queue.extend(
                 ("ev", node_number, (event_index, ev_index))
                 for ev_index in range(1, count + 1)
             )
         trace(
             logger,
-            "Automatic EV reads queued with assumed zero defaults",
+            "Automatic EV reads queued",
             extra={
                 "fields": {
                     "layout": self.connection.layout_name,
@@ -630,15 +627,17 @@ class CbusService(QObject):
                 extra={"fields": {**fields, "outstanding": self._outstanding_request}},
             )
             return
-        self.node_states[node_number].ev_values[event_index][ev_index] = value
+        self.node_states[node_number].ev_values.setdefault(event_index, {})[
+            ev_index
+        ] = value
         trace(logger, "EV value confirmed", extra={"fields": fields})
         self.node_state_updated.emit(node_number)
         self._finish_request("ev", node_number)
 
     def _receive_cmderr(self, node_number: int, code: int) -> None:
         # CMDERR has no event or EV index. A matching node while REVAL is
-        # outstanding provisionally means this EV is undefined. This does not
-        # prove the error was caused by our request.
+        # outstanding allows the queue to advance, but cannot confirm which EV
+        # failed or whether our request caused the error.
         if (
             code != 5
             or not self._outstanding_request
@@ -646,7 +645,7 @@ class CbusService(QObject):
         ):
             return
         logger.debug(
-            "CMDERR 5 received with REVAL outstanding; keeping assumed zero",
+            "CMDERR 5 received with REVAL outstanding; EV remains unconfirmed",
             extra={
                 "fields": {
                     "layout": self.connection.layout_name,
@@ -655,6 +654,7 @@ class CbusService(QObject):
                 }
             },
         )
+        self._set_progress("ev", node_number, DiscoveryProgress.INCOMPLETE)
         self._finish_request("ev", node_number)
 
     def _queue_event_count(self, node_number: int) -> None:

@@ -38,24 +38,14 @@ class NodeDetailsFormTests(unittest.TestCase):
         self.assertEqual(details.node_number.text(), "-")
         self.assertEqual(details.summary.title(), "Node details")
 
-    def test_hide_zero_evs_filters_configured_events_without_changing_values(self):
+    def test_configured_zero_ev_is_visible(self):
         node = Node(42, "Configured", 12, "1a", False)
         node.consumed_events = {"42:10": "Signal"}
         node.ev_values = {"42:10": {1: 0, 2: 7}}
         self.select(node)
-        events = self.details.node_events
-        event = events.consumed_table.topLevelItem(0)
-        event.setExpanded(True)
-
-        events.hide_zero_evs.setChecked(True)
-        self.assertFalse(event.isHidden())
-        self.assertTrue(event.isExpanded())
-        self.assertTrue(event.child(0).isHidden())
-        self.assertFalse(event.child(1).isHidden())
-
-        events.hide_zero_evs.setChecked(False)
+        event = self.details.node_events.consumed_table.topLevelItem(0)
+        self.assertEqual(event.child(0).text(1), "0")
         self.assertFalse(event.child(0).isHidden())
-        self.assertEqual(node.ev_values["42:10"], {1: 0, 2: 7})
 
     def test_details_stay_grouped_at_top_when_switching_node_types(self):
         details = self.details

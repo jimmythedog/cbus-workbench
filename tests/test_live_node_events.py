@@ -3,7 +3,7 @@
 import os
 import unittest
 
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication
 
 from workbench.cbus_service import NodeState
 from workbench.layout_view import LayoutView
@@ -37,7 +37,7 @@ class LiveNodeEventsTests(unittest.TestCase):
         details.tabs.setCurrentWidget(events)
 
         self.assertEqual(events.widget(0).title(), "Known produced events")
-        self.assertEqual(events.widget(1).findChild(QLabel).text(), "Consumed events")
+        self.assertEqual(events.widget(1).title(), "Consumed events")
         self.assertEqual(events.produced_table.item(0, 0).text(), "258:45")
         self.assertEqual(events.produced_table.item(0, 1).text(), "Signal cleared")
         first = events.consumed_table.topLevelItem(0)
@@ -55,44 +55,6 @@ class LiveNodeEventsTests(unittest.TestCase):
             ],
             [("EV 1", "8"), ("EV 2", "0")],
         )
-
-    def test_hide_zero_evs_filters_live_updates_without_hiding_events(self):
-        node = Pnn(258, 13, 34, 0x03)
-        state = NodeState(
-            node,
-            parameters={5: 2},
-            event_identities={1: (258, 10), 2: (258, 11)},
-            ev_values={1: {1: 0, 2: 7}, 2: {1: 0, 2: 0}},
-        )
-        self.states[258] = state
-        self.view.show_identity(node)
-        events = self.view.details.node_events
-        tree = events.consumed_table
-        first = tree.topLevelItem(0)
-        first.setExpanded(True)
-        self.assertFalse(events.hide_zero_evs.isChecked())
-        self.assertFalse(first.child(0).isHidden())
-
-        events.hide_zero_evs.setChecked(True)
-        self.assertEqual(tree.topLevelItemCount(), 2)
-        self.assertTrue(first.isExpanded())
-        self.assertTrue(first.child(0).isHidden())
-        self.assertFalse(first.child(1).isHidden())
-        all_zero_event = tree.topLevelItem(1)
-        self.assertFalse(all_zero_event.isHidden())
-        self.assertTrue(all_zero_event.child(0).isHidden())
-        self.assertTrue(all_zero_event.child(1).isHidden())
-
-        state.ev_values[1][2] = 0
-        self.view.refresh_state(258)
-        first = tree.topLevelItem(0)
-        self.assertTrue(first.isExpanded())
-        self.assertTrue(first.child(1).isHidden())
-
-        events.hide_zero_evs.setChecked(False)
-        self.assertFalse(first.child(0).isHidden())
-        self.assertFalse(first.child(1).isHidden())
-        self.assertTrue(first.isExpanded())
 
     def test_discovery_refresh_and_node_change_replace_visible_events(self):
         first = Pnn(258, 13, 34, 0x03)

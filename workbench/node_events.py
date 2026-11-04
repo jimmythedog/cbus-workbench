@@ -7,8 +7,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
     QGroupBox,
-    QHBoxLayout,
-    QLabel,
     QSpinBox,
     QSplitter,
     QStyle,
@@ -84,16 +82,8 @@ class NodeEvents(QSplitter):
         )
         produced_layout.addWidget(self.produced_table)
 
-        consumed = QWidget()
+        consumed = QGroupBox("Consumed events")
         consumed_layout = QVBoxLayout(consumed)
-
-        self.hide_zero_evs = QCheckBox("Hide zero EVs")
-        self.hide_zero_evs.toggled.connect(self.apply_zero_filter)
-        heading = QHBoxLayout()
-        heading.addSpacing(self.hide_zero_evs.sizeHint().width())
-        heading.addWidget(QLabel("Consumed events"), 1, Qt.AlignmentFlag.AlignCenter)
-        heading.addWidget(self.hide_zero_evs)
-        consumed_layout.addLayout(heading)
 
         self.consumed_table = QTreeWidget()
         self.consumed_table.setExpandsOnDoubleClick(False)
@@ -167,7 +157,6 @@ class NodeEvents(QSplitter):
             details.setSizeHint(1, form.sizeHint())
 
         self.set_editing(False)
-        self.apply_zero_filter()
 
     def show_produced_events(self, node_number: int) -> None:
         produced = [
@@ -216,15 +205,6 @@ class NodeEvents(QSplitter):
                 )
             parent.setExpanded(index in expanded)
         self.set_editing(False)
-        self.apply_zero_filter()
-
-    def apply_zero_filter(self) -> None:
-        hide_zeros = self.hide_zero_evs.isChecked()
-        for row in range(self.consumed_table.topLevelItemCount()):
-            event = self.consumed_table.topLevelItem(row)
-            for child_index in range(event.childCount()):
-                ev = event.child(child_index)
-                ev.setHidden(hide_zeros and ev.text(1) == "0")
 
     def set_editing(self, editing):
         self.produced_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)

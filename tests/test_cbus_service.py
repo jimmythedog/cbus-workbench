@@ -79,7 +79,7 @@ class CbusServiceTests(unittest.TestCase):
         state = self.service.node_states[258]
         self.assertEqual(state.event_progress, DiscoveryProgress.COMPLETE)
         self.assertEqual(state.ev_progress, DiscoveryProgress.IN_PROGRESS)
-        self.assertEqual(state.ev_values, {2: {1: 0, 2: 0}, 7: {1: 0, 2: 0}})
+        self.assertEqual(state.ev_values, {})
         self.assertEqual(self.connection.sent[-1], b":SBFC0N9C01020201;")
 
         for event_index, ev_index, value, next_frame in (
@@ -108,7 +108,7 @@ class CbusServiceTests(unittest.TestCase):
             b":SB040NB501020701;",  # Missing value.
         ):
             self.connection.frame_received.emit(frame)
-        self.assertEqual(state.ev_values, {7: {1: 0}})
+        self.assertEqual(state.ev_values, {})
         self.assertEqual(self.connection.sent, sent)
         self.connection.frame_received.emit(b":SB040NB50102070105;")
         self.assertEqual(state.ev_values, {7: {1: 5}})
@@ -126,17 +126,17 @@ class CbusServiceTests(unittest.TestCase):
         first = self.service.node_states[258]
         self.assertEqual(first.event_progress, DiscoveryProgress.COMPLETE)
         self.assertEqual(first.ev_progress, DiscoveryProgress.INCOMPLETE)
-        self.assertEqual(first.ev_values, {7: {1: 8, 2: 0}})
+        self.assertEqual(first.ev_values, {7: {1: 8}})
         self.assertEqual(self.connection.sent[-1], b":SBFC0N73010300;")
         self.connection.frame_received.emit(b":SB040NB50102070209;")
-        self.assertEqual(first.ev_values, {7: {1: 8, 2: 0}})
+        self.assertEqual(first.ev_values, {7: {1: 8}})
         self.finish_short_parameter_pass(259)
         self.connection.frame_received.emit(b":SB040N74010300;")
         self.assertEqual(
             self.service.node_states[259].event_progress, DiscoveryProgress.COMPLETE
         )
 
-    def test_cmderr_5_keeps_default_and_continues_later_ev(self):
+    def test_cmderr_5_leaves_value_unconfirmed_and_continues_later_ev(self):
         self.start_ev_reads(3)
         self.connection.frame_received.emit(b":SB040NB601030D2203;")
         self.connection.frame_received.emit(b":SB040NB50102070105;")
@@ -147,17 +147,17 @@ class CbusServiceTests(unittest.TestCase):
             self.connection.frame_received.emit(b":SB040N6F010205;")
         self.assertIn("with REVAL outstanding", captured.records[0].getMessage())
         first = self.service.node_states[258]
-        self.assertEqual(first.ev_values, {7: {1: 5, 2: 0, 3: 0}})
-        self.assertEqual(first.ev_progress, DiscoveryProgress.IN_PROGRESS)
+        self.assertEqual(first.ev_values, {7: {1: 5}})
+        self.assertEqual(first.ev_progress, DiscoveryProgress.INCOMPLETE)
         self.assertEqual(self.connection.sent[-1], b":SBFC0N9C01020703;")
         self.connection.frame_received.emit(b":SB040NB50102070309;")
-        self.assertEqual(first.ev_values, {7: {1: 5, 2: 0, 3: 9}})
-        self.assertEqual(first.ev_progress, DiscoveryProgress.COMPLETE)
+        self.assertEqual(first.ev_values, {7: {1: 5, 3: 9}})
+        self.assertEqual(first.ev_progress, DiscoveryProgress.INCOMPLETE)
         self.assertEqual(self.connection.sent[-1], b":SBFC0N73010300;")
         self.connection.frame_received.emit(b":SB040NB50102070209;")
-        self.assertEqual(first.ev_values, {7: {1: 5, 2: 0, 3: 9}})
+        self.assertEqual(first.ev_values, {7: {1: 5, 3: 9}})
 
-    def test_multiple_cmderr_5_responses_complete_sparse_ev_pass(self):
+    def test_multiple_cmderr_5_responses_leave_ev_pass_incomplete(self):
         self.start_ev_reads(3)
         state = self.service.node_states[258]
         for ev_index in (1, 2, 3):
@@ -168,9 +168,9 @@ class CbusServiceTests(unittest.TestCase):
             with self.assertLogs("workbench.cbus", level="DEBUG"):
                 self.connection.frame_received.emit(b":SB040N6F010205;")
             if ev_index < 3:
-                self.assertEqual(state.ev_progress, DiscoveryProgress.IN_PROGRESS)
-        self.assertEqual(state.ev_values, {7: {1: 0, 2: 0, 3: 0}})
-        self.assertEqual(state.ev_progress, DiscoveryProgress.COMPLETE)
+                self.assertEqual(state.ev_progress, DiscoveryProgress.INCOMPLETE)
+        self.assertEqual(state.ev_values, {})
+        self.assertEqual(state.ev_progress, DiscoveryProgress.INCOMPLETE)
 
     def test_ev_send_failure_retains_confirmed_value(self):
         self.start_ev_reads(2)
@@ -178,7 +178,7 @@ class CbusServiceTests(unittest.TestCase):
         with self.assertLogs("workbench.cbus", level="ERROR"):
             self.connection.frame_received.emit(b":SB040NB50102070105;")
         state = self.service.node_states[258]
-        self.assertEqual(state.ev_values, {7: {1: 5, 2: 0}})
+        self.assertEqual(state.ev_values, {7: {1: 5}})
         self.assertEqual(state.ev_progress, DiscoveryProgress.INCOMPLETE)
         self.assertEqual(self.connection.sent[-1], b":SBFC0N9C01020701;")
 
