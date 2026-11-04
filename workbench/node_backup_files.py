@@ -146,6 +146,21 @@ def load_node_backup(path: Path) -> dict:
     return backup
 
 
+def load_layout_node(manifest_path: Path, number: int) -> dict:
+    """Resolve a manifest member by node number and the shared filename."""
+    path = (
+        manifest_path.parent.parent
+        / "nodes"
+        / str(number)
+        / "backups"
+        / manifest_path.name
+    )
+    node = load_node_backup(path)
+    if node["node"] != number or not node["partOfLayoutBackup"]:
+        raise ValueError(f"Node backup does not belong to manifest: {path}")
+    return node
+
+
 def validate_backup(backup: dict) -> None:
     """Reject malformed configuration before opening a saved YAML in the UI."""
 
@@ -180,3 +195,26 @@ def validate_backup(backup: dict) -> None:
         if identity in identities:
             raise ValueError("Duplicate event in node YAML backup")
         identities.add(identity)
+
+
+def saved_node_numbers(logical_layout: str) -> list[int]:
+    """Find saved nodes independently of live discovery."""
+    directory = backup_directory(logical_layout).parent / "nodes"
+    numbers = sorted(
+        int(path.name)
+        for path in directory.glob("*")
+        if path.is_dir()
+        and path.name.isdecimal()
+        and any((path / "backups").glob("*.yaml"))
+    )
+    trace(
+        logger,
+        "Saved backup nodes listed",
+        extra={
+            "fields": {
+                "layout": logical_layout,
+                "node_numbers": numbers,
+            }
+        },
+    )
+    return numbers

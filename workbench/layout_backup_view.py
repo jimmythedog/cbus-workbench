@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 )
 
 from .backup_view import add_configuration_items, backup_contents
-from .node_backup_files import load_node_backup
+from .node_backup_files import load_layout_node
 
 
 class LayoutBackupView(QDialog):
@@ -29,16 +29,7 @@ class LayoutBackupView(QDialog):
                 tree, ["Discovery", "Complete" if backup["complete"] else "Incomplete"]
             )
             for number in backup["nodeNumbers"]:
-                path = (
-                    manifest_path.parent.parent
-                    / "nodes"
-                    / str(number)
-                    / "backups"
-                    / manifest_path.name
-                )
-                node = load_node_backup(path)
-                if node["node"] != number or not node["partOfLayoutBackup"]:
-                    raise ValueError(f"Node backup does not belong to manifest: {path}")
+                node = load_layout_node(manifest_path, number)
                 item = QTreeWidgetItem(
                     tree,
                     [

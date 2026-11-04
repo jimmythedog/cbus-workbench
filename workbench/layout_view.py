@@ -30,6 +30,7 @@ class LayoutView(QWidget):
     def __init__(self, empty=False):
         super().__init__()
 
+        self.connected = False
         self.logical_layout = None
         self.discovery_states = list
 
@@ -96,10 +97,15 @@ class LayoutView(QWidget):
         self.node_view.details.editing_changed.connect(self.on_editing_changed)
         self.layout_events.editing_changed.connect(self.on_layout_events_editing)
         self.tabs.currentChanged.connect(self.on_tab_changed)
+        self.update_backup_buttons()
 
     def show_live_layout(self, logical_layout, discovery_states):
+        if self.logical_layout is not None and self.logical_layout != logical_layout:
+            self.node_view.clear_identities()
         self.logical_layout = logical_layout
         self.discovery_states = discovery_states
+        self.node_view.details.logical_layout = logical_layout
+        self.node_view.show_saved_nodes(logical_layout)
         self.layout_backups.show_live_layout(logical_layout)
         self.update_backup_buttons()
 
@@ -126,11 +132,18 @@ class LayoutView(QWidget):
     def update_backup_buttons(self):
         selected = bool(self.layout_backups.selectedItems())
 
-        for name, button in self.backup_buttons.items():
-            if name != "New":
-                button.setEnabled(
-                    selected and (self.logical_layout is None or name == "View")
-                )
+        self.backup_buttons["New"].setEnabled(self.connected)
+        self.backup_buttons["View"].setEnabled(selected)
+        self.backup_buttons["Compare"].setEnabled(self.connected and selected)
+        self.backup_buttons["Restore"].setEnabled(False)
+        self.backup_buttons["Delete"].setEnabled(False)
+
+    def set_connected(self, connected):
+        self.connected = connected
+        self.node_view.details.connected = connected
+        self.node_view.details.update_connection_details()
+        self.node_view.details.update_backup_buttons()
+        self.update_backup_buttons()
 
     def view_backup(self):
         selected = self.layout_backups.selectedItems()
@@ -147,22 +160,32 @@ class LayoutView(QWidget):
         dialog.exec()
 
     def compare_backup(self):
+        if not self.connected:
+            return
         selected = self.layout_backups.selectedItems()
         if not selected:
             return
 
         backup = selected[0].data(0, Qt.ItemDataRole.UserRole)
 
+        manifest_path = backup if isinstance(backup, Path) else None
+        if manifest_path is not None:
+            with manifest_path.open(encoding="utf-8") as stream:
+                backup = yaml.safe_load(stream)
+
         dialog = LayoutBackupCompare(
             backup,
-            self.nodes(),
+            self.discovery_states() if manifest_path is not None else self.nodes(),
             self.events,
             self.node_view.details.node_backups,
             self,
+            manifest_path=manifest_path,
         )
         dialog.exec()
 
     def new_backup(self):
+        if not self.connected:
+            return
         if self.logical_layout is not None:
             path = create_layout_backup(
                 self, self.logical_layout, self.discovery_states()

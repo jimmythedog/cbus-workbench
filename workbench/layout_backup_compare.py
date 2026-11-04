@@ -1,3 +1,5 @@
+import logging
+
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -8,11 +10,15 @@ from PySide6.QtWidgets import (
 )
 
 from .backup_diff_tree import add_node_differences
-from .node_backup_diff import compare_node
+from .logging_config import trace
+from .node_backup_diff import compare_live_node, compare_node
+from .node_backup_files import load_layout_node
 
 
 class LayoutBackupCompare(QDialog):
-    def __init__(self, backup, nodes, events, node_backups, parent=None):
+    def __init__(
+        self, backup, nodes, events, node_backups, parent=None, *, manifest_path=None
+    ):
         super().__init__(parent)
 
         self.setWindowTitle("Layout backup — Compare with current")
@@ -29,6 +35,73 @@ class LayoutBackupCompare(QDialog):
         tree.setColumnWidth(0, 250)
         layout.addWidget(tree)
 
+        if manifest_path is not None:
+            self._compare_live(tree, backup, nodes, manifest_path)
+        else:
+            self._compare_prototype(tree, backup, nodes, events, node_backups)
+
+        if tree.topLevelItemCount() == 0:
+            QTreeWidgetItem(tree, ["No differences found"])
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _compare_live(self, tree, backup, states, manifest_path):
+        current = {state.identity.node_number: state for state in states}
+        saved = set(backup["nodeNumbers"])
+        inconclusive = not backup["complete"] or not saved
+        configurations = QTreeWidgetItem(["Node configurations"])
+        for number in sorted(saved | current.keys()):
+            # Load every manifest member, including nodes not currently discovered,
+            # so missing or invalid associated files use the usual error reporter.
+            snapshot = (
+                load_layout_node(manifest_path, number) if number in saved else None
+            )
+            node_item = QTreeWidgetItem([f"Node {number}"])
+            if snapshot is None or number not in current:
+                inconclusive = True
+                # Neither discovery pass proves the absence of undiscovered hardware.
+                QTreeWidgetItem(
+                    node_item,
+                    [
+                        "Node membership inconclusive",
+                        "Included"
+                        if snapshot is not None
+                        else "Not included in manifest",
+                        "Discovered" if number in current else "Not discovered",
+                    ],
+                )
+            else:
+                differences, partial = compare_live_node(current[number], snapshot)
+                add_node_differences(node_item, differences)
+                inconclusive = inconclusive or partial
+                if partial:
+                    QTreeWidgetItem(
+                        node_item, ["Comparison inconclusive: some values are unknown"]
+                    )
+            if node_item.childCount():
+                configurations.addChild(node_item)
+                node_item.setExpanded(True)
+        if configurations.childCount():
+            tree.addTopLevelItem(configurations)
+            configurations.setExpanded(True)
+        if inconclusive:
+            QTreeWidgetItem(tree, ["Layout comparison inconclusive"])
+        trace(
+            logging.getLogger("workbench.backups"),
+            "Layout backup compared",
+            extra={
+                "fields": {
+                    "path": str(manifest_path),
+                    "saved_nodes": sorted(saved),
+                    "current_nodes": sorted(current),
+                    "inconclusive": inconclusive,
+                }
+            },
+        )
+
+    def _compare_prototype(self, tree, backup, nodes, events, node_backups):
         # Compare node membership.
         saved_nodes = set(backup["nodeNumbers"])
         current_nodes = {node.number for node in nodes}
@@ -114,10 +187,3 @@ class LayoutBackupCompare(QDialog):
         if event_section.childCount():
             tree.addTopLevelItem(event_section)
             event_section.setExpanded(True)
-
-        if tree.topLevelItemCount() == 0:
-            QTreeWidgetItem(tree, ["No differences found"])
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)

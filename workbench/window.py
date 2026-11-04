@@ -265,6 +265,7 @@ class MainWindow(QMainWindow):
             self.start_cbus_service(name)
         elif state != "Connected":
             self.remove_cbus_service(name)
+        self.layouts[name].set_connected(state == "Connected")
         self.update_connection_actions()
         self.update_layout_actions()
         if state == "Error":
@@ -305,6 +306,11 @@ class MainWindow(QMainWindow):
         node_view.state_lookup = lambda node_number: service.node_states[node_number]
         service.node_state_updated.connect(node_view.refresh_state)
         self.cbus_services[name] = service
+        self.layouts[name].discovery_states = lambda: (
+            list(self.cbus_services[name].node_states.values())
+            if name in self.cbus_services
+            else []
+        )
 
         self.error_reporter.run(
             f"Could not discover nodes on layout '{name}'", service.discover_nodes
@@ -323,7 +329,11 @@ class MainWindow(QMainWindow):
             return
         service.close()
         service.deleteLater()
-        self.layouts[name].node_view.clear_identities()
+        view = self.layouts[name]
+        view.node_view.clear_identities()
+        logical_layout = self.layout_settings[name]["logical_layout"]
+        view.node_view.details.logical_layout = logical_layout
+        view.node_view.show_saved_nodes(logical_layout)
         connection_logger.info(
             "CBUS discovery state cleared", extra={"fields": {"layout": name}}
         )
@@ -523,6 +533,7 @@ class MainWindow(QMainWindow):
                 else []
             ),
         )
+        self.layouts[name].set_connected(self.connection_states[name] == "Connected")
         self.layout_status.setText(name)
         self.update_connection_actions()
         self.update_layout_actions()

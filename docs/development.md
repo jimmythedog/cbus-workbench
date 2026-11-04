@@ -92,6 +92,15 @@ Top-level UI actions that need an error dialog can call `ErrorReporter.run(descr
 
 ## Architecture
 
+Connection changes in `MainWindow.set_connection_state()` refresh backup actions
+through `LayoutView.set_connected()`. Availability uses the connection state,
+independently of discovery results. Disconnect still closes the service and clears
+live identities and values. The existing node navigator then lists node numbers
+with saved YAML files as “<node-number> (offline)”; these entries contain only an integer,
+never a cached PNN or NodeState. Selecting one loads the ordinary backup list.
+Discovery replaces that entry with a live identity after reconnection. Saved View
+reads files directly; New and Compare are guarded while disconnected.
+
 `NodeDetails` owns the node backup buttons and displays. Its plain Python
 `NodeBackupWorkflow` helper handles the selected backup's dialogs, snapshots and
 changes to `NodeBackups`. After a restore, one callback to `NodeDetails` refreshes
@@ -133,8 +142,14 @@ The manifest is written last so a failed node save cannot publish a successful
 layout backup. Errors propagate; earlier node files remain, with no rollback.
 Layout View resolves each manifest node number using the shared filename and checks
 node identity and ownership. Node View shows the ownership flag; ordinary node View
-and Compare use the same loader for standalone and associated files. Live layout
-Compare, Restore and Delete remain disabled.
+and Compare use the same loader for standalone and associated files.
+`LayoutBackupCompare` retains its prototype path and uses `compare_live_node()`
+for matching discovered nodes in saved YAML layouts. View and Compare share the
+associated-file loader, including identity and ownership checks. Differences retain
+the existing node/section/event hierarchy. Incomplete saved or current values make
+the result inconclusive while confirmed differences remain visible. A node seen on
+only one side is also inconclusive: neither a manifest nor the current connection
+proves absence elsewhere on the logical layout. Restore and Delete remain disabled.
 
 Filesystem failures propagate to the existing UI exception reporter.
 

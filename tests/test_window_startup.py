@@ -538,8 +538,8 @@ class WindowStartupTests(unittest.TestCase):
                     expected,
                 )
                 self.assertEqual(details.summary_mode.text(), f"Mode: {expected[0]}")
-                self.assertEqual(details.can_id.text(), "-")
-                self.assertEqual(details.status.text(), "-")
+                self.assertEqual(details.can_id.text(), "2")
+                self.assertEqual(details.status.text(), "Online")
 
         connection.disconnect()
         self.assertEqual(details.flags.text(), "-")

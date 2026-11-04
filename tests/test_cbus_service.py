@@ -44,6 +44,14 @@ class CbusServiceTests(unittest.TestCase):
         )
         self.service.node_state_updated.connect(self.state_updates.append)
 
+    def test_pnn_confirms_can_id_and_repeated_identity_updates_it(self):
+        self.connection.frame_received.emit(b":SB040NB601020D2203;")
+        self.assertEqual(self.service.node_states[258].can_id, 2)
+        self.connection.frame_received.emit(b":SB0E0NB601020D2203;")
+        self.assertEqual(self.service.node_states[258].can_id, 7)
+        self.assertEqual(self.state_updates[-1], 258)
+        self.assertEqual(len(self.discovered), 1)
+
     def start_nv_reads(self, nv_count: int) -> None:
         self.connection.frame_received.emit(b":SB040NB601020D2203;")
         self.connection.frame_received.emit(b":SB040N9B01020006;")
@@ -547,7 +555,11 @@ class CbusServiceTests(unittest.TestCase):
         self.assertEqual(self.service.nodes, {258: node})
         self.assertEqual(
             self.service.node_states,
-            {258: NodeState(node, parameter_progress=DiscoveryProgress.IN_PROGRESS)},
+            {
+                258: NodeState(
+                    node, parameter_progress=DiscoveryProgress.IN_PROGRESS, can_id=2
+                )
+            },
         )
         self.assertEqual(self.service.node_states[258].nv_values, {})
         self.assertEqual(
@@ -1268,6 +1280,7 @@ class CbusServiceTests(unittest.TestCase):
                 Pnn(258, 13, 35, 3),
                 {7: 2},
                 parameter_progress=DiscoveryProgress.IN_PROGRESS,
+                can_id=2,
             ),
         )
         self.assertEqual(self.updated, [Pnn(258, 13, 35, 3)])

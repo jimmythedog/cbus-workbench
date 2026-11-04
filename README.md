@@ -21,7 +21,10 @@ or `-` when unavailable. Workbench requests one automatic parameter at a time pe
 connection, starting with each node's parameter count. Matching replies advance
 a FIFO queue; a missing reply times out after two seconds, skips that node's
 remaining automatic requests and lets other nodes continue. Reconnecting starts
-fresh discovery state.
+fresh discovery state. Node Details shows the CAN ID confirmed by a received PNN
+frame and Online for a discovered node while connected. Disconnected nodes show
+Offline; connected nodes without discovery evidence show `-` for status. Online
+reflects discovery in the current connection, without ongoing liveness polling.
 After parameter 6 confirms an NV count, Workbench reads those NVs in the
 background through the same request queue. The selected live node's Raw Node
 Variables tab shows confirmed values as they arrive. Unread values show `-`;
@@ -45,6 +48,12 @@ node number and event number. Unknown values make the result inconclusive; they
 are not reported as definite differences. Complete backups distinguish absent EVs
 from unread values.
 
+Saved node backups remain accessible through entries labelled “<node-number> (offline)” in
+the Nodes list, including after disconnecting or restarting. View works offline for
+both node and layout backups. New and Compare require a connected layout; New
+node backup also requires a selected live node. Restore and Delete are disabled.
+Reconnecting replaces saved-only entries as nodes are discovered again.
+
 The layout’s Backups tab lists saved manifests under
 Data → `layouts/<logical-layout>/backups/<timestamp>.yaml`. Each manifest lists
 its discovered node numbers and overall completeness. Associated node backups use
@@ -52,6 +61,11 @@ the same filename under `layouts/<logical-layout>/nodes/<node-number>/backups/`
 and appear in the ordinary node Backups list, with View and Compare available.
 Node YAML includes `partOfLayoutBackup: true` for these associated backups and
 `false` for standalone node backups.
+Select a saved layout manifest and choose Compare to compare its associated node
+files with current discovery. Differences appear under Node configurations with
+Backup and Current columns. Nodes match by node number and events by node/event
+number. Unknown values and nodes seen on only one side make the comparison
+inconclusive; they are not reported as definite differences.
 View shows each saved node’s discovery status, NVs and events. Incomplete discovery
 requires Cancel / Save Anyway; an empty discovery is also marked incomplete.
 These snapshots contain confirmed discovery data only, without annotations.

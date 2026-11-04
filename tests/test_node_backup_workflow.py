@@ -30,6 +30,7 @@ class NodeBackupWorkflowTests(unittest.TestCase):
             ev_values={"42:3": {1: 5}},
         )
         self.details = NodeDetails({})
+        self.details.connected = True
         self.addCleanup(self.details.close)
         item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, self.node)

@@ -36,6 +36,7 @@ class LayoutBackupTests(unittest.TestCase):
         paths.start()
         self.addCleanup(paths.stop)
         self.view = LayoutView(empty=True)
+        self.view.set_connected(True)
         self.addCleanup(self.view.close)
         self.state = NodeState(Pnn(42, 1, 2, 5))
         self.state.parameters = {5: 4, 6: 1}
@@ -103,7 +104,7 @@ class LayoutBackupTests(unittest.TestCase):
         self.assertEqual(row.text(1), "Complete")
         self.view.layout_backups.setCurrentItem(row)
         self.assertTrue(self.view.backup_buttons["View"].isEnabled())
-        for name in ("Restore", "Delete", "Compare"):
+        for name in ("Restore", "Delete"):
             self.assertFalse(self.view.backup_buttons[name].isEnabled())
 
         def inspect_layout(dialog):

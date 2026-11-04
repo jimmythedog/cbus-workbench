@@ -63,6 +63,8 @@ class NodeBackupWorkflow:
                 "fields": {
                     "node_number": node.node_number
                     if isinstance(node, Pnn)
+                    else node
+                    if isinstance(node, int)
                     else node.number
                 }
             },
@@ -80,6 +82,8 @@ class NodeBackupWorkflow:
                 "fields": {
                     "node_number": node.node_number
                     if isinstance(node, Pnn)
+                    else node
+                    if isinstance(node, int)
                     else node.number
                 }
             },

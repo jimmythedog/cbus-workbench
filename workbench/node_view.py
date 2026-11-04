@@ -6,17 +6,22 @@ from PySide6.QtWidgets import QListWidget, QListWidgetItem, QSplitter
 
 from .cbus_service import NodeState
 from .logging_config import trace
+from .node_backup_files import saved_node_numbers
 from .node_details import NodeDetails
 from .pnn import Pnn
+
+
+def node_number(node):
+    return node if isinstance(node, int) else node.node_number
+
 
 logger = logging.getLogger("workbench.ui")
 
 
 class NodeListItem(QListWidgetItem):
     def __lt__(self, other):
-        return (
-            self.data(Qt.ItemDataRole.UserRole).node_number
-            < other.data(Qt.ItemDataRole.UserRole).node_number
+        return node_number(self.data(Qt.ItemDataRole.UserRole)) < node_number(
+            other.data(Qt.ItemDataRole.UserRole)
         )
 
 
@@ -60,7 +65,7 @@ class NodeView(QSplitter):
         """Update a PNN identity without changing the selected list item."""
         for index in range(self.node_list.count()):
             item = self.node_list.item(index)
-            if item.data(Qt.ItemDataRole.UserRole).node_number == node.node_number:
+            if node_number(item.data(Qt.ItemDataRole.UserRole)) == node.node_number:
                 item.setData(Qt.ItemDataRole.UserRole, node)
                 item.setText(f"{node.node_number} - {node.module_type}")
                 if item is self.node_list.currentItem():
@@ -82,3 +87,18 @@ class NodeView(QSplitter):
     def clear_identities(self) -> None:
         self.state_lookup = None
         self.node_list.clear()
+
+    def show_saved_nodes(self, logical_layout):
+        """Reuse the navigator without retaining identities or discovery values."""
+        for number in saved_node_numbers(logical_layout):
+            if any(
+                node_number(self.node_list.item(i).data(Qt.ItemDataRole.UserRole))
+                == number
+                for i in range(self.node_list.count())
+            ):
+                continue
+            item = NodeListItem(f"{number} (offline)")
+            item.setData(Qt.ItemDataRole.UserRole, number)
+            self.node_list.addItem(item)
+        if self.node_list.currentItem() is None and self.node_list.count():
+            self.node_list.setCurrentRow(0)

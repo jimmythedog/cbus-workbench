@@ -152,11 +152,11 @@ class NodeDetailsForm(QWidget):
 
     def show_configured_node(self, node) -> None:
         self.node_number.setText(str(node.number))
-        self.can_id.setText("126")
+        self.can_id.setText("-")
         self.module_type.setText("CANMIO")
         self.flags.setText("-")
         self.firmware.setText("3d")
-        self.status.setText("Online")
+        self.status.setText("-")
         self.manufacturer.setText("MERG")
         self.module_identifier.setText("A520")
         self.node_mode.setText("FLiM")

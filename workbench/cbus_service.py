@@ -49,6 +49,7 @@ class NodeState:
     nv_progress: DiscoveryProgress = DiscoveryProgress.NOT_STARTED
     event_progress: DiscoveryProgress = DiscoveryProgress.NOT_STARTED
     ev_progress: DiscoveryProgress = DiscoveryProgress.NOT_STARTED
+    can_id: int | None = None
 
 
 class CbusService(QObject):
@@ -337,15 +338,20 @@ class CbusService(QObject):
             return
 
         previous = self.nodes.get(pnn.node_number)
-        if previous == pnn:
+        # PNN identifies the sender; event node numbers may identify another node.
+        can_id = (int(frame[2:6], 16) >> 5) & 0x7F
+        state = self.node_states.get(pnn.node_number)
+        if previous == pnn and state is not None and state.can_id == can_id:
             return
         is_new = previous is None
         self.nodes[pnn.node_number] = pnn
         state = self.node_states.get(pnn.node_number)
         if state is None:
-            self.node_states[pnn.node_number] = NodeState(pnn)
+            state = NodeState(pnn)
+            self.node_states[pnn.node_number] = state
         else:
             state.identity = pnn
+        state.can_id = can_id
         logger.info(
             "Node discovered" if is_new else "Node identity updated",
             extra={
@@ -356,6 +362,7 @@ class CbusService(QObject):
                     "module_type": pnn.module_type,
                     "flags": pnn.flags,
                     "previous": previous,
+                    "can_id": can_id,
                 }
             },
         )
@@ -377,7 +384,8 @@ class CbusService(QObject):
                 )
                 self._send_next_request()
         else:
-            self.node_updated.emit(pnn)
+            if previous != pnn:
+                self.node_updated.emit(pnn)
             self.node_state_updated.emit(pnn.node_number)
 
     def _receive_paran(self, node_number: int, index: int, value: int) -> None:

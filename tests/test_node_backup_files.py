@@ -38,6 +38,7 @@ class NodeBackupFilesTests(unittest.TestCase):
         self.state.event_identities = {7: (256, 101)}
         self.state.ev_values = {7: {1: 0, 3: 9}}
         self.details = NodeDetails({})
+        self.details.connected = True
         self.addCleanup(self.details.close)
         self.details.logical_layout = "Yard"
         item = QListWidgetItem()

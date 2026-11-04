@@ -32,6 +32,7 @@ class NodeDetails(QWidget):
     def __init__(self, events):
         super().__init__()
 
+        self.connected = False
         self.live_state = None
         self.logical_layout = None
         self.node = None
@@ -359,7 +360,8 @@ class NodeDetails(QWidget):
     def show_live_state(self, state: NodeState) -> None:
         """Refresh the selected identity from confirmed service values."""
         self.live_state = state
-        self.backup_buttons["New"].setEnabled(self.logical_layout is not None)
+        self.update_connection_details()
+        self.update_backup_buttons()
         self.show_parameters(state.parameters)
         self.raw_values.show_live_values(state.parameters.get(6), state.nv_values)
         self.node_events.show_live_state(state)
@@ -387,19 +389,22 @@ class NodeDetails(QWidget):
         self.details_buttons.setCurrentIndex(0)
         self.node = current.data(Qt.ItemDataRole.UserRole) if current else None
         live_identity = isinstance(self.node, Pnn)
+        saved_node = isinstance(self.node, int)
         if not live_identity or self.node.node_number != previous_live_node:
-            self.node_events.show_node(None if live_identity else self.node)
+            self.node_events.show_node(
+                None if live_identity or saved_node else self.node
+            )
         self.live_state = None
-        if live_identity and self.logical_layout is not None:
-            self.node_backups.show_live_node(self.logical_layout, self.node.node_number)
+        if (live_identity or saved_node) and self.logical_layout is not None:
+            number = self.node if saved_node else self.node.node_number
+            self.node_backups.show_live_node(self.logical_layout, number)
         else:
-            self.node_backups.show_node(None if live_identity else self.node)
-        self.backup_buttons["New"].setEnabled(
-            self.node is not None and not live_identity
-        )
+            self.node_backups.show_node(
+                None if live_identity or saved_node else self.node
+            )
         self.update_backup_buttons()
 
-        enabled = current is not None
+        enabled = current is not None and not saved_node
         self.edit_button.setEnabled(enabled and not live_identity)
         self.details_edit_button.setEnabled(enabled and not live_identity)
         self.events_edit_button.setEnabled(enabled and not live_identity)
@@ -411,12 +416,15 @@ class NodeDetails(QWidget):
             else self.details_page
         )
 
-        if current is None:
+        if current is None or saved_node:
             self._show_no_node()
+            if saved_node:
+                self.summary.setTitle(f"Node {self.node} (offline)")
         elif live_identity:
             self._show_live_identity(self.node)
         else:
             self._show_configured_node(self.node)
+        self.update_connection_details()
 
     def _show_no_node(self) -> None:
         self.variables.setCurrentIndex(0)
@@ -446,28 +454,47 @@ class NodeDetails(QWidget):
         self.variables.setCurrentIndex(1 if node.has_mdf else 0)
         self.details_page.show_configured_node(node)
         self.refresh_node_name()
-        self.summary_can_id.setText(f"CAN ID: {node.can_id}")
         self.summary_firmware.setText(f"Firmware: {node.firmware}")
         self.summary_mode.setText("Mode: FLiM")
-        self.summary_status.setText("Status: Online")
+
+    def update_connection_details(self) -> None:
+        """Show discovery evidence for this connection, never configured guesses."""
+        can_id = self.live_state.can_id if self.live_state is not None else None
+        status = "-"
+        if self.node is not None:
+            if not self.connected:
+                status = "Offline"
+            elif self.live_state is not None:
+                status = "Online"
+        text = str(can_id) if can_id is not None else "-"
+        self.can_id.setText(text)
+        self.summary_can_id.setText(f"CAN ID: {text}")
+        self.status.setText(status)
+        self.summary_status.setText(f"Status: {status}")
 
     def update_backup_buttons(self):
         selected = bool(self.node_backups.selectedItems())
 
-        for name, button in self.backup_buttons.items():
-            if name != "New":
-                button.setEnabled(
-                    selected
-                    and (not isinstance(self.node, Pnn) or name in ("View", "Compare"))
-                )
+        live_node = self.node is not None and not isinstance(self.node, int)
+        self.backup_buttons["New"].setEnabled(self.connected and live_node)
+        self.backup_buttons["View"].setEnabled(selected)
+        self.backup_buttons["Compare"].setEnabled(self.connected and selected)
+        self.backup_buttons["Restore"].setEnabled(False)
+        self.backup_buttons["Delete"].setEnabled(False)
 
     def view_backup(self):
         self.backup_workflow.view(self.node)
 
     def compare_backup(self):
+        if not self.connected or isinstance(self.node, int):
+            return
+        if isinstance(self.node, Pnn) and self.live_state is None:
+            return
         self.backup_workflow.compare(self.node, self.live_state)
 
     def new_backup(self):
+        if not self.connected or isinstance(self.node, int):
+            return
         if isinstance(self.node, Pnn):
             if self.live_state is not None and self.logical_layout is not None:
                 self.backup_workflow.create_live(self.live_state, self.logical_layout)
