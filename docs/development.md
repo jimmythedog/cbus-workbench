@@ -1,6 +1,8 @@
 # Development guide
 
-This document records established development decisions and, as the application takes shape, will explain its architecture and important execution flows. It is not an inventory of source files.
+This document records established development decisions and, as the application takes shape, will explain its architecture and important execution flows. It is not an inventory of source files. For application operating instructions, see
+the [user guide](user-guide.md); installation and running instructions start in the
+[README](../README.md#installation-and-running).
 
 ## Running from source
 
@@ -8,21 +10,9 @@ These instructions are for developers. End-user releases are intended to be pack
 
 ### Standard development setup (Windows, macOS and conventional Linux)
 
-1. Install **Python 3** and [uv](https://docs.astral.sh/uv/).
-2. Clone the repository and change into its directory.
-3. Install the project's locked dependencies:
-
-   ```sh
-   uv sync --locked
-   ```
-
-4. Start CBUS Workbench:
-
-   ```sh
-   uv run python main.py
-   ```
-
-`uv` creates and manages the project's `.venv/` environment. You do not need to activate it manually. The exact supported Python versions are defined in `pyproject.toml`.
+Follow the [source installation instructions](../README.md#installation-and-running)
+to install locked dependencies and run the application. The exact supported Python
+versions are defined in `pyproject.toml`.
 
 To add a Python runtime dependency, use `uv add <package>`; to add a development dependency, use `uv add --dev <package>`. Commit changes to both `pyproject.toml` and `uv.lock`, but never commit `.venv/`.
 
@@ -154,6 +144,11 @@ the result inconclusive while confirmed differences remain visible. A node seen 
 only one side is also inconclusive: neither a manifest nor the current connection
 proves absence elsewhere on the logical layout. Restore and Delete remain disabled.
 
+Incomplete records use `complete: false` and positional YAML `null` for
+unconfirmed known values. Descriptions are omitted when blank. Live snapshots do
+not include local annotations; discovery completeness cannot establish that all
+physical nodes were found.
+
 Filesystem failures propagate to the existing UI exception reporter.
 
 `workbench.paths` resolves Qt's application directories for `cbus-workbench`;
@@ -187,13 +182,13 @@ changing the device path, deleting the layout or closing the window closes the p
 
 ### Agreed CBUS service design
 
-Each connected layout will have a CBUS service between its GridConnect transport and
-the UI. The service will interpret every incoming CBUS message, whether it follows a
+Each connected layout has a CBUS service between its GridConnect transport and
+the UI. The service interprets supported incoming CBUS messages, whether they follow a
 Workbench request, another application's activity or unsolicited network traffic.
-It will maintain that layout's live node state and emit Qt signals when known node,
-node variable (NV) or event variable (EV) state changes. The UI will observe those
-signals and initiate operations through the service; it will neither decode CBUS
-opcodes nor manage protocol transactions.
+It maintains that layout's live node state and emits Qt signals when known node,
+node variable (NV) or event variable (EV) state changes. The UI observes those
+signals and initiates operations through the service; it neither decodes CBUS
+opcodes nor manages protocol transactions.
 
 ```text
 PySide6 UI ── commands ──► per-layout CBUS service ── outgoing frames ──► transport
@@ -501,6 +496,8 @@ failure/cleanup outcomes; frame traffic remains in Diagnostics.
 The existing event refresh uses REVAL and may be incomplete on VLCB nodes that
 reject it. This is reported as saved changes with incomplete refresh, never full
 success. No compatibility fallback or second discovery system is introduced.
+For the manual test sequence, see the [EV hardware check](ev-hardware-check.md).
+
 Protocol references: [CBUS Guide 6c and CBUS 5.0 Rev A1](https://github.com/cbus-traincontrol/cbus-traincontrol.github.io),
 [MERG Developer’s Guide 6b, §7.2.7 and opcode definitions](https://www.merg.org.uk/merg_wiki/lib/exe/fetch.php?media=public%3Acbuspublic%3Adeveloper_6b.pdf),
 [VLCB Event Teach and Opcode specifications](https://github.com/Versatile-LCB/VLCB-documents).
