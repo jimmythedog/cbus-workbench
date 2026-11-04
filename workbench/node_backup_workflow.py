@@ -3,7 +3,9 @@
 import logging
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 
+import yaml
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QInputDialog, QMainWindow, QMessageBox, QWidget
 
@@ -11,9 +13,10 @@ from .backup_compare import BackupCompare
 from .backup_view import BackupView, backup_contents
 from .cbus_service import NodeState
 from .logging_config import trace
-from .node_backup_files import node_backup, save_backup
+from .node_backup_files import node_backup, save_backup, validate_backup
 from .node_backups import NodeBackups
 from .node_snapshot import create_node_snapshot, restore_node_snapshot
+from .pnn import Pnn
 
 logger = logging.getLogger("workbench.ui")
 
@@ -33,7 +36,15 @@ class NodeBackupWorkflow:
         if node is None:
             return None
         selected = self.backups.selectedItems()
-        return selected[0].data(0, Qt.ItemDataRole.UserRole) if selected else None
+        backup = selected[0].data(0, Qt.ItemDataRole.UserRole) if selected else None
+        if isinstance(backup, Path):
+            trace(
+                logger, "Loading node backup", extra={"fields": {"path": str(backup)}}
+            )
+            with backup.open(encoding="utf-8") as stream:
+                backup = yaml.safe_load(stream)
+            validate_backup(backup)
+        return backup
 
     @staticmethod
     def _is_layout_backup(backup):
@@ -54,20 +65,32 @@ class NodeBackupWorkflow:
         trace(
             logger,
             "Viewing node backup",
-            extra={"fields": {"node_number": node.number}},
+            extra={
+                "fields": {
+                    "node_number": node.node_number
+                    if isinstance(node, Pnn)
+                    else node.number
+                }
+            },
         )
         BackupView(node, backup, self.parent).exec()
 
-    def compare(self, node):
+    def compare(self, node, state=None):
         backup = self._selected_backup(node)
         if backup is None:
             return
         trace(
             logger,
             "Comparing node backup",
-            extra={"fields": {"node_number": node.number}},
+            extra={
+                "fields": {
+                    "node_number": node.node_number
+                    if isinstance(node, Pnn)
+                    else node.number
+                }
+            },
         )
-        BackupCompare(node, backup, self.parent).exec()
+        BackupCompare(state if state is not None else node, backup, self.parent).exec()
 
     def create_live(self, state: NodeState, logical_layout: str) -> None:
         backup = node_backup(state)
@@ -113,6 +136,8 @@ class NodeBackupWorkflow:
         self._show_status("Node backup created")
 
     def restore(self, node):
+        if isinstance(node, Pnn):
+            return
         backup = self._selected_backup(node)
         if backup is None:
             return
@@ -153,6 +178,8 @@ class NodeBackupWorkflow:
         self._show_status("Node backup restored successfully")
 
     def delete(self, node):
+        if isinstance(node, Pnn):
+            return
         backup = self._selected_backup(node)
         if backup is None:
             return

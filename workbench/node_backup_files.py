@@ -135,3 +135,38 @@ def list_backups(logical_layout: str, node_number: int) -> list[tuple[Path, bool
         },
     )
     return backups
+
+
+def validate_backup(backup: dict) -> None:
+    """Reject malformed configuration before opening a saved YAML in the UI."""
+
+    def integer(value):
+        return type(value) is int
+
+    def values(items):
+        return isinstance(items, list) and all(
+            value is None or integer(value) for value in items
+        )
+
+    if not (
+        isinstance(backup, dict)
+        and backup.get("format_version") == 1
+        and type(backup.get("complete")) is bool
+        and integer(backup.get("node"))
+        and values(backup.get("nvs"))
+        and isinstance(backup.get("events"), list)
+    ):
+        raise ValueError("Invalid node YAML backup")
+    identities = set()
+    for event in backup["events"]:
+        if not (
+            isinstance(event, dict)
+            and integer(event.get("nodeNumber"))
+            and integer(event.get("eventNumber"))
+            and values(event.get("eventVariables"))
+        ):
+            raise ValueError("Invalid event in node YAML backup")
+        identity = (event["nodeNumber"], event["eventNumber"])
+        if identity in identities:
+            raise ValueError("Duplicate event in node YAML backup")
+        identities.add(identity)

@@ -456,13 +456,16 @@ class NodeDetails(QWidget):
 
         for name, button in self.backup_buttons.items():
             if name != "New":
-                button.setEnabled(selected and not isinstance(self.node, Pnn))
+                button.setEnabled(
+                    selected
+                    and (not isinstance(self.node, Pnn) or name in ("View", "Compare"))
+                )
 
     def view_backup(self):
         self.backup_workflow.view(self.node)
 
     def compare_backup(self):
-        self.backup_workflow.compare(self.node)
+        self.backup_workflow.compare(self.node, self.live_state)
 
     def new_backup(self):
         if isinstance(self.node, Pnn):

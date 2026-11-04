@@ -27,11 +27,17 @@ def add_node_differences(parent, differences):
                 section.setExpanded(True)
                 sections[section_name] = section
 
+        absent = (
+            "Absent"
+            if section_name.startswith("Consumed events/")
+            and item_name.startswith("EV ")
+            else "—"
+        )
         QTreeWidgetItem(
             section,
             [
                 item_name,
-                str(old) if old is not None else "—",
-                str(new) if new is not None else "—",
+                str(old) if old is not None else absent,
+                str(new) if new is not None else absent,
             ],
         )

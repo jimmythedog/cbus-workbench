@@ -99,7 +99,18 @@ Before adding a test, ask: **Which contract or significant real-world risk does 
 
 These instructions cannot override model-selection controls in the Codex environment.
 
-## 9. Change approval and reporting
+## 9. Git branch workflow
+
+- Never make code changes or commits directly on `main` or `master`.
+- Before starting an issue, check the current branch and working-tree status.
+- For a new issue, create and switch to a feature branch named `issue/<number>-<short-description>`.
+- Create the branch from an up-to-date `main` unless the task explicitly requires a different base.
+- If already on the correct feature branch, continue using it.
+- If the working tree contains uncommitted changes, do not switch branches or discard changes without approval.
+- Do not merge, push, or delete branches unless explicitly instructed.
+- Leave completed work uncommitted for review unless explicitly instructed otherwise.
+
+## 10. Change approval and reporting
 
 **Approval is for a bounded task, not each individual edit.** Within an approved task, proceed without repeatedly asking permission. Stop and request approval for architecture changes, new dependencies, significant complexity or scope expansion.
 
@@ -107,7 +118,7 @@ Before nontrivial tasks, explain intended behaviour, design and affected files. 
 
 Do not commit, push, create or modify GitHub issues, or change dependencies without explicit approval.
 
-## 10. Documentation — Mandatory
+## 11. Documentation — Mandatory
 
 - Keep `README.md` as the concise entry point for purpose, status, installation, running and links to further guidance.
 - Document implemented user workflows as needed; do not present planned features as implemented.
@@ -143,14 +154,14 @@ CBUS Workbench is a general-purpose CBUS/VLCB management application, not a tool
 - Prefer generic, specification-based implementations over device-specific workarounds.
 - Test against different module types and edge cases where practical.
 
-## 11. Releases and infrastructure
+## 12. Releases and infrastructure
 
 - Keep packaging and GitHub Actions minimal; prefer built-in GitHub release features.
 - Do not build custom issue-to-release tracking, release databases or release-note generators.
 - Automate only work that demonstrably benefits from automation.
 - Apply the same simplicity rules to scripts, CI and test infrastructure.
 
-## 12. Stop and ask
+## 13. Stop and ask
 
 Stop and consult when requirements are ambiguous, complexity or scope grows, new abstractions/dependencies seem necessary, protocol safety is uncertain, or stronger model/reasoning effort is needed.
 

@@ -24,6 +24,7 @@ class NodeBackups(QTreeWidget):
                 self, [path.name, "Complete" if complete else "Incomplete"]
             )
             item.setToolTip(0, str(path))
+            item.setData(0, Qt.ItemDataRole.UserRole, path)
 
     def show_node(self, node):
         self.clear()

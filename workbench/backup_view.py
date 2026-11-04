@@ -13,6 +13,23 @@ def backup_contents(backup):
     if "node_details" in backup:
         return backup
 
+    if "format_version" in backup:
+        return {
+            "complete": backup["complete"],
+            "node_details": {"number": backup["node"]},
+            "nv_values": dict(enumerate(backup["nvs"], 1)),
+            "consumed_events": {
+                f"{event['nodeNumber']}:{event['eventNumber']}": ""
+                for event in backup["events"]
+            },
+            "ev_values": {
+                f"{event['nodeNumber']}:{event['eventNumber']}": dict(
+                    enumerate(event["eventVariables"], 1)
+                )
+                for event in backup["events"]
+            },
+        }
+
     annotations = backup.get("annotations", {})
     descriptions = annotations.get("events", {}).get("consumed", {})
 
@@ -47,13 +64,19 @@ def backup_contents(backup):
     }
 
 
+def display_value(value):
+    return "Absent / unknown" if value is None else str(value)
+
+
 class BackupView(QDialog):
     def __init__(self, node, backup, parent=None):
         super().__init__(parent)
 
         contents = backup_contents(backup)
 
-        self.setWindowTitle(f"Node {node.number} — Backup contents")
+        self.setWindowTitle(
+            f"Node {contents['node_details']['number']} — Backup contents"
+        )
         self.resize(650, 450)
 
         layout = QVBoxLayout(self)
@@ -68,19 +91,27 @@ class BackupView(QDialog):
         layout.addWidget(buttons)
 
         snapshot = QTreeWidgetItem(tree, ["Backup"])
-        QTreeWidgetItem(snapshot, ["Created", contents["created"]])
-        QTreeWidgetItem(snapshot, ["Description", contents["description"]])
+        if "complete" in contents:
+            QTreeWidgetItem(
+                snapshot,
+                ["Discovery", "Complete" if contents["complete"] else "Incomplete"],
+            )
+        for key in ("created", "description"):
+            if key in contents:
+                QTreeWidgetItem(snapshot, [key.capitalize(), contents[key]])
         snapshot.setExpanded(True)
 
         # Saved node details
         details = QTreeWidgetItem(tree, ["Node details"])
         for name, value in contents["node_details"].items():
-            QTreeWidgetItem(details, [name.replace("_", " ").capitalize(), str(value)])
+            QTreeWidgetItem(
+                details, [name.replace("_", " ").capitalize(), display_value(value)]
+            )
 
         # Saved node variables
         variables = QTreeWidgetItem(tree, ["Node variables"])
         for number, value in sorted(contents["nv_values"].items()):
-            QTreeWidgetItem(variables, [f"NV {number}", str(value)])
+            QTreeWidgetItem(variables, [f"NV {number}", display_value(value)])
 
         # Saved consumed events and their event variables
         events = QTreeWidgetItem(tree, ["Consumed events"])
@@ -88,16 +119,29 @@ class BackupView(QDialog):
             event = QTreeWidgetItem(events, [event_id, description])
 
             for number, value in contents["ev_values"].get(event_id, {}).items():
-                QTreeWidgetItem(event, [f"EV {number}", str(value)])
+                text = (
+                    "Absent"
+                    if value is None and contents.get("complete") is True
+                    else display_value(value)
+                )
+                QTreeWidgetItem(event, [f"EV {number}", text])
 
         # Saved NV descriptions
-        descriptions = QTreeWidgetItem(tree, ["NV descriptions"])
-        for number, description in contents["nv_descriptions"].items():
+        descriptions = (
+            QTreeWidgetItem(tree, ["NV descriptions"])
+            if "nv_descriptions" in contents
+            else None
+        )
+        for number, description in contents.get("nv_descriptions", {}).items():
             QTreeWidgetItem(descriptions, [f"NV {number}", description])
 
         # Other saved annotations
-        annotations = QTreeWidgetItem(tree, ["Annotations"])
-        for name, value in contents["annotations"].items():
-            QTreeWidgetItem(annotations, [str(name), str(value)])
+        annotations = (
+            QTreeWidgetItem(tree, ["Annotations"])
+            if "annotations" in contents
+            else None
+        )
+        for name, value in contents.get("annotations", {}).items():
+            QTreeWidgetItem(annotations, [str(name), display_value(value)])
 
         details.setExpanded(True)

@@ -39,6 +39,12 @@ The live node's Backups tab saves discovered configuration as YAML and lists sav
 files. Incomplete discovery requires Cancel / Save Anyway; partial files contain
 `complete: false` and `null` for unconfirmed known positions. Files are stored under
 Data → `layouts/<logical-layout>/nodes/<node-number>/backups/<timestamp>.yaml`.
+Select a saved backup in the live node’s Backups tab to View its configuration or
+Compare it with the current discovered values. Comparisons identify events by
+node number and event number. Unknown values make the result inconclusive; they
+are not reported as definite differences. Complete backups distinguish absent EVs
+from unread values.
+
 Find the Data directory in Help → Application Directories. Live backup restore is
 not implemented.
 Messages / Diagnostics also shows sent and received CBUS frames, including parameter

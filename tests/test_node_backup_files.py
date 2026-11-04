@@ -45,6 +45,69 @@ class NodeBackupFilesTests(unittest.TestCase):
         self.details.show_node(item)
         self.details.show_live_state(self.state)
 
+    def test_live_backup_view_compare_and_disabled_destructive_actions(self):
+        from PySide6.QtWidgets import QTreeWidget
+
+        from workbench.backup_compare import BackupCompare
+        from workbench.backup_view import BackupView
+        from workbench.node_backup_files import save_backup
+
+        path = save_backup("Yard", node_backup(self.state))
+        self.details.node_backups.show_live_node("Yard", 42)
+        row = self.details.node_backups.topLevelItem(0)
+        self.assertEqual(row.data(0, Qt.ItemDataRole.UserRole), path)
+        self.details.node_backups.setCurrentItem(row)
+        for name in ("View", "Compare"):
+            self.assertTrue(self.details.backup_buttons[name].isEnabled())
+        for name in ("Restore", "Delete"):
+            self.assertFalse(self.details.backup_buttons[name].isEnabled())
+
+        displayed = []
+
+        def inspect(dialog):
+            tree = dialog.findChild(QTreeWidget)
+
+            def texts(item):
+                result = [item.text(column) for column in range(tree.columnCount())]
+                for index in range(item.childCount()):
+                    result.extend(texts(item.child(index)))
+                return result
+
+            displayed.append(texts(tree.invisibleRootItem()))
+
+        with (
+            patch.object(BackupView, "exec", inspect),
+            patch.object(BackupCompare, "exec", inspect),
+        ):
+            self.details.view_backup()
+            self.details.compare_backup()
+        self.assertIn("42", displayed[0])
+        self.assertIn("256:101", displayed[0])
+        self.assertIn("Absent / unknown", displayed[0])
+        self.assertNotIn("None", displayed[0])
+        self.assertNotIn("Annotations", displayed[0])
+        self.assertNotIn("No differences found", displayed[1])
+        self.assertTrue(any("inconclusive" in text for text in displayed[1]))
+
+    def test_invalid_or_unreadable_selected_yaml_uses_existing_error_reporter(self):
+        from workbench.node_backup_files import save_backup
+        from workbench.ui_errors import ErrorReporter
+
+        path = save_backup("Yard", node_backup(self.state))
+        self.details.node_backups.show_live_node("Yard", 42)
+        self.details.node_backups.setCurrentItem(
+            self.details.node_backups.topLevelItem(0)
+        )
+        reporter = ErrorReporter(self.details)
+        for content in ("[broken YAML", "node: 42", None):
+            if content is None:
+                path.unlink()
+            else:
+                path.write_text(content)
+            with patch("workbench.ui_errors.QMessageBox.critical") as error:
+                reporter.run("Cannot view backup", self.details.view_backup)
+            self.assertIn("Cannot view backup", error.call_args.args[2])
+
     def files(self):
         return sorted(Path(self.temp.name).rglob("*.yaml"))
 
