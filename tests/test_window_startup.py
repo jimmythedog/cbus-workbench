@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import ClassVar
 from unittest.mock import patch
 
-from PySide6.QtCore import QObject
+from layout_fixture import sample_settings
+from PySide6.QtCore import QObject, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from workbench.app_settings import load_settings, save_settings
@@ -96,6 +98,73 @@ class WindowStartupTests(unittest.TestCase):
             window = MainWindow()
         self.addCleanup(window.close)
         return window
+
+    def test_discovery_status_tracks_selected_connection_and_reconnect(self):
+        settings = sample_settings()
+        # Two connections can refer to the same logical layout.
+        settings["layouts"]["Test Layout"]["logical_layout"] = "home"
+        for layout in settings["layouts"].values():
+            layout["connection"]["host"] = "localhost"
+        save_settings(settings, self.path)
+        with (
+            patch("workbench.window.TcpConnection", RecordingTcpConnection),
+            patch("workbench.cbus_service.AUTOMATIC_REQUEST_TIMEOUT_MS", 30),
+        ):
+            window = self.open_window()
+            window.connect_layout()
+            self.assertEqual(window.discovery_status.text(), "Discovering…")
+            QTest.qWait(60)
+            self.assertEqual(window.discovery_status.text(), "Incomplete")
+            actions = window.layout_group.actions()
+            actions[1].trigger()
+            self.assertTrue(window.discovery_status.isHidden())
+            self.assertTrue(window.discovery_separator.isHidden())
+            window.connect_layout()
+            self.assertEqual(window.discovery_status.text(), "Discovering…")
+            actions[0].trigger()
+            self.assertEqual(window.discovery_status.text(), "Incomplete")
+            self.assertEqual(window.connection_status.text(), "Connected")
+            QTest.mouseDClick(window.connection_status, Qt.MouseButton.LeftButton)
+            self.assertEqual(window.connection_status.text(), "Disconnected")
+            self.assertTrue(window.discovery_status.isHidden())
+            self.assertTrue(window.discovery_separator.isHidden())
+            QTest.mouseDClick(window.connection_status, Qt.MouseButton.LeftButton)
+            self.assertFalse(window.discovery_status.isHidden())
+            self.assertFalse(window.discovery_separator.isHidden())
+            self.assertEqual(window.discovery_status.text(), "Discovering…")
+            QTest.qWait(60)
+            self.assertEqual(window.discovery_status.text(), "Incomplete")
+
+    def test_status_bar_orders_separate_fields_and_shows_ready(self):
+        settings = sample_settings()
+        settings["layouts"]["Home"]["connection"]["host"] = "localhost"
+        save_settings(settings, self.path)
+        with (
+            patch("workbench.window.TcpConnection", RecordingTcpConnection),
+            patch("workbench.cbus_service.AUTOMATIC_REQUEST_TIMEOUT_MS", 30),
+        ):
+            window = self.open_window()
+            window.show()
+            window.connect_layout()
+            self.app.processEvents()
+            self.assertEqual(window.layout_status.text(), "Home")
+            self.assertEqual(window.discovery_status.text(), "Discovering…")
+            self.assertTrue(window.discovery_status.isVisible())
+            self.assertTrue(window.discovery_separator.isVisible())
+            self.assertEqual(window.connection_status.text(), "Connected")
+            self.assertLess(window.layout_status.x(), window.discovery_separator.x())
+            self.assertLess(window.discovery_separator.x(), window.discovery_status.x())
+            self.assertLess(window.discovery_status.x(), window.connection_status.x())
+            connection = window.connections["Home"]
+            connection.frame_received.emit(b":SB040NB601020D2203;")
+            connection.frame_received.emit(b":SB040N9B01020006;")
+            for index in (2, 4, 5, 6):
+                connection.frame_received.emit(f":SB040N9B0102{index:02X}00;".encode())
+            connection.frame_received.emit(b":SB040N74010200;")
+            QTest.qWait(60)
+            self.assertEqual(window.discovery_status.text(), "Ready")
+            self.assertTrue(window.discovery_status.isVisible())
+            self.assertEqual(window.connection_status.text(), "Connected")
 
     def test_loads_multiple_layouts_and_selects_configured_default(self):
         save_settings(

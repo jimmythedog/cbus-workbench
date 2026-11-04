@@ -82,17 +82,33 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.layout_stack)
 
         self.layout_status = QLabel("No layout")
+        self.discovery_status = QLabel()
         self.connection_status = ConnectionStatusLabel("Disconnected")
         self.connection_status.setToolTip("Double-click to connect or disconnect")
         self.connection_status.double_clicked.connect(self.toggle_connection)
 
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.VLine)
-        separator.setFrameShadow(QFrame.Shadow.Sunken)
-
-        self.statusBar().addPermanentWidget(self.layout_status)
-        self.statusBar().addPermanentWidget(separator)
-        self.statusBar().addPermanentWidget(self.connection_status)
+        self.discovery_separator = QFrame()
+        connection_separator = QFrame()
+        for separator in (self.discovery_separator, connection_separator):
+            separator.setFrameShape(QFrame.Shape.VLine)
+            separator.setFrameShadow(QFrame.Shadow.Sunken)
+        for label in (
+            self.layout_status,
+            self.discovery_status,
+            self.connection_status,
+        ):
+            label.setMargin(4)
+        for widget in (
+            self.layout_status,
+            self.discovery_separator,
+            self.discovery_status,
+            connection_separator,
+            self.connection_status,
+        ):
+            self.statusBar().addPermanentWidget(widget)
+        self.discovery_status.hide()
+        self.discovery_separator.hide()
+        self.statusBar().setContentsMargins(0, 0, 12, 0)
 
         file_menu = self.menuBar().addMenu("&File")
         exit_action = QAction("E&xit", self)
@@ -311,6 +327,7 @@ class MainWindow(QMainWindow):
         node_view.state_lookup = lambda node_number: service.node_states[node_number]
         service.node_state_updated.connect(node_view.refresh_state)
         self.cbus_services[name] = service
+        service.discovery_status_changed.connect(self.update_discovery_status)
         self.layouts[name].discovery_states = lambda: (
             list(self.cbus_services[name].node_states.values())
             if name in self.cbus_services
@@ -484,7 +501,24 @@ class MainWindow(QMainWindow):
             f"Connection for layout '{name}' to {endpoint} failed.\n\n{message}",
         )
 
+    def update_discovery_status(self, _status: str = "") -> None:
+        action = self.layout_group.checkedAction()
+        service = self.cbus_services.get(action.data()) if action else None
+        labels = {
+            "Discovering configuration…": "Discovering…",
+            "Configuration ready": "Ready",
+            "Discovery incomplete": "Incomplete",
+        }
+        text = labels.get(service.discovery_status, "") if service else ""
+        connected = (
+            action is not None and self.connection_states[action.data()] == "Connected"
+        )
+        self.discovery_status.setText(text)
+        self.discovery_status.setVisible(connected and bool(text))
+        self.discovery_separator.setVisible(connected and bool(text))
+
     def update_connection_actions(self):
+        self.update_discovery_status()
         action = self.layout_group.checkedAction()
 
         if action is None:

@@ -25,6 +25,16 @@ fresh discovery state. Node Details shows the CAN ID confirmed by a received PNN
 frame and Online for a discovered node while connected. Disconnected nodes show
 Offline; connected nodes without discovery evidence show `-` for status. Online
 reflects discovery in the current connection, without ongoing liveness polling.
+
+The status bar shows the selected connection's layout name first, followed by
+“Discovering…”, “Ready” or “Incomplete”, then the connection status, with separators
+between fields. This includes rediscovery after Save. When disconnected, only
+the layout name and connection status appear.
+Ready means all initiated reads for observed nodes succeeded (or were skipped as
+inapplicable), after a two-second QNN response window extended by each new node.
+QNN has no global completion acknowledgement: ready does not guarantee every
+possible node was found. Late new nodes reopen discovery; no nodes found or
+unconfirmed discovery phases settle to incomplete.
 After parameter 6 confirms an NV count, Workbench reads those NVs in the
 background through the same request queue. The selected live node's Raw Node
 Variables tab shows confirmed values as they arrive. Unread values show `-`;

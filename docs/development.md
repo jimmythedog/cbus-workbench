@@ -214,7 +214,25 @@ identities in memory and emits signals only for new or changed identities. When 
 layout connects, `MainWindow` creates its service using the configured PC CAN ID
 (100–127) and sends one QNN. Leaving Connected detaches and clears that service;
 reconnecting starts discovery with empty state. The caller must choose a CAN ID
-unique on the network. Discovery is visible in the Diagnostics pane and logs.
+unique on the network. Discovery is visible in the status bar, Diagnostics and logs.
+
+The service emits `discovery_status_changed`; the window reads the selected
+connection's service, independently of its logical layout. Two single-shot Qt
+timers provide a QNN response boundary and defer status aggregation until reply
+handlers finish queuing dependent work; neither timer polls.
+
+    QNN -> 2-second window (restart for each newly observed node)
+        -> parameter / NV / event / EV requests and reply-triggered phases
+        -> window expired + no pending requests or Save/refresh
+           -> all node phases COMPLETE/SKIPPED: ready
+           -> missing/failed phases or no nodes: incomplete
+
+The window is a practical quiet-period boundary, not proof of complete network
+enumeration: QNN is broadcast with no global final acknowledgement. A late new
+PNN reopens discovery. Queue emptiness alone cannot imply success; unknown NV
+count or EV capacity leaves the corresponding phase unconfirmed. Disconnect
+stops the timers, and reconnect creates a fresh service. Post-Save rediscovery
+uses the same status and existing progress state.
 
 ### Node discovery lifecycle
 

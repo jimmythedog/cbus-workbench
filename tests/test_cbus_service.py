@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from PySide6.QtCore import QObject, Signal
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from workbench import cbus_service
@@ -43,6 +44,78 @@ class CbusServiceTests(unittest.TestCase):
             )
         )
         self.service.node_state_updated.connect(self.state_updates.append)
+
+    def test_discovery_status_waits_for_qnn_and_reply_triggered_phases(self):
+        app = QApplication.instance() or QApplication([])
+        with patch.object(cbus_service, "AUTOMATIC_REQUEST_TIMEOUT_MS", 30):
+            self.service.discover_nodes()
+            self.assertEqual(
+                self.service.discovery_status, "Discovering configuration…"
+            )
+            self.start_nv_reads(0)
+            # Parameters are done, but the NUMEV reply still starts another phase.
+            app.processEvents()
+            self.assertEqual(
+                self.service.discovery_status, "Discovering configuration…"
+            )
+            self.connection.frame_received.emit(b":SB040N74010200;")
+            app.processEvents()
+            self.assertEqual(
+                self.service.discovery_status, "Discovering configuration…"
+            )
+            QTest.qWait(60)
+            self.assertEqual(self.service.discovery_status, "Configuration ready")
+        self.service.close()
+
+    def test_discovery_timeout_and_no_nodes_are_incomplete(self):
+        app = QApplication.instance() or QApplication([])
+        with patch.object(cbus_service, "AUTOMATIC_REQUEST_TIMEOUT_MS", 20):
+            self.service.discover_nodes()
+            QTest.qWait(50)
+            self.assertEqual(self.service.discovery_status, "Discovery incomplete")
+            # A late PNN reopens discovery, but missing replies cannot imply ready.
+            self.connection.frame_received.emit(b":SB040NB601020D2203;")
+            self.assertEqual(
+                self.service.discovery_status, "Discovering configuration…"
+            )
+            QTest.qWait(100)
+            self.assertEqual(self.service.discovery_status, "Discovery incomplete")
+        self.service.close()
+        app.processEvents()
+        self.assertEqual(self.service.discovery_status, "Disconnected")
+
+    def test_idle_queue_with_unknown_nv_count_is_incomplete(self):
+        app = QApplication.instance() or QApplication([])
+        with patch.object(cbus_service, "AUTOMATIC_REQUEST_TIMEOUT_MS", 20):
+            self.service.discover_nodes()
+            self.connection.frame_received.emit(b":SB040NB601020D2203;")
+            self.finish_short_parameter_pass()
+            self.connection.frame_received.emit(b":SB040N74010200;")
+            QTest.qWait(50)
+            self.assertEqual(self.service.discovery_status, "Discovery incomplete")
+        self.service.close()
+        app.processEvents()
+
+    def test_ev_phase_started_by_late_capacity_reply_reopens_status(self):
+        app = QApplication.instance() or QApplication([])
+        with patch.object(cbus_service, "AUTOMATIC_REQUEST_TIMEOUT_MS", 20):
+            self.service.discover_nodes()
+            self.connection.frame_received.emit(b":SB040NB601020D2203;")
+            self.connection.frame_received.emit(b":SB040N9B01020600;")
+            self.finish_short_parameter_pass()
+            self.connection.frame_received.emit(b":SB040N74010201;")
+            self.connection.frame_received.emit(b":SB040NF20102000A001407;")
+            QTest.qWait(40)
+            self.assertEqual(self.service.discovery_status, "Discovery incomplete")
+            self.connection.frame_received.emit(b":SB040N9B01020501;")
+            app.processEvents()
+            self.assertEqual(
+                self.service.discovery_status, "Discovering configuration…"
+            )
+            self.connection.frame_received.emit(b":SB040NB50102070109;")
+            app.processEvents()
+            self.assertEqual(self.service.discovery_status, "Configuration ready")
+        self.service.close()
 
     def test_pnn_confirms_can_id_and_repeated_identity_updates_it(self):
         self.connection.frame_received.emit(b":SB040NB601020D2203;")

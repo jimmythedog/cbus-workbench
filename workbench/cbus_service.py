@@ -56,6 +56,7 @@ class NodeState:
 
 
 class CbusService(QObject):
+    discovery_status_changed = Signal(str)
     node_discovered = Signal(Pnn)
     node_updated = Signal(Pnn)
     parameter_updated = Signal(int, int, int)  # Node number, index, value.
@@ -78,12 +79,29 @@ class CbusService(QObject):
         self._request_timer = QTimer(self)
         self._request_timer.setSingleShot(True)
         self._request_timer.timeout.connect(self._request_timed_out)
+        self.discovery_status = "Disconnected"
+        self._closed = False
+        self._qnn_failed = False
+        # QNN has no final acknowledgement. Wait for a quiet response window,
+        # then judge only the work initiated for nodes actually observed.
+        self._discovery_window = QTimer(self)
+        self._discovery_window.setSingleShot(True)
+        self._discovery_window.timeout.connect(self._update_discovery_status)
+        # Defer aggregation until the current reply has queued all follow-on work.
+        self._status_update = QTimer(self)
+        self._status_update.setSingleShot(True)
+        self._status_update.timeout.connect(self._update_discovery_status)
+        self.node_state_updated.connect(lambda _node: self._status_update.start(0))
         self.nv_write = NvWrite(self)
         self.ev_write = EvWrite(self)
         connection.frame_received.connect(self._receive_frame)
 
     def close(self) -> None:
         """Stop observing frames when this connection's live state ends."""
+        self._closed = True
+        self._discovery_window.stop()
+        self._status_update.stop()
+        self._set_discovery_status("Disconnected")
         self.connection.frame_received.disconnect(self._receive_frame)
         self.nv_write.disconnect()
         self.ev_write.disconnect()
@@ -98,8 +116,59 @@ class CbusService(QObject):
             extra={"fields": {"layout": self.connection.layout_name}},
         )
 
+    def _set_discovery_status(self, status: str) -> None:
+        if self.discovery_status != status:
+            trace(
+                logger,
+                "Connection discovery status changed",
+                extra={
+                    "fields": {
+                        "layout": self.connection.layout_name,
+                        "previous": self.discovery_status,
+                        "status": status,
+                    }
+                },
+            )
+            self.discovery_status = status
+            self.discovery_status_changed.emit(status)
+
+    def _update_discovery_status(self) -> None:
+        """Aggregate confirmed progress after reply-triggered phases are queued."""
+        if self._closed:
+            return
+        if (
+            self._discovery_window.isActive()
+            or self._outstanding_request is not None
+            or self._request_queue
+            or self.nv_write.active
+            or self.nv_write.refreshing
+            or self.ev_write.active
+            or self.ev_write.refreshing
+        ):
+            status = "Discovering configuration…"
+        else:
+            complete = (DiscoveryProgress.COMPLETE, DiscoveryProgress.SKIPPED)
+            ready = (
+                bool(self.node_states)
+                and not self._qnn_failed
+                and all(
+                    progress in complete
+                    for state in self.node_states.values()
+                    for progress in (
+                        state.parameter_progress,
+                        state.nv_progress,
+                        state.event_progress,
+                        state.ev_progress,
+                    )
+                )
+            )
+            status = "Configuration ready" if ready else "Discovery incomplete"
+        self._set_discovery_status(status)
+
     def discover_nodes(self) -> None:
         """Queue one QNN request; PNN responses arrive independently by signal."""
+        self._set_discovery_status("Discovering configuration…")
+        self._discovery_window.start(AUTOMATIC_REQUEST_TIMEOUT_MS)
         # The guide specifies major priority bits 0b10 and minor priority
         # bits 0b11 for a starting query. GridConnect left-justifies CAN bits.
         header = (0x580 | self.can_id) << 5
@@ -109,6 +178,9 @@ class CbusService(QObject):
         try:
             self.connection.send(frame)
         except OSError:
+            self._qnn_failed = True
+            self._discovery_window.stop()
+            self._update_discovery_status()
             logger.exception("Could not send QNN", extra={"fields": fields})
             raise
         trace(logger, "QNN queued", extra={"fields": fields})
@@ -503,6 +575,8 @@ class CbusService(QObject):
             },
         )
         if is_new:
+            self._discovery_window.start(AUTOMATIC_REQUEST_TIMEOUT_MS)
+            self._set_discovery_status("Discovering configuration…")
             self.node_discovered.emit(pnn)
             self.node_state_updated.emit(pnn.node_number)
             if pnn.node_number != 0:
@@ -861,6 +935,7 @@ class CbusService(QObject):
         self._send_next_request()
 
     def _send_next_request(self) -> None:
+        self._status_update.start(0)
         if self._outstanding_request is not None:
             return
         if self.nv_write.active:

@@ -53,6 +53,23 @@ class NvWriteTests(unittest.TestCase):
     def reply(self, payload):
         self.connection.frame_received.emit(f":SB040N{payload};".encode())
 
+    def test_status_covers_post_save_nv_and_event_rediscovery(self):
+        self.state.parameter_progress = DiscoveryProgress.COMPLETE
+        self.state.event_progress = self.state.ev_progress = DiscoveryProgress.COMPLETE
+        self.state.identity = Pnn(258, 13, 34, 5)
+        self.service.write_nvs(258, {1: 9})
+        self.reply("590102")
+        self.reply("9701020109")
+        self.app.processEvents()
+        self.assertEqual(self.service.discovery_status, "Discovering configuration…")
+        self.reply("9701020109")
+        self.reply("9701020208")
+        self.app.processEvents()
+        self.assertEqual(self.service.discovery_status, "Discovering configuration…")
+        self.reply("74010200")
+        self.app.processEvents()
+        self.assertEqual(self.service.discovery_status, "Configuration ready")
+
     def test_changed_only_serialised_acknowledgement_and_readback(self):
         self.service.write_nvs(258, {1: 7, 2: 0})
         self.assertEqual(self.connection.sent, [b":SBFC0N9601020200;"])
