@@ -95,13 +95,47 @@ Top-level UI actions that need an error dialog can call `ErrorReporter.run(descr
 `NodeDetails` owns the node backup buttons and displays. Its plain Python
 `NodeBackupWorkflow` helper handles the selected backup's dialogs, snapshots and
 changes to `NodeBackups`. After a restore, one callback to `NodeDetails` refreshes
-the variable and event displays; layout backups still use the same `NodeBackups`
+the variable and event displays; prototype layout backups still use the same `NodeBackups`
 store through `LayoutView` for their demo data. Live nodes instead use
 `node_backup_files` to capture confirmed `NodeState` values in the issue #44 YAML
 format. `NodeDetails` retains the selected live state and logical layout;
 `NodeBackupWorkflow` requests acknowledgement for incomplete discovery before
 writing. Filenames provide timestamps; listing reads actual files from the Qt
 Data directory. Live restore and other unfinished backup actions are disabled.
+
+Live layout saves capture the selected view's service states with the same
+`node_backup` serializer. The manifest contains only `format_version`, `complete`
+and `nodeNumbers`. Each node record carries `partOfLayoutBackup: true` (standalone
+records use `false`). One filename identifies the manifest and all associated node
+files in their existing backup directories. The common writer accepts that filename.
+This retains the prototype's relationship between a layout backup and node snapshots
+without embedding or duplicating node configuration in the manifest.
+
+No new discovery or hardware writes are triggered. Completeness describes the
+included discovered nodes, not whether undiscovered hardware exists; an empty set
+is incomplete. The confirmation lists incomplete node numbers.
+
+    selected states -> node_backup for each node -> completeness check
+                                                    |             |
+                                                  Cancel      Save Anyway
+                                                    |             |
+                                                  stop      one filename
+                                                                  |
+                                                     write each node file
+                                                        |         |
+                                                      failure   all saved
+                                                        |         |
+                                                      report   write manifest
+                                                                  |
+                                                           refresh layout list
+
+The manifest is written last so a failed node save cannot publish a successful
+layout backup. Errors propagate; earlier node files remain, with no rollback.
+Layout View resolves each manifest node number using the shared filename and checks
+node identity and ownership. Node View shows the ownership flag; ordinary node View
+and Compare use the same loader for standalone and associated files. Live layout
+Compare, Restore and Delete remain disabled.
+
 Filesystem failures propagate to the existing UI exception reporter.
 
 `workbench.paths` resolves Qt's application directories for `cbus-workbench`;

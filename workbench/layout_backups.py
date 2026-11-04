@@ -1,6 +1,8 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
 
+from .node_backup_files import list_backups
+
 
 class LayoutBackups(QTreeWidget):
     def __init__(self, empty=False):
@@ -73,6 +75,17 @@ class LayoutBackups(QTreeWidget):
             for backup in backups:
                 item = QTreeWidgetItem(self, [backup["created"], backup["description"]])
                 item.setData(0, Qt.ItemDataRole.UserRole, backup)
+
+    def show_live_layout(self, logical_layout):
+        self.clear()
+        self.setHeaderLabels(["Filename", "Discovery"])
+        self.setColumnWidth(0, 340)
+        for path, complete in list_backups(logical_layout):
+            item = QTreeWidgetItem(
+                self, [path.name, "Complete" if complete else "Incomplete"]
+            )
+            item.setToolTip(0, str(path))
+            item.setData(0, Qt.ItemDataRole.UserRole, path)
 
     def add_backup(self, backup):
         item = QTreeWidgetItem(

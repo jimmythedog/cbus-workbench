@@ -16,6 +16,7 @@ def backup_contents(backup):
     if "format_version" in backup:
         return {
             "complete": backup["complete"],
+            "partOfLayoutBackup": backup["partOfLayoutBackup"],
             "node_details": {"number": backup["node"]},
             "nv_values": dict(enumerate(backup["nvs"], 1)),
             "consumed_events": {
@@ -68,6 +69,27 @@ def display_value(value):
     return "Absent / unknown" if value is None else str(value)
 
 
+def add_configuration_items(parent, contents):
+    """Show NVs and consumed events consistently in node and layout backups."""
+    # Saved node variables
+    variables = QTreeWidgetItem(parent, ["Node variables"])
+    for number, value in sorted(contents["nv_values"].items()):
+        QTreeWidgetItem(variables, [f"NV {number}", display_value(value)])
+
+    # Saved consumed events and their event variables
+    events = QTreeWidgetItem(parent, ["Consumed events"])
+    for event_id, description in contents["consumed_events"].items():
+        event = QTreeWidgetItem(events, [event_id, description])
+
+        for number, value in contents["ev_values"].get(event_id, {}).items():
+            text = (
+                "Absent"
+                if value is None and contents.get("complete") is True
+                else display_value(value)
+            )
+            QTreeWidgetItem(event, [f"EV {number}", text])
+
+
 class BackupView(QDialog):
     def __init__(self, node, backup, parent=None):
         super().__init__(parent)
@@ -99,6 +121,8 @@ class BackupView(QDialog):
         for key in ("created", "description"):
             if key in contents:
                 QTreeWidgetItem(snapshot, [key.capitalize(), contents[key]])
+        if contents.get("partOfLayoutBackup"):
+            QTreeWidgetItem(snapshot, ["Ownership", "Part of layout backup"])
         snapshot.setExpanded(True)
 
         # Saved node details
@@ -108,23 +132,7 @@ class BackupView(QDialog):
                 details, [name.replace("_", " ").capitalize(), display_value(value)]
             )
 
-        # Saved node variables
-        variables = QTreeWidgetItem(tree, ["Node variables"])
-        for number, value in sorted(contents["nv_values"].items()):
-            QTreeWidgetItem(variables, [f"NV {number}", display_value(value)])
-
-        # Saved consumed events and their event variables
-        events = QTreeWidgetItem(tree, ["Consumed events"])
-        for event_id, description in contents["consumed_events"].items():
-            event = QTreeWidgetItem(events, [event_id, description])
-
-            for number, value in contents["ev_values"].get(event_id, {}).items():
-                text = (
-                    "Absent"
-                    if value is None and contents.get("complete") is True
-                    else display_value(value)
-                )
-                QTreeWidgetItem(event, [f"EV {number}", text])
+        add_configuration_items(tree, contents)
 
         # Saved NV descriptions
         descriptions = (

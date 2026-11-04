@@ -5,7 +5,6 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-import yaml
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QInputDialog, QMainWindow, QMessageBox, QWidget
 
@@ -13,7 +12,7 @@ from .backup_compare import BackupCompare
 from .backup_view import BackupView, backup_contents
 from .cbus_service import NodeState
 from .logging_config import trace
-from .node_backup_files import node_backup, save_backup, validate_backup
+from .node_backup_files import load_node_backup, node_backup, save_backup
 from .node_backups import NodeBackups
 from .node_snapshot import create_node_snapshot, restore_node_snapshot
 from .pnn import Pnn
@@ -38,18 +37,13 @@ class NodeBackupWorkflow:
         selected = self.backups.selectedItems()
         backup = selected[0].data(0, Qt.ItemDataRole.UserRole) if selected else None
         if isinstance(backup, Path):
-            trace(
-                logger, "Loading node backup", extra={"fields": {"path": str(backup)}}
-            )
-            with backup.open(encoding="utf-8") as stream:
-                backup = yaml.safe_load(stream)
-            validate_backup(backup)
+            backup = load_node_backup(backup)
         return backup
 
     @staticmethod
     def _is_layout_backup(backup):
         return (
-            backup.get("partOfLayoutBackup", False)
+            backup.get("partOfLayoutBackup") is True
             or backup.get("description") == "Layout backup"
         )
 

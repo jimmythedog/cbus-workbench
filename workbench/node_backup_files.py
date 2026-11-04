@@ -75,6 +75,7 @@ def node_backup(state: NodeState) -> dict:
     backup = {
         "format_version": 1,
         "complete": complete,
+        "partOfLayoutBackup": False,
         "node": state.identity.node_number,
         "nvs": nvs,
         "events": events,
@@ -93,28 +94,27 @@ def node_backup(state: NodeState) -> dict:
     return backup
 
 
-def backup_directory(logical_layout: str, node_number: int) -> Path:
-    return (
-        application_directories()["Data"]
-        / "layouts"
-        / logical_layout
-        / "nodes"
-        / str(node_number)
-        / "backups"
-    )
+def backup_directory(logical_layout: str, node_number: int | None = None) -> Path:
+    directory = application_directories()["Data"] / "layouts" / logical_layout
+    if node_number is not None:
+        directory = directory / "nodes" / str(node_number)
+    return directory / "backups"
 
 
-def save_backup(logical_layout: str, backup: dict) -> Path:
-    directory = backup_directory(logical_layout, backup["node"])
+def save_backup(logical_layout: str, backup: dict, filename: str | None = None) -> Path:
+    """Save a node record or manifest, optionally sharing a layout filename."""
+    directory = backup_directory(logical_layout, backup.get("node"))
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{datetime.now():%Y-%m-%d_%H-%M-%S-%f}.yaml"
+    path = directory / (filename or f"{datetime.now():%Y-%m-%d_%H-%M-%S-%f}.yaml")
     with path.open("x", encoding="utf-8") as stream:
         yaml.safe_dump(backup, stream, sort_keys=False)
-    logger.info("Node backup saved", extra={"fields": {"path": str(path)}})
+    logger.info("Configuration backup saved", extra={"fields": {"path": str(path)}})
     return path
 
 
-def list_backups(logical_layout: str, node_number: int) -> list[tuple[Path, bool]]:
+def list_backups(
+    logical_layout: str, node_number: int | None = None
+) -> list[tuple[Path, bool]]:
     directory = backup_directory(logical_layout, node_number)
     if not directory.exists():
         return []
@@ -125,7 +125,7 @@ def list_backups(logical_layout: str, node_number: int) -> list[tuple[Path, bool
         backups.append((path, backup["complete"]))
     trace(
         logger,
-        "Node backups listed",
+        "Configuration backups listed",
         extra={
             "fields": {
                 "layout": logical_layout,
@@ -135,6 +135,15 @@ def list_backups(logical_layout: str, node_number: int) -> list[tuple[Path, bool
         },
     )
     return backups
+
+
+def load_node_backup(path: Path) -> dict:
+    """Load a node file for either the node UI or its owning layout manifest."""
+    trace(logger, "Loading node backup", extra={"fields": {"path": str(path)}})
+    with path.open(encoding="utf-8") as stream:
+        backup = yaml.safe_load(stream)
+    validate_backup(backup)
+    return backup
 
 
 def validate_backup(backup: dict) -> None:
@@ -152,6 +161,7 @@ def validate_backup(backup: dict) -> None:
         isinstance(backup, dict)
         and backup.get("format_version") == 1
         and type(backup.get("complete")) is bool
+        and type(backup.get("partOfLayoutBackup")) is bool
         and integer(backup.get("node"))
         and values(backup.get("nvs"))
         and isinstance(backup.get("events"), list)

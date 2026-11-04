@@ -1,5 +1,7 @@
 from datetime import datetime
+from pathlib import Path
 
+import yaml
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
@@ -16,6 +18,7 @@ from PySide6.QtWidgets import (
 from .backup_view import backup_contents
 from .layout_backup_compare import LayoutBackupCompare
 from .layout_backup_view import LayoutBackupView
+from .layout_backup_workflow import create_layout_backup
 from .layout_backups import LayoutBackups
 from .layout_events import LayoutEvents
 from .layout_restore_dialog import LayoutRestoreDialog
@@ -26,6 +29,9 @@ from .node_view import NodeView
 class LayoutView(QWidget):
     def __init__(self, empty=False):
         super().__init__()
+
+        self.logical_layout = None
+        self.discovery_states = list
 
         layout = QVBoxLayout(self)
 
@@ -48,7 +54,6 @@ class LayoutView(QWidget):
             self.events = {}
 
         self.tabs = QTabWidget()
-        self.tabs.currentChanged.connect(self.on_tab_changed)
         self.node_view = NodeView(self.events)
         self.tabs.addTab(self.node_view, "Nodes")
 
@@ -90,6 +95,13 @@ class LayoutView(QWidget):
 
         self.node_view.details.editing_changed.connect(self.on_editing_changed)
         self.layout_events.editing_changed.connect(self.on_layout_events_editing)
+        self.tabs.currentChanged.connect(self.on_tab_changed)
+
+    def show_live_layout(self, logical_layout, discovery_states):
+        self.logical_layout = logical_layout
+        self.discovery_states = discovery_states
+        self.layout_backups.show_live_layout(logical_layout)
+        self.update_backup_buttons()
 
     def nodes(self):
         return [
@@ -98,6 +110,8 @@ class LayoutView(QWidget):
         ]
 
     def on_tab_changed(self, index):
+        if index == self.tabs.indexOf(self.backups_page) and self.logical_layout:
+            self.layout_backups.show_live_layout(self.logical_layout)
         if index == self.tabs.indexOf(self.node_view):
             self.node_view.show_selected_node(self.node_view.node_list.currentItem())
 
@@ -114,7 +128,9 @@ class LayoutView(QWidget):
 
         for name, button in self.backup_buttons.items():
             if name != "New":
-                button.setEnabled(selected)
+                button.setEnabled(
+                    selected and (self.logical_layout is None or name == "View")
+                )
 
     def view_backup(self):
         selected = self.layout_backups.selectedItems()
@@ -123,7 +139,11 @@ class LayoutView(QWidget):
 
         backup = selected[0].data(0, Qt.ItemDataRole.UserRole)
 
-        dialog = LayoutBackupView(backup, self)
+        manifest_path = backup if isinstance(backup, Path) else None
+        if isinstance(backup, Path):
+            with backup.open(encoding="utf-8") as stream:
+                backup = yaml.safe_load(stream)
+        dialog = LayoutBackupView(backup, self, manifest_path=manifest_path)
         dialog.exec()
 
     def compare_backup(self):
@@ -143,6 +163,16 @@ class LayoutView(QWidget):
         dialog.exec()
 
     def new_backup(self):
+        if self.logical_layout is not None:
+            path = create_layout_backup(
+                self, self.logical_layout, self.discovery_states()
+            )
+            if path is not None:
+                self.layout_backups.show_live_layout(self.logical_layout)
+                window = self.window()
+                if isinstance(window, QMainWindow):
+                    window.statusBar().showMessage(f"Layout backup saved: {path}", 5000)
+            return
         description, accepted = QInputDialog.getText(
             self,
             "New layout backup",

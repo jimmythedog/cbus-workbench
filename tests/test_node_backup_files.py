@@ -138,6 +138,7 @@ class NodeBackupFilesTests(unittest.TestCase):
             {
                 "format_version": 1,
                 "complete": False,
+                "partOfLayoutBackup": False,
                 "node": 42,
                 "nvs": [0, None, 8],
                 "events": [

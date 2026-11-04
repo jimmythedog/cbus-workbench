@@ -6,9 +6,12 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from .backup_view import add_configuration_items, backup_contents
+from .node_backup_files import load_node_backup
+
 
 class LayoutBackupView(QDialog):
-    def __init__(self, backup, parent=None):
+    def __init__(self, backup, parent=None, *, manifest_path=None):
         super().__init__(parent)
 
         self.setWindowTitle("Layout backup contents")
@@ -21,6 +24,38 @@ class LayoutBackupView(QDialog):
         tree.setColumnWidth(0, 300)
         layout.addWidget(tree)
 
+        if manifest_path is not None:
+            QTreeWidgetItem(
+                tree, ["Discovery", "Complete" if backup["complete"] else "Incomplete"]
+            )
+            for number in backup["nodeNumbers"]:
+                path = (
+                    manifest_path.parent.parent
+                    / "nodes"
+                    / str(number)
+                    / "backups"
+                    / manifest_path.name
+                )
+                node = load_node_backup(path)
+                if node["node"] != number or not node["partOfLayoutBackup"]:
+                    raise ValueError(f"Node backup does not belong to manifest: {path}")
+                item = QTreeWidgetItem(
+                    tree,
+                    [
+                        f"Node {node['node']}",
+                        "Complete" if node["complete"] else "Incomplete",
+                    ],
+                )
+                add_configuration_items(item, backup_contents(node))
+                item.setExpanded(True)
+        else:
+            self._show_prototype(tree, backup)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _show_prototype(self, tree, backup):
         details = QTreeWidgetItem(tree, ["Backup"])
         QTreeWidgetItem(details, ["Created", backup["created"]])
         QTreeWidgetItem(details, ["Description", backup["description"]])
@@ -45,7 +80,3 @@ class LayoutBackupView(QDialog):
                 )
 
         events.setExpanded(True)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)

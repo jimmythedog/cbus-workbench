@@ -45,6 +45,20 @@ node number and event number. Unknown values make the result inconclusive; they
 are not reported as definite differences. Complete backups distinguish absent EVs
 from unread values.
 
+The layout’s Backups tab lists saved manifests under
+Data → `layouts/<logical-layout>/backups/<timestamp>.yaml`. Each manifest lists
+its discovered node numbers and overall completeness. Associated node backups use
+the same filename under `layouts/<logical-layout>/nodes/<node-number>/backups/`
+and appear in the ordinary node Backups list, with View and Compare available.
+Node YAML includes `partOfLayoutBackup: true` for these associated backups and
+`false` for standalone node backups.
+View shows each saved node’s discovery status, NVs and events. Incomplete discovery
+requires Cancel / Save Anyway; an empty discovery is also marked incomplete.
+These snapshots contain confirmed discovery data only, without annotations.
+Completeness describes the included nodes; undiscovered hardware cannot be detected
+by the backup. Node files are written first and the manifest last. A failed save is
+reported and may leave node files on disk. Layout restore and deletion are unavailable.
+
 Find the Data directory in Help → Application Directories. Live backup restore is
 not implemented.
 Messages / Diagnostics also shows sent and received CBUS frames, including parameter
