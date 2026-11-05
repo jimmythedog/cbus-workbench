@@ -322,9 +322,6 @@ class MainWindow(QMainWindow):
         node_view.details.cbus_service = service
         service.restore.changed.connect(node_view.details.show_restore_progress)
         service.restore.finished.connect(node_view.details.finish_restore)
-        service.ev_write.finished.connect(node_view.details.finish_ev_save)
-        service.nv_write.finished.connect(node_view.details.finish_nv_save)
-        service.nv_write.refresh_finished.connect(node_view.details.finish_nv_refresh)
         node_view.details.logical_layout = self.layout_settings[name]["logical_layout"]
         node_view.state_lookup = lambda node_number: service.node_states[node_number]
         service.node_state_updated.connect(node_view.refresh_state)
@@ -351,7 +348,12 @@ class MainWindow(QMainWindow):
         service = self.cbus_services.pop(name, None)
         if service is None:
             return
+        details = self.layouts[name].node_view.details
+        saving_configuration = details.saving_configuration
         service.close()
+        # Closing the service completes an interrupted Save before rebuilding
+        # selection. Keep its result through the resulting show_node() calls.
+        save_result = details.nv_result.text() if saving_configuration else ""
         service.deleteLater()
         view = self.layouts[name]
         view.node_view.details.connected = False
@@ -361,6 +363,8 @@ class MainWindow(QMainWindow):
         logical_layout = self.layout_settings[name]["logical_layout"]
         view.node_view.details.logical_layout = logical_layout
         view.node_view.show_saved_nodes(logical_layout)
+        if saving_configuration:
+            details.show_configuration_result(save_result)
         connection_logger.info(
             "CBUS discovery state cleared", extra={"fields": {"layout": name}}
         )

@@ -217,8 +217,8 @@ The final full configuration discovery after event restoration remains required;
 EV teaching that changes an NV cannot produce a successful result.
 
 TRACE records comparisons, refresh ranges, verified write counts and failures.
-Ordinary NV Save shares this ascending pass and final NV/event refresh, but stops
-before event restoration; firmware-generated event changes are displayed as found.
+Editor Save and backup Restore both continue through event reconciliation and
+final verification; neither has a separate application mode.
 
 `node_restore_events` plans each backed-up event from the latest post-NV or
 post-write discovery. It stops
@@ -267,7 +267,7 @@ operator confirmation rather than an inferred compatibility guarantee.
 retaining its PNN identity/CAN ID. Completion is emitted after the request queue
 has exhausted follow-on work, including failures. During a failure refresh,
 matching NVRD replies can reveal an unverified NV's physical value without clearing
-the failed-write marker that requires reconnecting before another ordinary Save.
+the failed-write marker that requires reconnecting before another application.
 The coordinator advances through a single-shot Qt timer so writer completion
 callbacks finish their queue cleanup before the next operation begins. TRACE
 records restore stages, target, write counts, failure reasons and final differences.
@@ -357,39 +357,42 @@ uses the same status and existing progress state.
 
 ### Node discovery lifecycle
 
-NV Save passes the complete editor working copy to `CbusService.save_nvs()`.
-The service validates every value and requires every discovered NV index before
-`NodeRestore.begin_nv_save()` copies the desired values. Save and Restore use
-one ascending reconciliation loop, with connection ownership held across writes,
-intermediate discovery and deferred Qt callbacks:
+Live editing uses the existing backup dictionary directly. `NodeDetails` captures
+`original_configuration = node_backup(state)` only after complete discovery and
+holds a deep copy as `desired_configuration`. The NV widgets edit its `nvs` list;
+`NodeEvents` edits its event records by stable event identity. Clearing an EV
+stores absence (`None`); trailing absences are trimmed as in `node_backup()`.
+Both tabs' existing buttons control the same session. Live discovery updates do
+not replace the editable copy, and Cancel or disconnect discards it.
 
 ```text
-Edit -> working copy -> Cancel -> discard (no writes)
-                     -> Save -> compare next desired NV with confirmed live value
-                                  matching -> next NV
-                                  different -> NvWrite: NVSET -> WRACK -> NVRD -> NVANS
-                                            -> reread higher NVs -> next comparison
-                             -> full NV reread + event/EV rediscovery
-                             -> compare all desired NVs -> finish Save
-                                  mismatch/incomplete -> fail, no retry
-                 write failure -> stop -> full node rediscovery -> report failure
-                 disconnect -> stop and report; service is then discarded
+complete discovery -> Edit on either tab -> original + desired copy
+                                           | NV tab -> desired["nvs"]
+                                           | Events -> desired["events"]
+                                           + Cancel on either tab -> discard
+                                           + Save on either tab
+                                               -> NodeRestore.begin(node, desired)
+                                               -> both editors locked
+                                               -> writes + rediscovery + verification
+                                               -> one final result on both tabs
+                                               -> display confirmed state
 ```
 
-The same loop continues into event replacement for Restore. NV Save never enters
-those stages: it displays firmware-generated event changes without teaching or
-unlearning events. Each desired index is visited once. A later write that changes
-an earlier NV fails final verification rather than starting another pass.
-Initially matching higher NVs remain in the desired configuration, so firmware
-resets can be corrected when their turn is reached.
+Save submits the same complete dictionary as a loaded YAML backup directly to
+`NodeRestore.begin()`; the reconciliation algorithm does not distinguish its
+origin. `NodeDetails` holds its saving flag until `restore.finished`, so writer
+completion and intermediate discovery cannot unlock the editors. Progress and
+final results are mirrored on both tabs. A validation rejection preserves edits;
+application completion (including failure) replaces them with confirmed state.
+The editor observes only the coordinator's completion. `NvWrite.write_finished`
+and `discovery_finished`, and `EvWrite.finished`, report transaction results to
+the coordinator, never to the editor. Disconnect therefore produces one final
+application result even though writer cleanup may finish afterwards.
 
-`NvWrite` remains the hardware transaction boundary. It waits for an outstanding
-discovery reply before writing, requires matching acknowledgement and readback,
-and rereads higher indices after each coordinator-owned write. Its transaction
-signals advance the coordinator; editor completion signals are emitted only when
-the whole NV Save finishes. The editor working copy stays locked until then.
-The service's existing `restore.active` ownership also covers coordinated NV Save,
-including raw-frame exclusion and the gaps between writer transactions.
+`CbusService.write_nvs()` and `write_evs()` validate coordinator-owned transaction
+data and pass it to the verified writers. They perform no independent comparison:
+NV reconciliation and event planning in `NodeRestore` determine the writes from
+confirmed hardware state. There is no NV-only Save mode or ordinary EV Save path.
 
 The Developer's Guide 6b teaching/readback sections define the wire sequence;
 no learn mode is needed. WRACK and CMDERR carry no NV index or transaction ID.
@@ -404,7 +407,7 @@ RQEVN, NERD/ENRSP and REVAL/NEVAL discovery. Work for other nodes is preserved.
 Zero events completes without NERD or EV reads. Success requires matching desired
 NVs and complete NV/event/EV discovery (or non-consumer event skips). Confirmed
 zero EVs, confirmed absences and unread values retain their existing meanings.
-Detailed logs identify Save versus Restore, comparisons, stages and failures.
+Detailed logs record application stages, comparisons, verified writes and failures.
 
 Each new numbered PNN starts a parameter pass. A confirmed parameter 6 can
 queue NV reads before that pass ends; the shared queue serialises the requests.
@@ -536,7 +539,7 @@ already confirmed by the service. Identity updates keep the current selection,
 and ending a connection clears that layout's live entries. The selected live
 node's Raw Node Variables table shows confirmed values, with `-` for
 unread indices when parameter 6 provides the count. Edit becomes available after
-complete NV discovery while the connection is active.
+complete node configuration discovery while the connection is active.
 The node Events tab uses the same side-by-side widget for configured nodes and
 live nodes. For live nodes, it reads `NodeState` on selection and state-update
 signals. Consumed event rows and editor working copies use stable event identities;
@@ -547,17 +550,16 @@ display clears with the selected identity on disconnect; it keeps no separate
 discovery model.
 
 
-### Saving live EV edits
+### Verified EV writing
 
-`NodeEvents` retains a working copy while editing; background discovery cannot
-replace edited cells. Only explicit numeric differences are passed to
-`CbusService.write_evs`, keyed by `(event NN, event number, EV index)`. Absent
-(`None`), unread (missing), and zero retain their separate meanings. Live nodes
-use the raw EV rows; the configured-node MDF form remains prototype data, not a
-live MDF mapping. No event indices are persisted.
+The editor updates the shared desired configuration described above; it does not
+call `CbusService.write_evs()` directly. The coordinator uses that transaction API
+with `(event NN, event number, EV index)` keys. Live nodes use
+raw EV rows; the configured-node MDF form remains prototype data, not a live MDF
+mapping. No event indices are persisted.
 
 `EvWrite` owns the connection after the current automatic request completes,
-excluding NV Saves and automatic discovery until teaching and cleanup finish.
+excluding other writes and automatic discovery until teaching and cleanup finish.
 NNLRN and NNULN have no acknowledgement. Parameter 8 bit 5 is not a universal
 CBUS requirement: Guide 6b's teaching sequence does not require it, and Guide
 6c §7.2.3 / §7.2.8.4 still describes it as proposed. CBUS 5.0 Rev A1 likewise
@@ -587,7 +589,7 @@ VLCB adds GRSP alongside WRACK/CMDERR; those duplicate responses are not needed
 for this sequence. REVAL is not required for write verification.
 
 ```text
-Save -> validate explicit changes -> wait for outstanding discovery
+Coordinator -> validate planned EV transaction -> wait for outstanding discovery
   -> NNLRN -> known parameter 8? RQNPN(8)
        reliable flag (VLCB or observed set) -> require learn bit set
        legacy clear flag / no parameter 8 -> no mode conclusion; standard teaching
@@ -601,14 +603,17 @@ Save -> validate explicit changes -> wait for outstanding discovery
        no reliable flag -> record lack of exit confirmation in TRACE
        earlier failure -> report verified count and failure; require reconnect
        all verified -> clear old slots -> RQEVN / NERD / existing EV discovery
-                         complete -> Changes saved successfully
-                         incomplete -> saved, displayed configuration incomplete
+                         complete -> transaction finished; coordinator verifies step
+                         incomplete -> transaction failure; coordinator stops writes
+  -> coordinator -> final full-node discovery and verification -> application result
 ```
 
-The shared queue resumes after exit handling. A failed Save blocks further writes
-on that connection because physical results may be uncertain. A verified Save
-with no flag support remains usable after refresh, with a simple success message;
-reconnecting cannot add a reporting capability that the protocol does not require.
+The shared queue resumes after exit handling. A failed transaction blocks further
+writes on that connection because physical results may be uncertain. Successful
+teaching with no flag support remains usable after refresh; reconnecting cannot
+add a reporting capability that the protocol does not require. Writer completion
+is a transaction result; only the coordinator's final verification establishes
+application success.
 Before attempting an EV write, its cached value is removed: a missing key means
 unknown, so Compare and backups cannot present the pre-write value as confirmed
 after a failed Save. Matching readback restores the confirmed value; untouched

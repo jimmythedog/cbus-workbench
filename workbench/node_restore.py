@@ -1,4 +1,4 @@
-"""Coordinate backup restoration and NV Save through the verified writers."""
+"""Apply node configurations through the verified NV and EV writers."""
 
 import logging
 from copy import deepcopy
@@ -26,7 +26,6 @@ class NodeRestore(QObject):
         super().__init__(service)
         self.service = service
         self.active = False
-        self.nv_only = False
         self.node_number = 0
         self.stage = ""
         self.failure = ""
@@ -103,15 +102,8 @@ class NodeRestore(QObject):
                 "Incomplete backup replacement may remove uncaptured configuration; explicit confirmation is required."
             )
         self.backup = deepcopy(backup)
-        self.nv_only = False
         self.desired_nvs = self.backup["nvs"]
         self.pending_events = list(self.backup["events"])
-        self.start(node_number)
-
-    def begin_nv_save(self, node_number: int, values: dict[int, int]) -> None:
-        """Service-validated full working copy; events are refreshed, never applied."""
-        self.nv_only = True
-        self.desired_nvs = [values[i] for i in range(1, len(values) + 1)]
         self.start(node_number)
 
     def start(self, node_number: int) -> None:
@@ -122,7 +114,6 @@ class NodeRestore(QObject):
             state.can_id,
         )
         self.node_number = node_number
-        self.service.nv_write.coordinated_save = self.nv_only
         self.active = True
         self.failure = ""
         self.nvs_verified = self.evs_verified = 0
@@ -136,10 +127,9 @@ class NodeRestore(QObject):
     def schedule(self, stage: str) -> None:
         self.stage = stage
         self.log("Configuration application stage changed")
-        if not self.nv_only:
-            self.changed.emit(
-                self.node_number, f"Restoring node {self.node_number}: {stage}…"
-            )
+        self.changed.emit(
+            self.node_number, f"Restoring node {self.node_number}: {stage}…"
+        )
         self.timer.start(0)
 
     def advance(self) -> None:
@@ -177,20 +167,7 @@ class NodeRestore(QObject):
                     raise ValueError(
                         "NV verification after rediscovery differs from the desired configuration; no further writes will be made."
                     )
-                if self.nv_only:
-                    from .cbus_service import DiscoveryProgress
-
-                    complete = (DiscoveryProgress.COMPLETE, DiscoveryProgress.SKIPPED)
-                    if (
-                        state.event_progress not in complete
-                        or state.ev_progress not in complete
-                    ):
-                        raise ValueError(
-                            "NVs verified, but event configuration could not be refreshed."
-                        )
-                    self.finish(True, "Changes saved successfully.")
-                else:
-                    self.schedule("restoring events")
+                self.schedule("restoring events")
             elif self.stage == "restoring events":
                 self.restore_evs(state)
             elif self.stage == "rediscovering final configuration":
@@ -199,10 +176,6 @@ class NodeRestore(QObject):
             self.fail(str(error))
 
     def nv_discovery_complete(self, state) -> bool:
-        if self.nv_only:
-            from .cbus_service import DiscoveryProgress
-
-            return state.nv_progress == DiscoveryProgress.COMPLETE
         return node_backup(state)["complete"]
 
     def restore_next_nv(self, state) -> None:
@@ -309,11 +282,6 @@ class NodeRestore(QObject):
     def refreshed(self, number: int) -> None:
         if not self.active or number != self.node_number:
             return
-        if self.nv_only:
-            # This refresh follows a failure. Physical readback cannot turn an
-            # interrupted/rejected Save into success or clear uncertainty markers.
-            self.finish(False, self.failure)
-            return
         state = self.service.node_states[number]
         differences, inconclusive = compare_live_node(state, self.backup)
         self.log(
@@ -365,14 +333,6 @@ class NodeRestore(QObject):
     def finish(self, success: bool, message: str) -> None:
         self.timer.stop()
         self.active = False
-        if self.nv_only:
-            if not success:
-                message = f"{self.nvs_verified} NV writes verified. {message} Reconnect to rediscover before retrying."
-            self.log("NV Save finished", success=success, result=message)
-            self.service.nv_write.finished.emit(self.node_number, success, message)
-            self.service.nv_write.refresh_finished.emit(self.node_number, message)
-            self.service.node_state_updated.emit(self.node_number)
-            return
         if not success:
             message = f"Partial restoration: {self.nvs_verified} NV writes and {self.evs_verified} EV writes verified; {self.removals_transmitted} event removals transmitted, {self.events_removed} event removals verified. {message} Reconnect and compare before retrying."
         self.log("Restore finished", success=success, result=message)
@@ -388,7 +348,7 @@ class NodeRestore(QObject):
                     "layout": self.service.connection.layout_name,
                     "node_number": self.node_number,
                     "stage": self.stage,
-                    "operation": "NV Save" if self.nv_only else "Restore",
+                    "operation": "Configuration application",
                     **fields,
                 }
             },

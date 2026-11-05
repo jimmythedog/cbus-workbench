@@ -3,6 +3,8 @@
 import os
 import time
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from layout_fixture import sample_settings
@@ -16,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from workbench.cbus_service import DiscoveryProgress, NodeState
+from workbench.node_backup_files import node_backup, save_backup
 from workbench.pnn import Pnn
 from workbench.send_frame_dialog import SendFrameDialog
 from workbench.window import MainWindow
@@ -72,7 +75,7 @@ class SendFrameDialogTests(unittest.TestCase):
             event_progress=DiscoveryProgress.COMPLETE,
             can_id=2,
         )
-        service.write_evs(258, {(0, 1000, 2): 13})
+        service.ev_write.begin(258, {(0, 1000, 2): 13})
         expected = b":SBFC0N530102;:SBFC0N73010208;"
         self.wait_for(lambda: self.peer.bytesAvailable() >= len(expected))
         self.assertEqual(bytes(self.peer.readAll()), expected)
@@ -87,6 +90,59 @@ class SendFrameDialogTests(unittest.TestCase):
         self.assertEqual(self.window.connection_status.text(), "Connected")
         self.peer.write(b":SB040N9B01020805;")
         self.wait_for(lambda: self.window.connection_status.text() == "Disconnected")
+
+    def test_save_disconnect_preserves_result_through_offline_selection_rebuild(self):
+        with (
+            TemporaryDirectory() as directory,
+            patch(
+                "workbench.node_backup_files.application_directories",
+                return_value={"Data": Path(directory)},
+            ),
+        ):
+            self.connect_home()
+            service = self.window.cbus_services["Home"]
+            done = DiscoveryProgress.COMPLETE
+            state = NodeState(
+                Pnn(258, 13, 34, 4),
+                parameters={5: 0, 6: 1},
+                nv_values={1: 7},
+                parameter_progress=done,
+                nv_progress=done,
+                event_progress=DiscoveryProgress.SKIPPED,
+                ev_progress=DiscoveryProgress.SKIPPED,
+                can_id=2,
+            )
+            service.node_states[258] = state
+            service.nodes[258] = state.identity
+            backup = node_backup(state)
+            save_backup("home", backup)
+            save_backup("home", {**backup, "node": 259})
+            view = self.window.layouts["Home"].node_view
+            view.show_identity(state.identity)
+            details = view.details
+            details.tabs.setCurrentWidget(details.events_page)
+            details.events_edit_button.click()
+            details.raw_values.item(0, 1).setText("9")
+            results = []
+            service.restore.finished.connect(lambda *args: results.append(args))
+            details.events_save_button.click()
+            self.wait_for(lambda: self.peer.bytesAvailable() > 0)
+            self.assertIn(b"N9601020109", bytes(self.peer.readAll()))
+            self.peer.close()  # Full window/service/selection teardown.
+            self.wait_for(lambda: "Home" not in self.window.cbus_services)
+            self.assertEqual(len(results), 1)
+            self.assertFalse(results[0][1])
+            expected = f"Node 258: {results[0][2]}"
+            self.assertIn("Connection ended", expected)
+            self.assertEqual(details.nv_result.text(), expected)
+            self.assertEqual(details.events_result.text(), expected)
+            self.assertEqual(view.node_list.currentItem().text(), "258 (offline)")
+            self.assertIsNone(details.desired_configuration)
+            self.assertFalse(details.saving_configuration)
+            view.node_list.setCurrentRow(1)
+            self.assertEqual(view.node_list.currentItem().text(), "259 (offline)")
+            self.assertEqual(details.nv_result.text(), "")
+            self.assertEqual(details.events_result.text(), "")
 
     def test_menu_action_requires_connected_tcp_layout(self):
         self.assertFalse(self.window.send_frame_action.isEnabled())

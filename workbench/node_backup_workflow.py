@@ -153,7 +153,7 @@ class NodeBackupWorkflow:
             BackupCompare(target, backup, self.parent).exec()
             message = (
                 f"Restore this backup to live node {number}?\n\n"
-                "Every backup NV will be written in ascending order, including matching values. "
+                "Backup NVs are compared in ascending order and written only when different. "
                 "Firmware may reset dependent configuration. Missing events will be taught, "
                 "events may be reconstructed to remove EVs, and events absent from the backup "
                 "will be removed. There is no rollback. Do not use another "

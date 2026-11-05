@@ -28,6 +28,7 @@ class RawNodeVariables(QTableWidget):
         self.itemChanged.connect(self.update_value)
 
     def show_node(self, node, values=None, descriptions=None):
+        """Edit a positional backup NV list or the prototype indexed values."""
         self.values = values if values is not None else node.nv_values
         self.descriptions = (
             descriptions if descriptions is not None else node.nv_descriptions
@@ -36,7 +37,12 @@ class RawNodeVariables(QTableWidget):
 
         # setItem() emits itemChanged; rows must be complete before update_value runs.
         self.blockSignals(True)
-        for row, (number, value) in enumerate(sorted(self.values.items())):
+        entries = (
+            enumerate(self.values, 1)
+            if isinstance(self.values, list)
+            else sorted(self.values.items())
+        )
+        for row, (number, value) in enumerate(entries):
             number_item = QTableWidgetItem(str(number))
             number_item.setFlags(number_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.setItem(row, 0, number_item)
@@ -94,10 +100,11 @@ class RawNodeVariables(QTableWidget):
             except ValueError:
                 value = -1
 
+            index = number - 1 if isinstance(self.values, list) else number
             if 0 <= value <= 255:
-                self.values[number] = value
+                self.values[index] = value
             else:
-                item.setText(str(self.values[number]))
+                item.setText(str(self.values[index]))
 
 
 class GlobalSettings(QWidget):
@@ -131,12 +138,21 @@ class GlobalSettings(QWidget):
         self.values = values if values is not None else node.nv_values
 
         self.startup_delay.blockSignals(True)
-        self.startup_delay.setValue(self.values.get(2, 0))
+        value = (
+            (self.values[1] if len(self.values) > 1 else 0)
+            if isinstance(self.values, list)
+            else self.values.get(2, 0)
+        )
+        self.startup_delay.setValue(value)
         self.startup_delay.blockSignals(False)
 
     def update_startup_delay(self, value):
         if self.values is not None:
-            self.values[2] = value
+            if isinstance(self.values, list):
+                if len(self.values) > 1:
+                    self.values[1] = value
+            else:
+                self.values[2] = value
 
 
 class ChannelSettings(QWidget):

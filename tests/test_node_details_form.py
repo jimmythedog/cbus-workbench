@@ -187,7 +187,7 @@ class NodeDetailsFormTests(unittest.TestCase):
         self.select(node)
         self.assertFalse(self.details.edit_button.isEnabled())
         self.details.start_editing()
-        self.assertIsNone(self.details.editing_values)
+        self.assertIsNone(self.details.desired_configuration)
         self.assertEqual(node.nv_values, {1: 7})
 
     def test_available_tabs_survive_configured_node_changes(self):

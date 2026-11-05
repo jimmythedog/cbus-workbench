@@ -15,9 +15,7 @@ logger = logging.getLogger("workbench.cbus")
 
 
 class NvWrite(QObject):
-    finished = Signal(int, bool, str)
-    refresh_finished = Signal(int, str)
-    # Writer transactions can be steps within one coordinated editor Save.
+    # Transaction and rediscovery completion advance the configuration coordinator.
     write_finished = Signal(int, bool, str)
     discovery_finished = Signal(int, str)
 
@@ -25,7 +23,6 @@ class NvWrite(QObject):
         super().__init__(service)
         self.service = service
         self.active = False
-        self.coordinated_save = False
         self.refreshing = False
         self.refresh_events = True
         self.stage = ""
@@ -46,9 +43,6 @@ class NvWrite(QObject):
         refresh_from: int = 1,
         refresh_events: bool = True,
     ) -> None:
-        self.coordinated_save = (
-            self.service.restore.active and self.service.restore.nv_only
-        )
         self.refresh_from = refresh_from
         self.refresh_events = refresh_events
         self.node_number = node_number
@@ -98,7 +92,7 @@ class NvWrite(QObject):
     def receive_value(self, node_number: int, index: int, value: int) -> bool:
         """Consume unverified write replies before normal discovery records them."""
         # Restore's failure refresh may confirm physical state, but must retain
-        # the failed-write marker so ordinary Saves still require reconnecting.
+        # the failed-write marker so another application requires reconnecting.
         if (
             not self.active
             and self.service.refreshing_node == node_number
@@ -131,8 +125,8 @@ class NvWrite(QObject):
                     self.stage = "waiting for discovery reply"
                     self.advance()
                 else:
-                    # Restore rereads higher NVs before its next comparison;
-                    # ordinary Save rereads all NVs and events.
+                    # Reread higher NVs before the coordinator compares the next
+                    # desired value; firmware can reset dependent NVs.
                     self.refreshing = True
                     self.service._start_nv_discovery(
                         self.node_number,
@@ -176,10 +170,6 @@ class NvWrite(QObject):
         )
         self.log("Post-Save discovery finished", success=success, reason=reason)
         self.discovery_finished.emit(self.node_number, message)
-        # A coordinated Save has one public completion, after desired values
-        # have been checked. Intermediate rereads must not finish the editor.
-        if not self.coordinated_save:
-            self.refresh_finished.emit(self.node_number, message)
 
     def finish(self, success: bool, message: str, *, resume: bool = True) -> None:
         self.timer.stop()
@@ -199,8 +189,6 @@ class NvWrite(QObject):
                 reason = message.removeprefix(f"NV {index}: ")
                 message = f"NV {index} could not be saved. {reason}"
         self.write_finished.emit(self.node_number, success, message)
-        if not self.coordinated_save:
-            self.finished.emit(self.node_number, success, message)
         if resume:
             self.service._send_next_request()
 

@@ -9,8 +9,8 @@ Early development. Currently implemented:
 
 - Saved layouts with TCP/IP or serial GridConnect connections and optional auto-connect.
 - Node discovery, connection/discovery status and confirmed node information.
-- Reading node variables (NVs), stored events and event variables (EVs), with verified
-  writes for live NV and EV edits.
+- Reading node variables (NVs), stored events and event variables (EVs), with one
+  shared editing session and verified application of the complete configuration.
 - Node and layout backups, optional descriptions, incomplete-backup warnings,
   offline viewing, comparison and node restoration with final verification.
 - Messages / Diagnostics, raw GridConnect frame sending and persistent logs.

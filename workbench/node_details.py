@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -13,9 +14,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .cbus_service import DiscoveryProgress, NodeState
+from .cbus_service import NodeState
 from .logging_config import trace
 from .node import Node
+from .node_backup_files import node_backup
 from .node_backup_workflow import NodeBackupWorkflow
 from .node_backups import NodeBackups
 from .node_details_form import NodeDetailsForm
@@ -38,11 +40,11 @@ class NodeDetails(QWidget):
         self.logical_layout = None
         self.node = None
         self.node_list_item = None
-        self.editing_values = None
         self.editing_descriptions = None
         self.cbus_service = None
-        self.saving_nvs = False
-        self.saving_evs = False
+        self.original_configuration = None
+        self.desired_configuration = None
+        self.saving_configuration = False
 
         layout = QVBoxLayout(self)
 
@@ -245,71 +247,62 @@ class NodeDetails(QWidget):
         layout.addWidget(self.action_area)
 
     def save_editing(self):
-        if self.editing_values is None or self.saving_nvs:
+        """Submit the whole desired configuration to the existing Restore path."""
+        if self.desired_configuration is None or self.saving_configuration:
             return
-        if not self.can_edit_nvs():
-            self.nv_result.setText("NV Save requires a discovered, connected node.")
-            return
-        self.saving_nvs = True
-        self.variables.setEnabled(False)
-        self.save_button.setEnabled(False)
-        self.cancel_button.setEnabled(False)
-        self.nv_result.setText("Saving changes…")
+        number = self.desired_configuration["node"]
+        self.set_configuration_saving(True)
+        self.show_configuration_result("Saving node configuration…")
+        trace(
+            logger,
+            "Submitting shared node configuration",
+            extra={"fields": {"node_number": number}},
+        )
         try:
-            self.cbus_service.save_nvs(
-                self.live_state.identity.node_number, self.editing_values
-            )
+            self.cbus_service.restore.begin(number, self.desired_configuration)
         except ValueError as error:
-            self.finish_nv_save(self.live_state.identity.node_number, False, str(error))
+            # Validation failed before application began. Keep the edits available
+            # for review or Cancel; Restore remains responsible for all checks.
+            self.set_configuration_saving(False)
+            self.show_configuration_result(f"Node {number}: {error}")
+            trace(
+                logger,
+                "Shared node configuration rejected",
+                extra={"fields": {"node_number": number, "reason": str(error)}},
+            )
 
-    def finish_nv_save(self, node_number: int, success: bool, message: str) -> None:
-        if self.cbus_service is not None and self.cbus_service.restore.active:
-            return
-        if (
-            self.live_state is None
-            or self.live_state.identity.node_number != node_number
+    def set_configuration_saving(self, saving: bool) -> None:
+        """Lock both editors until the coordinator's final completion."""
+        self.saving_configuration = saving
+        self.variables.setEnabled(not saving)
+        self.node_events.setEnabled(not saving)
+        for button in (
+            self.save_button,
+            self.events_save_button,
+            self.cancel_button,
+            self.events_cancel_button,
         ):
-            return
-        self.saving_nvs = False
-        self.variables.setEnabled(True)
-        self.save_button.setEnabled(True)
-        self.cancel_button.setEnabled(True)
-        if not (success and self.cbus_service.nv_write.refreshing):
-            self.nv_result.setText(f"Node {node_number}: {message}")
-        if success and not isinstance(self.node, Pnn):
-            self.node.nv_descriptions = self.editing_descriptions
-        self.editing_values = None
-        self.editing_descriptions = None
-        self.stop_editing()
-        self.update_backup_buttons()
+            button.setEnabled(not saving)
 
-    def finish_nv_refresh(self, node_number: int, message: str) -> None:
-        if self.cbus_service is not None and self.cbus_service.restore.active:
-            return
-        if self.live_state and self.live_state.identity.node_number == node_number:
-            self.nv_result.setText(f"Node {node_number}: {message}")
-            self.edit_button.setEnabled(self.can_edit_nvs())
-            self.update_backup_buttons()
+    def show_configuration_result(self, message: str) -> None:
+        self.nv_result.setText(message)
+        self.events_result.setText(message)
 
-    def can_edit_nvs(self) -> bool:
+    def can_edit_configuration(self) -> bool:
         state = self.live_state
+        service = self.cbus_service
         return bool(
             self.connected
-            and self.cbus_service is not None
+            and service is not None
             and state is not None
-            and state.identity.node_number != 0
-            and not self.cbus_service.restore.active
-            and not self.cbus_service.nv_write.refreshing
-            and not self.cbus_service.ev_write.active
-            and not self.cbus_service.ev_write.refreshing
-            and not self.cbus_service.ev_write.blocked
-            and state.nv_progress == DiscoveryProgress.COMPLETE
-            and state.parameters.get(6, 0) > 0
-            and all(i in state.nv_values for i in range(1, state.parameters[6] + 1))
-            and not any(
-                n == state.identity.node_number
-                for n, _i in self.cbus_service.nv_write.unverified
-            )
+            and state.identity.node_number
+            and state.identity.is_flim
+            and state.can_id is not None
+            and not service.writes_busy()
+            and not service.discovery_pending()
+            and not service.ev_write.blocked
+            and not service.nv_write.unverified
+            and node_backup(state)["complete"]
         )
 
     def nv_display_node(self):
@@ -378,24 +371,48 @@ class NodeDetails(QWidget):
             current.setText(label)
 
     def cancel_editing(self):
-        if self.saving_nvs:
+        if self.saving_configuration:
             return
-        self.editing_values = None
+        if self.desired_configuration is not None:
+            trace(
+                logger,
+                "Discarding shared node configuration edits",
+                extra={"fields": {"node_number": self.desired_configuration["node"]}},
+            )
+            self.original_configuration = None
+            self.desired_configuration = None
+            self.node_events.cancel_edit()
+            self.events_buttons.setCurrentIndex(0)
         self.editing_descriptions = None
         self.stop_editing()
 
     def start_editing(self):
-        if not self.can_edit_nvs() or self.editing_values is not None:
+        if not self.can_edit_configuration() or self.desired_configuration is not None:
             return
         node = self.nv_display_node()
-        self.nv_result.clear()
+        self.show_configuration_result("")
         self.set_editing(True)
         self.editing_changed.emit(True)
         # Both views share copies. Only verified readback changes live state.
-        self.editing_values = self.live_state.nv_values.copy()
+        trace(
+            logger,
+            "Beginning shared node configuration editing",
+            extra={"fields": {"node_number": self.live_state.identity.node_number}},
+        )
+        self.original_configuration = node_backup(self.live_state)
+        self.desired_configuration = deepcopy(self.original_configuration)
+        self.node_events.begin_configuration_edit(self.desired_configuration)
+        self.events_buttons.setCurrentIndex(1)
+        for button in (self.save_button, self.events_save_button):
+            button.setEnabled(True)
+            button.setToolTip("")
         self.editing_descriptions = node.nv_descriptions.copy()
-        self.raw_values.show_node(node, self.editing_values, self.editing_descriptions)
-        self.mdf_values.show_node(node, self.editing_values, self.editing_descriptions)
+        self.raw_values.show_node(
+            node, self.desired_configuration["nvs"], self.editing_descriptions
+        )
+        self.mdf_values.show_node(
+            node, self.desired_configuration["nvs"], self.editing_descriptions
+        )
         self.raw_values.set_editing(True)
         self.mdf_values.set_editing(True)
         self.buttons.setCurrentIndex(1)
@@ -413,40 +430,20 @@ class NodeDetails(QWidget):
         self.buttons.setCurrentIndex(0)
         self.set_editing(False)
         self.editing_changed.emit(False)
-        self.edit_button.setEnabled(self.can_edit_nvs())
+        self.edit_button.setEnabled(self.can_edit_configuration())
 
     def set_editing(self, editing):
         self.tabs.setTabEnabled(self.tabs.indexOf(self.details_page), not editing)
-        self.tabs.setTabEnabled(self.tabs.indexOf(self.events_page), not editing)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.events_page), True)
         self.tabs.setTabEnabled(self.tabs.indexOf(self.node_backups), not editing)
 
-    def can_edit_evs(self) -> bool:
-        state = self.live_state
-        service = self.cbus_service
-        return bool(
-            self.connected
-            and service is not None
-            and state is not None
-            and state.identity.node_number
-            and state.identity.is_flim
-            and state.identity.is_consumer
-            and state.can_id is not None
-            and state.event_progress == DiscoveryProgress.COMPLETE
-            and state.event_identities
-            and state.parameters.get(5, 0) > 0
-            and not service.restore.active
-            and not service.ev_write.active
-            and not service.ev_write.refreshing
-            and not service.ev_write.blocked
-            and not service.nv_write.active
-            and not service.nv_write.refreshing
-            and not service.nv_write.unverified
-        )
-
     def start_events_editing(self):
-        if self.live_state is not None and not self.can_edit_evs():
+        if self.live_state is not None:
+            self.start_editing()
             return
         self.events_result.clear()
+        self.events_save_button.setEnabled(True)
+        self.events_save_button.setToolTip("")
         self.node_events.begin_edit()
         self.events_buttons.setCurrentIndex(1)
 
@@ -457,7 +454,8 @@ class NodeDetails(QWidget):
         self.editing_changed.emit(True)
 
     def cancel_events_editing(self):
-        if self.saving_evs:
+        if self.desired_configuration is not None:
+            self.cancel_editing()
             return
         self.node_events.cancel_edit()
         self.finish_events_editing()
@@ -471,45 +469,11 @@ class NodeDetails(QWidget):
         self.editing_changed.emit(False)
 
     def save_events_editing(self):
-        if self.saving_evs:
+        if self.live_state is not None:
+            self.save_editing()
             return
-        if self.live_state is None:
-            self.node_events.save_edit()
-            self.finish_events_editing()
-            return
-        self.saving_evs = True
-        self.node_events.setEnabled(False)
-        self.events_save_button.setEnabled(False)
-        self.events_cancel_button.setEnabled(False)
-        self.events_result.setText("Saving changes…")
-        try:
-            self.cbus_service.write_evs(
-                self.live_state.identity.node_number,
-                self.node_events.changed_live_values(),
-            )
-        except ValueError as error:
-            self.finish_ev_save(self.live_state.identity.node_number, False, str(error))
-
-    def finish_ev_save(self, node_number: int, success: bool, message: str) -> None:
-        if self.cbus_service is not None and self.cbus_service.restore.active:
-            return
-        if (
-            self.live_state is None
-            or self.live_state.identity.node_number != node_number
-        ):
-            return
-        self.saving_evs = False
-        self.node_events.setEnabled(True)
-        self.events_save_button.setEnabled(True)
-        self.events_cancel_button.setEnabled(True)
-        self.node_events.cancel_edit()
+        self.node_events.save_edit()
         self.finish_events_editing()
-        self.events_result.setText(f"Node {node_number}: {message}")
-        self.events_edit_button.setEnabled(self.can_edit_evs())
-        self.edit_button.setEnabled(self.can_edit_nvs())
-        # The last discovery update precedes writer cleanup. Recheck write
-        # availability now, even when the backup selection has not changed.
-        self.update_backup_buttons()
 
     def show_parameters(self, parameters: dict[int, int]) -> None:
         """Display confirmed PARAN values; absent indices remain unknown."""
@@ -525,8 +489,8 @@ class NodeDetails(QWidget):
         self.details_page.stored_events.setText(
             "-" if state.stored_event_count is None else str(state.stored_event_count)
         )
-        self.edit_button.setEnabled(self.can_edit_nvs())
-        if self.editing_values is None:
+        self.edit_button.setEnabled(self.can_edit_configuration())
+        if self.desired_configuration is None:
             node = self.nv_display_node()
             self.raw_values.show_live_values(state.parameters.get(6), state.nv_values)
             self.mdf_values.show_node(node)
@@ -548,11 +512,11 @@ class NodeDetails(QWidget):
         )
 
     def show_node(self, current):
-        if self.node_events.editing_values is not None and not self.saving_evs:
+        if self.node_events.editing_values is not None:
             self.cancel_events_editing()
-        if self.editing_values is not None:
+        if self.desired_configuration is not None:
             self.cancel_editing()
-        self.events_result.clear()
+        self.show_configuration_result("")
         selected_page = self.tabs.currentWidget()
         previous_live_node = (
             self.node.node_number if isinstance(self.node, Pnn) else None
@@ -633,25 +597,23 @@ class NodeDetails(QWidget):
         """Show discovery evidence for this connection, never configured guesses."""
         if (
             not self.connected
-            and self.editing_values is not None
-            and not self.saving_nvs
+            and self.desired_configuration is not None
+            and not self.saving_configuration
         ):
             self.cancel_editing()
-            self.nv_result.setText(
-                "Connection ended; NV edits discarded without writing."
+            message = (
+                "Connection ended; node configuration edits discarded without writing."
             )
-        self.edit_button.setEnabled(self.can_edit_nvs())
-        if (
-            not self.connected
-            and self.node_events.editing_values is not None
-            and not self.saving_evs
-        ):
+            self.nv_result.setText(message)
+            self.events_result.setText(message)
+        self.edit_button.setEnabled(self.can_edit_configuration())
+        if not self.connected and self.node_events.editing_values is not None:
             self.cancel_events_editing()
             self.events_result.setText(
                 "Connection ended; EV edits discarded without writing."
             )
         if isinstance(self.node, Pnn) or self.live_state is not None:
-            self.events_edit_button.setEnabled(self.can_edit_evs())
+            self.events_edit_button.setEnabled(self.can_edit_configuration())
             if (
                 self.live_state is not None
                 and self.live_state.parameters.get(5) is not None
@@ -660,7 +622,6 @@ class NodeDetails(QWidget):
                 self.events_result.clear()
             if (
                 self.live_state is not None
-                and not self.saving_evs
                 and not self.events_result.text()
                 and self.live_state.parameters.get(5) is None
             ):
@@ -728,6 +689,9 @@ class NodeDetails(QWidget):
             self.backup_workflow.restore(self.node)
 
     def show_restore_progress(self, node_number: int, message: str) -> None:
+        if self.saving_configuration:
+            self.show_configuration_result(message)
+            return
         self.restore_result.setText(message)
         self.editing_changed.emit(True)
         self.edit_button.setEnabled(False)
@@ -736,10 +700,28 @@ class NodeDetails(QWidget):
             self.backup_buttons[name].setEnabled(False)
 
     def finish_restore(self, node_number: int, success: bool, message: str) -> None:
+        if self.saving_configuration:
+            trace(
+                logger,
+                "Shared node configuration application finished",
+                extra={
+                    "fields": {
+                        "node_number": node_number,
+                        "success": success,
+                        "result": message,
+                    }
+                },
+            )
+            self.set_configuration_saving(False)
+            self.cancel_editing()  # Replace both working views with confirmed state.
+            self.show_configuration_result(f"Node {node_number}: {message}")
+            self.events_edit_button.setEnabled(self.can_edit_configuration())
+            self.update_backup_buttons()
+            return
         self.restore_result.setText(f"Node {node_number}: {message}")
         self.editing_changed.emit(False)
-        self.edit_button.setEnabled(self.can_edit_nvs())
-        self.events_edit_button.setEnabled(self.can_edit_evs())
+        self.edit_button.setEnabled(self.can_edit_configuration())
+        self.events_edit_button.setEnabled(self.can_edit_configuration())
         self.update_backup_buttons()
 
     def delete_backup(self):

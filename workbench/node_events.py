@@ -40,7 +40,7 @@ class NoHoverDelegate(QStyledItemDelegate):
 
 
 class EvValueValidator(QIntValidator):
-    """Allow an unchanged empty cell as well as a byte value."""
+    """Allow a blank EV cell as well as a byte value."""
 
     def validate(self, text, position):
         if not text:
@@ -68,8 +68,8 @@ class RawEvDelegate(NoHoverDelegate):
 
     def setModelData(self, editor, model, index):
         if isinstance(editor, QLineEdit):
-            # Empty is an unchanged field, including when zero was its original
-            # value. Do not let opening/closing an empty editor invent a value.
+            # Preserve blank input: the shared configuration interprets it as
+            # absence, while an explicitly entered zero remains numeric.
             if not editor.text() or editor.hasAcceptableInput():
                 model.setData(index, editor.text())
         else:
@@ -85,6 +85,7 @@ class NodeEvents(QSplitter):
         self.live_state = None
         self.editing_descriptions = None
         self.editing_values = None
+        self.desired_configuration = None
 
         produced = QGroupBox("Known produced events")
         produced_layout = QVBoxLayout(produced)
@@ -102,6 +103,7 @@ class NodeEvents(QSplitter):
 
         self.consumed_table = QTreeWidget()
         self.consumed_table.setExpandsOnDoubleClick(False)
+        self.consumed_table.itemChanged.connect(self.update_configuration_value)
         self.consumed_table.setItemDelegate(RawEvDelegate(self.consumed_table))
         self.consumed_table.header().setStretchLastSection(True)
         self.consumed_table.setHeaderLabels(["Event", "Description"])
@@ -190,7 +192,7 @@ class NodeEvents(QSplitter):
     def show_live_state(self, state: NodeState) -> None:
         """Use stable event identities in the UI; indices belong to discovery only."""
         self.live_state = state
-        if self.editing_values is not None:
+        if self.editing_values is not None or self.desired_configuration is not None:
             return
         same_node = (
             isinstance(self.node, Pnn)
@@ -260,33 +262,39 @@ class NodeEvents(QSplitter):
                         if isinstance(control, (QComboBox, QSpinBox, QCheckBox)):
                             control.setEnabled(editing)
 
-    def begin_edit(self):
-        if self.live_state is not None:
-            self.editing_values = {
-                (*event, ev): value
-                for slot, event in self.live_state.event_identities.items()
-                for ev, value in self.live_state.ev_values.get(slot, {}).items()
-            }
-            self.set_editing(True)
+    def begin_configuration_edit(self, desired: dict) -> None:
+        """Edit the shared backup dictionary using event identities, never slots."""
+        self.desired_configuration = desired
+        self.set_editing(True)
+
+    def update_configuration_value(self, item, column):
+        if self.desired_configuration is None or column != 1:
             return
+        parent = item.parent()
+        if parent is None:
+            return
+        identity = parent.data(0, Qt.ItemDataRole.UserRole)
+        event = next(
+            event
+            for event in self.desired_configuration["events"]
+            if (event["nodeNumber"], event["eventNumber"]) == identity
+        )
+        text = item.text(1)
+        if text and (not text.isdecimal() or not 0 <= int(text) <= 255):
+            return
+        index = parent.indexOfChild(item)
+        values = event["eventVariables"]
+        values.extend([None] * (index + 1 - len(values)))
+        values[index] = int(text) if text else None
+        # Match node_backup(): trailing confirmed absences are omitted.
+        while values and values[-1] is None:
+            values.pop()
+
+    def begin_edit(self):
+        """Retain the prototype editor for configured, offline nodes."""
         self.editing_descriptions = self.node.consumed_events.copy()
         self.editing_values = deepcopy(self.node.ev_values)
         self.set_editing(True)
-
-    def changed_live_values(self) -> dict[tuple[int, int, int], int]:
-        """Collect only explicit numeric edits, retaining unknown/absent originals."""
-        changes = {}
-        for row in range(self.consumed_table.topLevelItemCount()):
-            event = self.consumed_table.topLevelItem(row)
-            identity = event.data(0, Qt.ItemDataRole.UserRole)
-            for child_index in range(event.childCount()):
-                text = event.child(child_index).text(1)
-                if text.isdecimal():
-                    key = (*identity, child_index + 1)
-                    value = int(text)
-                    if self.editing_values.get(key) != value:
-                        changes[key] = value
-        return changes
 
     def save_edit(self):
         for index in range(self.consumed_table.topLevelItemCount()):
@@ -327,6 +335,7 @@ class NodeEvents(QSplitter):
         self.show_node(self.node)
 
     def cancel_edit(self):
+        self.desired_configuration = None
         self.editing_descriptions = None
         self.editing_values = None
         if self.live_state is not None:

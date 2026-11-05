@@ -274,36 +274,11 @@ class CbusService(QObject):
         *,
         owner=None,
     ) -> None:
-        """Write one NV transaction; editor Saves enter through save_nvs().
-
-        Validation rejects the whole Save before transmitting any write. A failed
-        write requires rediscovery because its physical result may be unknown.
-        The owner argument reserves writes across the whole restore sequence.
-        """
-        changes = self._nv_changes(node_number, values, owner=owner)
-        # The coordinator submits one changed index at a time for Save/Restore;
-        # reread higher NVs before its next comparison. Direct writes refresh all.
-        self.nv_write.begin(
-            node_number,
-            changes,
-            refresh_from=(
-                next(iter(changes)) + 1 if owner is self.restore and changes else 1
-            ),
-            refresh_events=owner is not self.restore,
-        )
-
-    def save_nvs(self, node_number: int, values: dict[int, int]) -> None:
-        """Apply the full editor working copy with Restore's bounded NV pass."""
-        self._nv_changes(node_number, values)
-        count = self.node_states[node_number].parameters[6]
-        if set(values) != set(range(1, count + 1)):
-            raise ValueError("NV Save requires the complete desired NV working copy")
-        self.restore.begin_nv_save(node_number, values)
-
-    def _nv_changes(self, node_number, values, *, owner=None) -> dict[int, int]:
-        """Validate before any transmission; compare only for a writer transaction."""
-        if self.restore.active and owner is not self.restore:
-            raise ValueError("Node restoration is in progress")
+        """Validate one coordinator-owned NV transaction before transmission."""
+        if owner is not self.restore or not self.restore.active:
+            raise ValueError(
+                "NV writes require active configuration application ownership"
+            )
         state = self.node_states.get(node_number)
         if self._closed or self.connection.state != "Connected" or state is None:
             raise ValueError("NV editing requires a discovered, connected node")
@@ -330,7 +305,13 @@ class CbusService(QObject):
                 raise ValueError("NV value must be between 0 and 255")
             if index not in state.nv_values:
                 raise ValueError(f"NV {index} has no confirmed original value")
-        return {i: value for i, value in values.items() if state.nv_values[i] != value}
+        # Preserve the coordinator's ascending pass: reread higher NVs only.
+        self.nv_write.begin(
+            node_number,
+            values,
+            refresh_from=next(iter(values)) + 1 if values else 1,
+            refresh_events=False,
+        )
 
     def write_evs(
         self,
@@ -340,14 +321,11 @@ class CbusService(QObject):
         owner=None,
         unlearn: tuple[int, int] | None = None,
     ) -> None:
-        """Verify EVs by identity; restore may teach missing or unlearn an event.
-
-        Ordinary editor Saves require existing identities and send changed EVs.
-        Restore owns the connection and replays every numeric EV after unlearn,
-        even values that matched before the event was removed.
-        """
-        if self.restore.active and owner is not self.restore:
-            raise ValueError("Node restoration is in progress")
+        """Validate a coordinator-owned teaching or event reconstruction step."""
+        if owner is not self.restore or not self.restore.active:
+            raise ValueError(
+                "EV writes require active configuration application ownership"
+            )
         state = self.node_states.get(node_number)
         if self.connection.state != "Connected" or state is None:
             raise ValueError("EV Save requires a discovered, connected node")
@@ -371,15 +349,9 @@ class CbusService(QObject):
             raise ValueError(
                 "EV Save needs confirmed event identities, EV capacity and CAN ID on a FLiM consumer"
             )
-        identities = {event: slot for slot, event in state.event_identities.items()}
-        replacing = (
-            owner is self.restore and self.restore.active and not self.restore.nv_only
-        )
-        if unlearn is not None and (not replacing or unlearn not in identities):
-            raise ValueError(
-                "Event unlearn requires restore ownership and a discovered event identity"
-            )
-        changes = {}
+        identities = set(state.event_identities.values())
+        if unlearn is not None and unlearn not in identities:
+            raise ValueError("Event unlearn requires a discovered event identity")
         for key, value in values.items():
             if (
                 not isinstance(key, tuple)
@@ -391,20 +363,12 @@ class CbusService(QObject):
             if (
                 not 0 <= event_node <= 65535
                 or not 0 <= event_number <= 65535
-                or (key[:2] not in identities and not replacing)
                 or not 1 <= ev <= state.parameters[5]
             ):
                 raise ValueError("EV address is not confirmed by live discovery")
             if type(value) is not int or not 0 <= value <= 255:
                 raise ValueError("EV value must be between 0 and 255")
-            slot = identities.get(key[:2])
-            if (
-                key[:2] == unlearn
-                or slot is None
-                or state.ev_values.get(slot, {}).get(ev) != value
-            ):
-                changes[key] = value
-        self.ev_write.begin(node_number, changes, unlearn=unlearn)
+        self.ev_write.begin(node_number, values, unlearn=unlearn)
 
     def request_nv(self, node_number: int, index: int) -> None:
         """Send NVRD for one numbered node variable (Developer's Guide 6b)."""

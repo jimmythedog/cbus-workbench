@@ -188,7 +188,9 @@ class NodeRestoreTests(unittest.TestCase):
     def test_complete_restore_skips_matching_nvs_then_matches_events_after_slot_change(
         self,
     ):
+        desired = deepcopy(self.backup)
         self.service.restore.begin(258, self.backup)
+        self.backup["nvs"][0] = 99  # An accepted target is independent of the caller.
         self.run_node()
         writes = [f for f in self.connection.sent if b"N96" in f]
         self.assertEqual(
@@ -196,7 +198,7 @@ class NodeRestoreTests(unittest.TestCase):
             [],
         )
         self.assertTrue(self.results[-1][1], self.results)
-        self.assertEqual(compare_live_node(self.state, self.backup), ([], False))
+        self.assertEqual(compare_live_node(self.state, desired), ([], False))
         self.assertEqual(self.state.event_identities, {9: (0, 1000)})
         self.assertEqual(
             [f for f in self.connection.sent if b"ND2" in f],
@@ -240,6 +242,86 @@ class NodeRestoreTests(unittest.TestCase):
     def test_incomplete_higher_nv_refresh_stops_before_more_writes_or_events(self):
         self.check_incomplete_nv_refresh(tail=True)
 
+    def begin_type_and_position_change(self):
+        """Reach NV25 verification after a TYPE write resets its position."""
+        self.nvs = dict.fromkeys(range(1, 27), 0)
+        self.nvs.update({23: 1, 25: 0, 26: 9})
+        self.state.parameters[6] = len(self.nvs)
+        self.state.nv_values = dict(self.nvs)
+        self.backup = node_backup(self.state)
+        self.backup["nvs"][22] = 2
+        self.backup["nvs"][24] = 129
+        self.backup["nvs"][25] = 10  # A later edit must wait for NV25 verification.
+        self.service.restore.begin(258, self.backup)
+        self.app.processEvents()
+        self.assertEqual(self.connection.sent[-1], b":SBFC0N9601021702;")
+        self.nvs.update({23: 2, 25: 128})
+        self.reply("590102")
+        self.assertEqual(self.connection.sent[-1], b":SBFC0N71010217;")
+        self.reply("9701021702")
+        for index in range(24, 27):
+            self.assertEqual(
+                self.connection.sent[-1], f":SBFC0N710102{index:02X};".encode()
+            )
+            self.reply(f"970102{index:02X}{self.nvs[index]:02X}")
+        self.app.processEvents()
+        self.assertEqual(self.connection.sent[-1], b":SBFC0N9601021981;")
+        self.nvs[25] = 129
+        self.reply("590102")
+        self.assertEqual(self.connection.sent[-1], b":SBFC0N71010219;")
+        before_events = list(self.connection.sent)
+        self.reply("91010200CA")
+        self.reply("9001020066")
+        self.app.processEvents()
+        self.assertEqual(self.connection.sent, before_events)
+        self.assertEqual(self.results, [])
+        self.assertEqual(self.state.nv_values[25], 128)
+        # The existing node helper takes over only requests not answered above.
+        self.read_position = len(self.connection.sent)
+
+    def test_nv25_timeout_after_events_preserves_failure_and_rediscovered_value(self):
+        self.begin_type_and_position_change()
+        # Deliver timer expiry explicitly: exercise the real timeout handler
+        # without changing the response timeout or waiting on wall-clock timing.
+        self.service.nv_write.timer.timeout.emit()
+        self.run_node()
+        self.app.processEvents()
+        self.assertEqual(len(self.results), 1)
+        number, success, message = self.results[0]
+        self.assertEqual(number, 258)
+        self.assertFalse(success)
+        self.assertIn(
+            "Partial restoration: 1 NV writes and 0 EV writes verified", message
+        )
+        self.assertIn("NV 25 could not be saved. timed out waiting for NVANS", message)
+        self.assertEqual(
+            [f for f in self.connection.sent if b"N96" in f],
+            [b":SBFC0N9601021702;", b":SBFC0N9601021981;"],
+        )
+        self.assertFalse(any(b"ND2" in f or b"N95" in f for f in self.connection.sent))
+        self.assertEqual(self.state.nv_values[25], 129)
+        self.assertEqual(self.state.nv_values[26], 9)
+        self.assertEqual(self.state.nv_progress, DiscoveryProgress.COMPLETE)
+
+    def test_nv25_readback_after_events_continues_configuration_to_success(self):
+        self.begin_type_and_position_change()
+        self.reply("9701021981")
+        self.assertEqual(self.state.nv_values[25], 129)
+        self.assertEqual(self.connection.sent[-1], b":SBFC0N7101021A;")
+        self.run_node()
+        self.app.processEvents()
+        self.assertEqual(len(self.results), 1)
+        self.assertTrue(self.results[0][1], self.results)
+        self.assertEqual(
+            [f for f in self.connection.sent if b"N96" in f],
+            [
+                b":SBFC0N9601021702;",
+                b":SBFC0N9601021981;",
+                b":SBFC0N9601021A0A;",
+            ],
+        )
+        self.assertEqual(compare_live_node(self.state, self.backup), ([], False))
+
     def test_incomplete_final_nv_verification_stops_before_events(self):
         self.check_incomplete_nv_refresh(tail=False)
 
@@ -257,7 +339,7 @@ class NodeRestoreTests(unittest.TestCase):
                 self.reply("9701020309")
                 self.app.processEvents()
                 self.app.processEvents()
-            with self.assertRaisesRegex(ValueError, "restoration"):
+            with self.assertRaisesRegex(ValueError, "ownership"):
                 self.service.write_nvs(258, {2: 10})
         # Only the unanswered request needs the short timeout. Restore the
         # normal setting before its failure starts full-node rediscovery.
@@ -406,6 +488,27 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertIn("timed out", self.results[-1][2])
         self.assertEqual(self.state.nv_values, self.nvs)
         self.assertEqual(len([f for f in self.connection.sent if b"N96" in f]), 1)
+        with self.assertRaisesRegex(ValueError, "Reconnect"):
+            self.service.restore.begin(258, node_backup(self.state))
+
+    def test_application_ownership_survives_deferred_nv_comparison(self):
+        self.backup["nvs"][0] = 10
+        self.service.restore.begin(258, self.backup)
+        self.app.processEvents()
+        self.reply("590102")
+        self.reply("970102010A")
+        self.reply("9701020280")
+        self.reply("9701020309")
+        # Readback and higher-NV discovery have finished, but Qt has not yet
+        # resumed the coordinator. A second application still cannot start.
+        sent = list(self.connection.sent)
+        with self.assertRaisesRegex(ValueError, "Wait"):
+            self.service.restore.begin(258, node_backup(self.state))
+        self.assertEqual(self.connection.sent, sent)
+        self.assertFalse(self.results)
+        self.close_service()
+        self.assertEqual(len(self.results), 1)
+        self.assertFalse(self.results[0][1])
 
     def test_absent_ev_reconstructs_event_and_restores_all_numeric_values(self):
         self.events[(0, 1000)][3] = 42
@@ -682,6 +785,197 @@ class NodeRestoreTests(unittest.TestCase):
         details.node_backups.setCurrentItem(selected)
         return details
 
+    def editing_details(self):
+        details = self.backup_details()
+        # Only the coordinator reports application progress and completion to
+        # the editor, as in the real window.
+        self.service.restore.changed.connect(details.show_restore_progress)
+        self.service.restore.finished.connect(details.finish_restore)
+        self.service.node_state_updated.connect(
+            lambda _n: details.show_live_state(self.state)
+        )
+        details.edit_button.click()
+        details.raw_values.item(0, 1).setText("10")
+        event = details.node_events.consumed_table.topLevelItem(0)
+        event.child(0).setText(1, "4")
+        event.child(1).setText(1, "")
+        event.child(2).setText(1, "0")
+        return details
+
+    def check_editor_save(self, events_tab):
+        details = self.editing_details()
+        desired = deepcopy(details.desired_configuration)
+        editing = []
+        details.editing_changed.connect(editing.append)
+        progress = []
+        self.service.restore.changed.connect(
+            lambda _n, message: progress.append(
+                (
+                    message,
+                    details.variables.isEnabled(),
+                    details.node_events.isEnabled(),
+                )
+            )
+        )
+        button = details.events_save_button if events_tab else details.save_button
+        self.assertTrue(button.isEnabled())
+        button.click()
+        self.assertTrue(self.service.restore.active)
+        self.assertEqual(self.service.restore.backup, desired)
+        self.assertFalse(details.variables.isEnabled())
+        self.assertFalse(details.node_events.isEnabled())
+        self.assertFalse(details.save_button.isEnabled())
+        self.assertFalse(details.events_save_button.isEnabled())
+        self.assertFalse(details.cancel_button.isEnabled())
+        self.assertFalse(details.events_cancel_button.isEnabled())
+        # Repeated entry through either handler cannot start another application
+        # or discard the desired configuration while writes are pending.
+        details.save_editing()
+        details.save_events_editing()
+        details.cancel_editing()
+        details.cancel_events_editing()
+        self.assertEqual(details.desired_configuration, desired)
+        self.run_node()
+        self.assertEqual(len(self.results), 1)
+        self.assertTrue(self.results[0][1], self.results)
+        self.assertEqual(compare_live_node(self.state, desired), ([], False))
+        self.assertEqual(self.nvs, {1: 10, 2: 8, 3: 9})
+        self.assertEqual(self.events, {(0, 1000): {1: 4, 2: None, 3: 0}})
+        self.assertEqual(editing, [False])
+        self.assertTrue(progress)
+        self.assertTrue(all(not nv and not ev for _message, nv, ev in progress))
+        self.assertTrue(any("final configuration" in m for m, _nv, _ev in progress))
+        self.assertEqual(details.nv_result.text(), details.events_result.text())
+        self.assertIn("fully verified", details.nv_result.text())
+        self.assertTrue(details.variables.isEnabled())
+        self.assertTrue(details.node_events.isEnabled())
+        self.assertIsNone(details.desired_configuration)
+        self.assertEqual(details.buttons.currentIndex(), 0)
+        self.assertEqual(details.events_buttons.currentIndex(), 0)
+        self.assertFalse(self.learn)
+
+    def test_combined_editor_save_from_nv_tab(self):
+        self.check_editor_save(events_tab=False)
+
+    def test_combined_editor_save_from_events_tab(self):
+        self.check_editor_save(events_tab=True)
+
+    def test_combined_editor_save_failure_refreshes_both_views(self):
+        details = self.editing_details()
+        self.reject_nv = 1
+        details.events_save_button.click()
+        self.run_node()
+        self.assertEqual(len(self.results), 1)
+        self.assertFalse(self.results[0][1])
+        self.assertIn("Partial restoration", details.nv_result.text())
+        self.assertEqual(details.nv_result.text(), details.events_result.text())
+        self.assertEqual(details.raw_values.item(0, 1).text(), "7")
+        event = details.node_events.consumed_table.topLevelItem(0)
+        self.assertEqual(event.child(1).text(1), "12")
+        self.assertIsNone(details.desired_configuration)
+        self.assertFalse(details.saving_configuration)
+        self.assertTrue(details.variables.isEnabled())
+        self.assertTrue(details.node_events.isEnabled())
+        self.assertFalse(details.edit_button.isEnabled())
+        self.assertFalse(details.events_edit_button.isEnabled())
+        with self.assertRaisesRegex(ValueError, "Reconnect"):
+            self.service.restore.begin(258, node_backup(self.state))
+
+    def test_failed_save_rediscovery_updates_raw_and_mdf_views(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QListWidgetItem
+
+        from workbench.node import Node
+
+        details = NodeDetails({})
+        self.addCleanup(details.close)
+        details.connected = True
+        details.cbus_service = self.service
+        item = QListWidgetItem()
+        item.setData(Qt.ItemDataRole.UserRole, Node(258, "Test", 2, "", True))
+        details.show_node(item)
+        details.show_live_state(self.state)
+        self.service.restore.changed.connect(details.show_restore_progress)
+        self.service.restore.finished.connect(details.finish_restore)
+        self.service.node_state_updated.connect(
+            lambda _n: details.show_live_state(self.state)
+        )
+        details.edit_button.click()
+        details.mdf_values.global_settings.startup_delay.setValue(11)
+        details.raw_values.item(2, 1).setText("10")
+        self.assertEqual(details.desired_configuration["nvs"], [7, 11, 10])
+        self.assertEqual(self.state.nv_values, {1: 7, 2: 8, 3: 9})
+        self.change_earlier_nv = True
+        details.save_button.click()
+        self.run_node()
+        self.assertEqual(len(self.results), 1)
+        self.assertFalse(self.results[0][1])
+        self.assertIn("NV verification", details.nv_result.text())
+        self.assertEqual(details.nv_result.text(), details.events_result.text())
+        self.assertEqual(self.state.nv_values, {1: 99, 2: 11, 3: 10})
+        for table in (details.raw_values, details.mdf_values.raw_values):
+            self.assertEqual(
+                [table.item(i, 1).text() for i in range(3)], ["99", "11", "10"]
+            )
+        self.assertEqual(details.mdf_values.global_settings.startup_delay.value(), 11)
+        self.assertIsNone(details.desired_configuration)
+        details.edit_button.click()
+        self.assertEqual(details.nv_result.text(), "")
+        self.assertEqual(details.events_result.text(), "")
+        details.cancel_editing()
+
+    def test_combined_editor_disconnect_reports_one_partial_result(self):
+        details = self.editing_details()
+        editing = []
+        details.editing_changed.connect(editing.append)
+        details.save_button.click()
+        self.app.processEvents()
+        self.assertTrue(self.service.nv_write.active)
+        self.close_service()
+        details.connected = False
+        details.update_connection_details()
+        self.assertEqual(len(self.results), 1)
+        self.assertFalse(self.results[0][1])
+        self.assertEqual(editing, [False])
+        self.assertIn("Connection ended", details.nv_result.text())
+        self.assertEqual(details.nv_result.text(), details.events_result.text())
+        self.assertIsNone(details.desired_configuration)
+        self.assertFalse(details.saving_configuration)
+        self.assertFalse(details.edit_button.isEnabled())
+        self.assertFalse(details.events_edit_button.isEnabled())
+
+    def test_combined_editor_disconnect_during_reconstruction_keeps_final_result(self):
+        details = self.editing_details()
+        self.pause_removal_count = True
+        details.events_save_button.click()
+        self.run_node()  # Pause while the removed event is being rediscovered.
+        self.assertFalse(self.results)
+        self.assertFalse(details.variables.isEnabled())
+        self.assertFalse(details.node_events.isEnabled())
+        self.close_service()
+        self.assertEqual(len(self.results), 1)
+        self.assertFalse(self.results[0][1])
+        self.assertIn("Connection ended", details.nv_result.text())
+        self.assertEqual(details.nv_result.text(), details.events_result.text())
+        self.assertIsNone(details.desired_configuration)
+        self.assertFalse(details.saving_configuration)
+
+    def test_editor_save_revalidates_before_writing(self):
+        details = self.editing_details()
+        desired = deepcopy(details.desired_configuration)
+        self.state.can_id = None
+        details.save_button.click()
+        self.assertEqual(self.connection.sent, [])
+        self.assertFalse(self.results)
+        self.assertFalse(details.saving_configuration)
+        self.assertTrue(details.variables.isEnabled())
+        self.assertTrue(details.node_events.isEnabled())
+        self.assertEqual(details.desired_configuration, desired)
+        self.assertEqual(details.nv_result.text(), details.events_result.text())
+        self.assertIn("CAN ID", details.nv_result.text())
+        details.events_cancel_button.click()
+        self.assertIsNone(details.desired_configuration)
+
     def test_ui_preview_and_layout_warning_cancel_send_nothing(self):
         self.backup["partOfLayoutBackup"] = True
         details = self.backup_details()
@@ -701,9 +995,6 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertTrue(details.backup_buttons["Restore"].isEnabled())
         self.service.restore.changed.connect(details.show_restore_progress)
         self.service.restore.finished.connect(details.finish_restore)
-        self.service.nv_write.finished.connect(details.finish_nv_save)
-        self.service.nv_write.refresh_finished.connect(details.finish_nv_refresh)
-        self.service.ev_write.finished.connect(details.finish_ev_save)
         self.service.node_state_updated.connect(
             lambda _n: details.show_live_state(self.state)
         )
@@ -727,15 +1018,12 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertTrue(details.backup_buttons["Compare"].isEnabled())
         self.assertTrue(details.backup_buttons["Restore"].isEnabled())
 
-        # Keep the backup selected while editing the restored node. A Save's
-        # final discovery update arrives before its writer releases the wire.
+        # Keep the backup selected across subsequent unified editing sessions.
         selected = details.node_backups.currentItem()
         self.results.clear()
-        self.service.ev_write.finished.connect(lambda *args: self.results.append(args))
-        details.start_events_editing()
-        event = details.node_events.consumed_table.topLevelItem(0)
-        event.child(1).setText(1, "14")
-        details.save_events_editing()
+        details.events_edit_button.click()
+        details.node_events.consumed_table.topLevelItem(0).child(1).setText(1, "14")
+        details.events_save_button.click()
         self.assertTrue(self.service.writes_busy())
         with self.assertRaises(ValueError):
             self.service.restore.check(258, self.backup)
@@ -747,12 +1035,9 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertTrue(details.backup_buttons["Restore"].isEnabled())
 
         self.results.clear()
-        self.service.nv_write.refresh_finished.connect(
-            lambda *args: self.results.append(args)
-        )
-        details.start_editing()
-        details.editing_values[3] = 10
-        details.save_editing()
+        details.edit_button.click()
+        details.raw_values.item(2, 1).setText("10")
+        details.save_button.click()
         self.assertTrue(self.service.writes_busy())
         self.run_node()
         self.assertFalse(self.service.writes_busy())
