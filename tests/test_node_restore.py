@@ -1061,18 +1061,30 @@ class NodeRestoreTests(unittest.TestCase):
         details.events_cancel_button.click()
         self.assertIsNone(details.desired_configuration)
 
-    def test_ui_preview_and_layout_warning_cancel_send_nothing(self):
+    def test_ui_restore_skips_compare_and_layout_warning_cancel_sends_nothing(self):
         self.backup["partOfLayoutBackup"] = True
         details = self.backup_details()
         with (
-            patch("workbench.node_backup_workflow.BackupCompare.exec"),
+            patch("workbench.node_backup_workflow.BackupCompare.exec") as compare,
             patch(
                 "workbench.node_backup_workflow.QMessageBox.question",
                 return_value=QMessageBox.StandardButton.No,
             ) as question,
         ):
             details.restore_backup()
+        compare.assert_not_called()
         self.assertIn("part of a layout backup", question.call_args.args[2])
+        self.assertEqual(self.connection.sent, [])
+
+    def test_ui_explicit_compare_opens_comparison_without_restoring(self):
+        details = self.backup_details()
+        with (
+            patch("workbench.node_backup_workflow.BackupCompare.exec") as compare,
+            patch("workbench.node_backup_workflow.QMessageBox.question") as question,
+        ):
+            details.backup_buttons["Compare"].click()
+        compare.assert_called_once()
+        question.assert_not_called()
         self.assertEqual(self.connection.sent, [])
 
     def test_restore_available_with_selected_backup_after_restore_and_later_saves(self):
@@ -1084,13 +1096,14 @@ class NodeRestoreTests(unittest.TestCase):
             lambda _n: details.show_live_state(self.state)
         )
         with (
-            patch("workbench.node_backup_workflow.BackupCompare.exec"),
+            patch("workbench.node_backup_workflow.BackupCompare.exec") as compare,
             patch(
                 "workbench.node_backup_workflow.QMessageBox.question",
                 return_value=QMessageBox.StandardButton.Yes,
             ),
         ):
             details.restore_backup()
+        compare.assert_not_called()
         self.assertFalse(details.edit_button.isEnabled())
         self.assertFalse(details.events_edit_button.isEnabled())
         self.assertFalse(details.backup_buttons["Restore"].isEnabled())

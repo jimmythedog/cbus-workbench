@@ -171,15 +171,16 @@ Filesystem failures propagate to the existing UI exception reporter.
 
 ### Restoring a live node
 
-`NodeBackupWorkflow` loads the selected YAML through the existing validator, opens
-`BackupCompare` and requests explicit confirmation. It rechecks the connection and
-target after the modal dialogs. `NodeRestore`, owned by the connection's service,
-coordinates the existing `NvWrite` and `EvWrite` operations without implementing
+`NodeBackupWorkflow` loads the selected YAML through the existing validator and
+requests explicit confirmation. Comparison is a separate **Compare** action. It
+rechecks the connection and target after the confirmation dialog. `NodeRestore`,
+owned by the connection's service, coordinates the existing `NvWrite` and `EvWrite`
+operations without implementing
 another protocol writer. It reserves service writes until the final result;
 `NodeDetails` displays progress and uses the existing editing signal to lock node
 selection. Raw sending is also guarded during restore.
 
-    file + complete target -> Compare -> confirm (extra warning if incomplete)
+    file + complete target -> confirm (extra warning if incomplete)
       -> visit saved numeric NVs in ascending order
            matching confirmed live value -> skip
            different -> NvWrite(one NV), acknowledgement + readback

@@ -218,10 +218,12 @@ node number and confirm that it belongs to the connected module and firmware:
 backup files do not record manufacturer or firmware identity. Wait for complete
 discovery. Do not use another configuration application during restoration.
 
+To review differences first, use **Compare** explicitly. **Restore** opens the
+restoration confirmation directly.
+
 1. Select the live node, open **Backups**, select a saved YAML backup and choose
    **Restore**. Standalone and layout-owned node backups are supported.
-2. Review the comparison with current values, then close the comparison window.
-3. Read the confirmation and choose **Yes** to write, or **No** to cancel.
+2. Read the confirmation and choose **Yes** to write, or **No** to cancel.
    Layout-owned backups warn that restoring one node independently may leave it
    inconsistent with other nodes. Incomplete backups warn that replacement may
    remove configuration that was not captured; continue only if you accept this.

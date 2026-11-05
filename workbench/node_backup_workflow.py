@@ -150,7 +150,6 @@ class NodeBackupWorkflow:
             service.restore.check(number, backup)
             target = service.node_states[number]
             identity = (target.identity, target.can_id)
-            BackupCompare(target, backup, self.parent).exec()
             message = (
                 f"Restore this backup to live node {number}?\n\n"
                 "Backup NVs are compared in ascending order and written only when different. "
@@ -188,8 +187,8 @@ class NodeBackupWorkflow:
                     extra={"fields": {"node_number": number}},
                 )
                 return
-            # Dialogs process network events. Revalidate both connection and target
-            # after confirmation rather than trusting the preview's earlier state.
+            # The confirmation dialog processes network events. Revalidate connection
+            # and target rather than trusting the state checked before it opened.
             if identity != (target.identity, target.can_id):
                 raise ValueError(
                     "Target identity changed while confirming restoration."
