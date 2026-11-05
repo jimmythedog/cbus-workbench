@@ -102,6 +102,17 @@ backup restoration: it compares against confirmed hardware state, accounts for
 firmware changes, and verifies the complete resulting configuration. Unchanged
 values remain part of the desired configuration.
 
+If an acknowledged NV write's verification read times out, Workbench makes one
+additional read without repeating the write. A matching value allows application
+to continue, and the final result reports that verification required recovery.
+If the additional read fails or differs, application stops and refreshes the
+resulting state as described below.
+
+Automatic NV discovery and refresh also make one additional read after a timeout,
+including during Save and Restore. Workbench waits for that NV before continuing;
+if the second read times out, discovery remains incomplete. These reads never
+repeat a write or change the response timeout.
+
 Applying the complete target can remove firmware-created events or reconstruct
 an event to clear EVs. There is no rollback. Do not use another configuration tool
 on the network during application. Failure stops further writes and refreshes the

@@ -210,6 +210,16 @@ the next comparison. Intermediate refreshes do not reread events. Once the scan
 ends, a full NV reread and event/EV refresh verify the saved NVs and obtain current
 event identities before any event replacement.
 
+Only a verification NVANS timeout after WRACK permits one additional NVRD,
+retaining writer ownership and the unverified marker. Matching readback clears
+the marker and follows the same higher-NV refresh path; the coordinator retains
+a recovery count for the final result. A second timeout or any other write failure
+uses the existing stop-and-rediscover path. NVSET is never retried.
+
+    NVSET -> WRACK -> NVRD -> timeout -> one NVRD
+                                         matching -> higher-NV refresh -> continue
+                                         failure  -> stop -> full rediscovery
+
 Each saved index is visited once. Firmware may also change earlier NVs: the full
 verification detects these differences and fails without retry or rollback. The
 ascending order is a generic policy, not an assumption about firmware dependencies.
@@ -398,7 +408,8 @@ The Developer's Guide 6b teaching/readback sections define the wire sequence;
 no learn mode is needed. WRACK and CMDERR carry no NV index or transaction ID.
 Serialisation prevents ambiguity between Workbench's own requests; another tool
 must not write the same node concurrently. Each reply uses the shared response
-timeout. There are no automatic retries or rollbacks. Failed writes retain their
+timeout. Writes are never retried or rolled back; only the bounded NV read
+recovery described above is automatic. Failed writes retain their
 uncertainty markers: failure rediscovery can reveal physical values without
 allowing another Save before reconnecting.
 
@@ -495,8 +506,16 @@ event enumeration INCOMPLETE -> no automatic REVAL
 ### Shared automatic request queue
 
 Each `CbusService` has one FIFO, one outstanding request and one single-shot
-`QTimer`. Timeouts and send failures abandon remaining requests of the same kind
-for that node, preserve confirmed data and let other queued work proceed.
+`QTimer`. An automatic NV read timeout sends one additional NVRD for the same
+node/index, retaining the outstanding request and using the same timeout. Only
+a matching NVANS records a value and advances the queue; unrelated or duplicate
+replies are ignored. The allowance resets for each newly sent request, including
+a new discovery pass. NVANS has no transaction ID, so a delayed first reply can
+satisfy the recovery read. No NVSET is sent.
+
+A second NV timeout, other request timeouts and send failures abandon remaining
+requests of the same kind for that node, preserve confirmed data and let other
+queued work proceed. Closing the service stops the timer and clears ownership.
 NERD keeps its slot while new ENRSP indices arrive; each one restarts the timer.
 Each REVAL advances on a matching NEVAL or a same-node CMDERR 5. CMDERR 5 records
 absence only for confirmed legacy CBUS nodes, as described above; otherwise it
@@ -507,7 +526,10 @@ per-layout FIFO -> pop/send
                     +-> send failure -> INCOMPLETE -> next queued request
                     +-> sent -> one outstanding request + single-shot QTimer
                                   +-> matching reply -> record -> advance FIFO
-                                  +-> timeout -> INCOMPLETE -> advance FIFO
+                                  +-> first NV timeout -> same NVRD, keep owner
+                                  |     match -> record, advance FIFO
+                                  |     timeout/send failure -> INCOMPLETE, advance
+                                  +-> other timeout -> INCOMPLETE -> advance FIFO
                                   +-> NERD: new ENRSP -> record, restart timer;
                                   |          keep NERD outstanding
                                   +-> NERD: enough indices -> COMPLETE -> advance

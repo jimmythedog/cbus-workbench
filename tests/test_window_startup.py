@@ -672,6 +672,10 @@ class WindowStartupTests(unittest.TestCase):
         selected = view.node_list.currentItem()
         details = view.details
         table = details.raw_values
+        # Finish parameter discovery so these NVANS answer actual queued reads.
+        connection.frame_received.emit(b":SB040N9B01020006;")
+        for index in (2, 4, 5):
+            connection.frame_received.emit(f":SB040N9B0102{index:02X}00;".encode())
         connection.frame_received.emit(b":SB040N9B01020603;")
 
         self.assertTrue(
@@ -687,8 +691,8 @@ class WindowStartupTests(unittest.TestCase):
             [("1", "-"), ("2", "-"), ("3", "-")],
         )
         first_row = table.item(0, 0)
-        connection.frame_received.emit(b":SB040N9701020200;")
         connection.frame_received.emit(b":SB040N970102012A;")
+        connection.frame_received.emit(b":SB040N9701020200;")
         self.assertIs(view.node_list.currentItem(), selected)
         self.assertIs(table.item(0, 0), first_row)
         self.assertEqual(

@@ -75,6 +75,7 @@ class CbusService(QObject):
         self.node_states: dict[int, NodeState] = {}
         self._request_queue: deque[tuple[str, int, RequestIndex]] = deque()
         self._outstanding_request: tuple[str, int, RequestIndex] | None = None
+        self._nv_read_recovery = False
         self._nv_started: dict[int, int] = {}
         self._ev_started: set[int] = set()
         self._request_timer = QTimer(self)
@@ -115,6 +116,7 @@ class CbusService(QObject):
         self._request_timer.stop()
         self._request_queue.clear()
         self._outstanding_request = None
+        self._nv_read_recovery = False
         self._nv_started.clear()
         self._ev_started.clear()
         trace(
@@ -788,7 +790,6 @@ class CbusService(QObject):
                 },
             )
             return
-        self.record_nv(node_number, index, value)
         if self._outstanding_request != ("nv", node_number, index):
             trace(
                 logger,
@@ -803,6 +804,20 @@ class CbusService(QObject):
                 },
             )
             return
+        if self._nv_read_recovery:
+            trace(
+                logger,
+                "Automatic NV discovery read recovered",
+                extra={
+                    "fields": {
+                        "layout": self.connection.layout_name,
+                        "node_number": node_number,
+                        "nv_index": index,
+                        "value": value,
+                    }
+                },
+            )
+        self.record_nv(node_number, index, value)
         self._finish_request("nv", node_number)
 
     def _receive_numev(self, node_number: int, count: int) -> None:
@@ -1001,6 +1016,7 @@ class CbusService(QObject):
         """Advance the shared FIFO only after a matching reply."""
         self._request_timer.stop()
         self._outstanding_request = None
+        self._nv_read_recovery = False
         if not any(
             queued_kind == kind and queued_node == node_number
             for queued_kind, queued_node, _index in self._request_queue
@@ -1065,6 +1081,7 @@ class CbusService(QObject):
                     self._queue_event_count(node_number)
                 continue
             self._outstanding_request = (kind, node_number, index)
+            self._nv_read_recovery = False
             self._set_progress(kind, node_number, DiscoveryProgress.IN_PROGRESS)
             self._request_timer.start(response_timeout.RESPONSE_TIMEOUT_MS)
             trace(logger, "Awaiting automatic reply", extra={"fields": fields})
@@ -1118,7 +1135,30 @@ class CbusService(QObject):
             return
         self._request_timer.stop()
         kind, node_number, index = self._outstanding_request
+        if kind == "nv" and not self._nv_read_recovery:
+            # Keep the same request owner/index: a delayed first reply may satisfy
+            # this read, but cannot advance a subsequent, different NV request.
+            self._nv_read_recovery = True
+            fields = {
+                "layout": self.connection.layout_name,
+                "node_number": node_number,
+                "nv_index": index,
+            }
+            logger.warning(
+                "Automatic NV read timed out; requesting one recovery read",
+                extra={"fields": fields},
+            )
+            try:
+                self.request_nv(node_number, index)
+            except OSError:
+                logger.exception(
+                    "Automatic NV recovery read send failed", extra={"fields": fields}
+                )
+            else:
+                self._request_timer.start(response_timeout.RESPONSE_TIMEOUT_MS)
+                return
         self._outstanding_request = None
+        self._nv_read_recovery = False
         self._request_queue = deque(
             request
             for request in self._request_queue

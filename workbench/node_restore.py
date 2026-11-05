@@ -117,6 +117,7 @@ class NodeRestore(QObject):
         self.active = True
         self.failure = ""
         self.nvs_verified = self.evs_verified = 0
+        self.nvs_recovered = 0
         self.removals_transmitted = 0
         self.events_removed = 0
         self.event_steps = []
@@ -238,6 +239,7 @@ class NodeRestore(QObject):
         if not self.active or number != self.node_number or self.stage != "writing NVs":
             return
         self.nvs_verified += self.service.nv_write.verified
+        self.nvs_recovered += self.service.nv_write.recovered
         if not success:
             self.fail(message)
 
@@ -335,6 +337,10 @@ class NodeRestore(QObject):
         self.active = False
         if not success:
             message = f"Partial restoration: {self.nvs_verified} NV writes and {self.evs_verified} EV writes verified; {self.removals_transmitted} event removals transmitted, {self.events_removed} event removals verified. {message} Reconnect and compare before retrying."
+        if self.nvs_recovered:
+            message += (
+                f" Verification required recovery for {self.nvs_recovered} NV write(s)."
+            )
         self.log("Restore finished", success=success, result=message)
         self.finished.emit(self.node_number, success, message)
         self.service.node_state_updated.emit(self.node_number)

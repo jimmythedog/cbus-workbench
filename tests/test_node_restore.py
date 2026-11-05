@@ -242,7 +242,7 @@ class NodeRestoreTests(unittest.TestCase):
     def test_incomplete_higher_nv_refresh_stops_before_more_writes_or_events(self):
         self.check_incomplete_nv_refresh(tail=True)
 
-    def begin_type_and_position_change(self):
+    def begin_type_and_position_change(self, next_value=10):
         """Reach NV25 verification after a TYPE write resets its position."""
         self.nvs = dict.fromkeys(range(1, 27), 0)
         self.nvs.update({23: 1, 25: 0, 26: 9})
@@ -251,7 +251,7 @@ class NodeRestoreTests(unittest.TestCase):
         self.backup = node_backup(self.state)
         self.backup["nvs"][22] = 2
         self.backup["nvs"][24] = 129
-        self.backup["nvs"][25] = 10  # A later edit must wait for NV25 verification.
+        self.backup["nvs"][25] = next_value  # Wait for NV25 verification.
         self.service.restore.begin(258, self.backup)
         self.app.processEvents()
         self.assertEqual(self.connection.sent[-1], b":SBFC0N9601021702;")
@@ -284,6 +284,8 @@ class NodeRestoreTests(unittest.TestCase):
         # Deliver timer expiry explicitly: exercise the real timeout handler
         # without changing the response timeout or waiting on wall-clock timing.
         self.service.nv_write.timer.timeout.emit()
+        self.assertEqual(self.connection.sent[-1], b":SBFC0N71010219;")
+        self.service.nv_write.timer.timeout.emit()
         self.run_node()
         self.app.processEvents()
         self.assertEqual(len(self.results), 1)
@@ -293,7 +295,9 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertIn(
             "Partial restoration: 1 NV writes and 0 EV writes verified", message
         )
-        self.assertIn("NV 25 could not be saved. timed out waiting for NVANS", message)
+        self.assertIn(
+            "NV 25 could not be saved. timed out waiting for recovery NVANS", message
+        )
         self.assertEqual(
             [f for f in self.connection.sent if b"N96" in f],
             [b":SBFC0N9601021702;", b":SBFC0N9601021981;"],
@@ -302,6 +306,86 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertEqual(self.state.nv_values[25], 129)
         self.assertEqual(self.state.nv_values[26], 9)
         self.assertEqual(self.state.nv_progress, DiscoveryProgress.COMPLETE)
+
+    def test_recovery_read_continues_with_higher_nv_refresh_and_final_verification(
+        self,
+    ):
+        self.begin_type_and_position_change(next_value=9)
+        self.service.nv_write.timer.timeout.emit()
+        self.assertEqual(self.connection.sent[-1], b":SBFC0N71010219;")
+        self.assertEqual(self.results, [])
+        # Firmware changed the next NV: recovery must still refresh it before
+        # deciding whether its desired value needs writing.
+        self.nvs[26] = 128
+        self.reply("9701021981")
+        self.assertEqual(self.service.nv_write.unverified, set())
+        self.assertEqual(self.connection.sent[-1], b":SBFC0N7101021A;")
+        self.run_node()
+        self.app.processEvents()
+        self.assertEqual(len(self.results), 1)
+        self.assertTrue(self.results[0][1], self.results)
+        self.assertIn(
+            "Verification required recovery for 1 NV write(s)", self.results[0][2]
+        )
+        self.assertEqual(compare_live_node(self.state, self.backup), ([], False))
+        self.assertTrue(self.full_discovery)
+        self.assertEqual(
+            [f for f in self.connection.sent if b"N96" in f],
+            [b":SBFC0N9601021702;", b":SBFC0N9601021981;", b":SBFC0N9601021A09;"],
+        )
+
+    def test_recovery_followed_by_later_nv_failure_reports_recovery_once(self):
+        self.begin_type_and_position_change()
+        self.service.nv_write.timer.timeout.emit()
+        self.reply("9701021981")
+        self.reject_nv = 26
+        self.run_node()
+        self.app.processEvents()
+        self.assertEqual(len(self.results), 1)
+        _, success, message = self.results[0]
+        self.assertFalse(success)
+        self.assertIn("Partial restoration:", message)
+        self.assertIn("NV 26 could not be saved", message)
+        self.assertIn("CMDERR", message)
+        self.assertEqual(message.count("Verification required recovery for"), 1)
+        self.assertIn("Verification required recovery for 1 NV write(s).", message)
+
+    def test_higher_nv_discovery_recovery_continues_reconciliation(self):
+        self.begin_type_and_position_change()
+        self.reply("9701021981")
+        self.assertEqual(self.connection.sent[-1], b":SBFC0N7101021A;")
+        self.service._request_timer.timeout.emit()
+        self.assertEqual(self.connection.sent[-2:], [b":SBFC0N7101021A;"] * 2)
+        self.assertEqual(self.results, [])
+        self.run_node()
+        self.app.processEvents()
+        self.assertEqual(len(self.results), 1)
+        self.assertTrue(self.results[0][1], self.results)
+        self.assertEqual(compare_live_node(self.state, self.backup), ([], False))
+        self.assertTrue(self.full_discovery)
+        self.assertEqual(
+            [f for f in self.connection.sent if b"N96" in f],
+            [b":SBFC0N9601021702;", b":SBFC0N9601021981;", b":SBFC0N9601021A0A;"],
+        )
+
+    def test_recovery_read_mismatch_stops_and_rediscover_partial_result(self):
+        self.begin_type_and_position_change()
+        self.service.nv_write.timer.timeout.emit()
+        self.nvs[25] = 128
+        self.reply("9701021980")
+        self.run_node()
+        self.app.processEvents()
+        self.assertEqual(len(self.results), 1)
+        self.assertFalse(self.results[0][1])
+        self.assertIn("readback was 128, expected 129", self.results[0][2])
+        self.assertEqual(self.state.nv_values[25], 128)
+        self.assertEqual(self.state.nv_values[26], 9)
+        self.assertEqual(
+            [f for f in self.connection.sent if b"N96" in f],
+            [b":SBFC0N9601021702;", b":SBFC0N9601021981;"],
+        )
+        with self.assertRaisesRegex(ValueError, "Reconnect"):
+            self.service.restore.begin(258, self.backup)
 
     def test_nv25_readback_after_events_continues_configuration_to_success(self):
         self.begin_type_and_position_change()
@@ -344,7 +428,8 @@ class NodeRestoreTests(unittest.TestCase):
         # Only the unanswered request needs the short timeout. Restore the
         # normal setting before its failure starts full-node rediscovery.
         # Retained matching values cannot substitute for fresh replies.
-        QTest.qWait(30)
+        self.service._request_timer.timeout.emit()
+        self.service._request_timer.timeout.emit()
         self.run_node()  # Answer failure rediscovery, never retry writes.
         self.assertFalse(self.results[-1][1])
         self.assertEqual(len([f for f in self.connection.sent if b"N96" in f]), 1)

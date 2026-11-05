@@ -29,6 +29,7 @@ class NvWrite(QObject):
         self.node_number = 0
         self.changes = []
         self.verified = 0
+        self.recovered = 0
         # Late readbacks after failure must not silently confirm a failed write.
         self.unverified: set[tuple[int, int]] = set()
         self.timer = QTimer(self)
@@ -48,6 +49,7 @@ class NvWrite(QObject):
         self.node_number = node_number
         self.changes = sorted(changes.items())
         self.verified = 0
+        self.recovered = 0
         self.total = len(self.changes)
         self.active = True
         self.stage = "waiting for discovery reply"
@@ -104,7 +106,7 @@ class NvWrite(QObject):
         if (
             self.active
             and node_number == self.node_number
-            and self.stage == "NVANS"
+            and self.stage in ("NVANS", "recovery NVANS")
             and index == self.changes[0][0]
         ):
             expected = self.changes[0][1]
@@ -117,6 +119,9 @@ class NvWrite(QObject):
                 )
             else:
                 self.timer.stop()
+                if self.stage == "recovery NVANS":
+                    self.recovered += 1
+                    self.log("NV verification recovered", nv_index=index)
                 self.unverified.remove((node_number, index))
                 self.service.record_nv(node_number, index, value)
                 self.verified += 1
@@ -142,7 +147,7 @@ class NvWrite(QObject):
         if (
             not self.active
             or node_number != self.node_number
-            or self.stage not in ("WRACK", "NVANS")
+            or self.stage not in ("WRACK", "NVANS", "recovery NVANS")
         ):
             return False
         index = self.changes[0][0]
@@ -153,6 +158,23 @@ class NvWrite(QObject):
 
     def timed_out(self) -> None:
         index = self.changes[0][0]
+        if self.stage == "NVANS":
+            # WRACK confirmed acceptance. Retry only the read, retaining wire
+            # ownership and the uncertainty marker until a matching value arrives.
+            self.stage = "recovery NVANS"
+            self.log(
+                "NV verification timed out; requesting one recovery read",
+                nv_index=index,
+            )
+            self.timer.start(response_timeout.RESPONSE_TIMEOUT_MS)
+            try:
+                self.service.request_nv(self.node_number, index)
+            except OSError:
+                logger.exception("NV recovery read send failed")
+                self.finish(
+                    False, f"NV {index}: could not request recovery verification."
+                )
+            return
         self.finish(False, f"NV {index}: timed out waiting for {self.stage}.")
 
     def disconnect(self) -> None:

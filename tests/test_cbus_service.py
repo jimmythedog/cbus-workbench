@@ -796,7 +796,7 @@ class CbusServiceTests(unittest.TestCase):
         state = self.service.node_states[258]
         self.assertEqual(state.nv_progress, DiscoveryProgress.NOT_STARTED)
         self.connection.frame_received.emit(b":SB040N9701020109;")
-        self.assertEqual(state.nv_values, {1: 9})
+        self.assertEqual(state.nv_values, {})
         self.assertEqual(state.nv_progress, DiscoveryProgress.NOT_STARTED)
         self.connection.frame_received.emit(b":SB040N9B01020600;")
         self.assertEqual(state.nv_progress, DiscoveryProgress.COMPLETE)
@@ -870,7 +870,7 @@ class CbusServiceTests(unittest.TestCase):
         self.connection.frame_received.emit(b":SB040N9701020209;")
         self.connection.frame_received.emit(b":SB040N9701020209;")
         self.assertEqual(self.connection.sent, before)
-        self.assertEqual(self.service.node_states[258].nv_values, {2: 9})
+        self.assertEqual(self.service.node_states[258].nv_values, {})
         self.assertEqual(
             self.service.node_states[258].nv_progress, DiscoveryProgress.IN_PROGRESS
         )
@@ -896,6 +896,8 @@ class CbusServiceTests(unittest.TestCase):
 
         with self.assertLogs("workbench.cbus", level="WARNING"):
             self.service._request_timer.timeout.emit()
+            self.assertEqual(self.connection.sent[-1], b":SBFC0N71010202;")
+            self.service._request_timer.timeout.emit()
         first = self.service.node_states[258]
         second = self.service.node_states[259]
         self.assertEqual(first.nv_values, {1: 5})
@@ -912,6 +914,62 @@ class CbusServiceTests(unittest.TestCase):
         self.connection.frame_received.emit(b":SB040N9701030107;")
         self.assertEqual(second.nv_values, {1: 7})
         self.assertEqual(second.nv_progress, DiscoveryProgress.COMPLETE)
+
+    def test_nv_recovery_matches_only_expected_reply_and_resets_for_next_index(self):
+        self.start_nv_reads(2)
+        with self.assertLogs("workbench.cbus", level="WARNING"):
+            self.service._request_timer.timeout.emit()
+        self.assertEqual(self.connection.sent[-2:], [b":SBFC0N71010201;"] * 2)
+        before = self.connection.sent.copy()
+        self.connection.frame_received.emit(b":SB040N9701030108;")
+        self.connection.frame_received.emit(b":SB040N9701020208;")
+        self.assertEqual(self.connection.sent, before)
+        self.assertEqual(self.service.node_states[258].nv_values, {})
+        self.connection.frame_received.emit(b":SB040N9701020105;")
+        self.assertEqual(self.connection.sent[-1], b":SBFC0N71010202;")
+        self.connection.frame_received.emit(b":SB040N9701020163;")
+        self.assertEqual(self.service.node_states[258].nv_values, {1: 5})
+        with self.assertLogs("workbench.cbus", level="WARNING"):
+            self.service._request_timer.timeout.emit()
+        self.assertEqual(self.connection.sent[-2:], [b":SBFC0N71010202;"] * 2)
+        self.connection.frame_received.emit(b":SB040N9701020207;")
+        state = self.service.node_states[258]
+        self.assertEqual(state.nv_values, {1: 5, 2: 7})
+        self.assertEqual(state.nv_progress, DiscoveryProgress.COMPLETE)
+        before = self.connection.sent.copy()
+        self.connection.frame_received.emit(b":SB040N9701020209;")
+        self.assertEqual(self.connection.sent, before)
+        self.assertEqual(state.nv_values, {1: 5, 2: 7})
+        self.assertFalse(any(b"N96" in frame for frame in self.connection.sent))
+
+    def test_disconnect_during_nv_recovery_drops_late_reply(self):
+        self.start_nv_reads(2)
+        with self.assertLogs("workbench.cbus", level="WARNING"):
+            self.service._request_timer.timeout.emit()
+        self.service.close()
+        before = self.connection.sent.copy()
+        self.connection.frame_received.emit(b":SB040N9701020105;")
+        self.assertEqual(self.connection.sent, before)
+        self.assertEqual(self.service.node_states[258].nv_values, {})
+
+    def test_new_discovery_gets_a_fresh_nv_recovery_allowance(self):
+        self.connection.state = "Connected"
+        self.start_nv_reads(1)
+        with self.assertLogs("workbench.cbus", level="WARNING"):
+            self.service._request_timer.timeout.emit()
+        self.connection.frame_received.emit(b":SB040N9701020105;")
+        self.connection.frame_received.emit(b":SB040N74010200;")
+        self.service.rediscover_node(258)
+        self.start_nv_reads(1)
+        before = self.connection.sent.count(b":SBFC0N71010201;")
+        with self.assertLogs("workbench.cbus", level="WARNING"):
+            self.service._request_timer.timeout.emit()
+        self.assertEqual(self.connection.sent.count(b":SBFC0N71010201;"), before + 1)
+        self.connection.frame_received.emit(b":SB040N9701020107;")
+        self.assertEqual(self.service.node_states[258].nv_values, {1: 7})
+        self.assertEqual(
+            self.service.node_states[258].nv_progress, DiscoveryProgress.COMPLETE
+        )
 
     def test_failed_nv_request_preserves_confirmed_value(self):
         self.start_nv_reads(2)
