@@ -37,6 +37,10 @@ Connections can share a logical layout, but discovery is separate for each conne
 Changing a connection's logical layout switches its stored configuration and backup
 directory after confirmation; existing data is not moved or deleted.
 
+The summary to the right of **Nodes | Events | Backups** shows the selected
+layout name and configured host/port or serial device, plus CAN ID. Hover over
+it to read the full summary when space is limited.
+
 Select a layout in the **Layout** menu. **Edit…** and **Delete…** are available
 only when its connection is closed. Layout changes are saved for the next session.
 The first layout becomes the startup default. Choose **Layout → Set as default**

@@ -25,6 +25,67 @@ class LayoutSettingsTests(unittest.TestCase):
         save_patch.start()
         self.addCleanup(save_patch.stop)
 
+    def test_summary_tracks_layout_selection_and_settings_edits(self):
+        home = self.window.layouts["Home"]
+        self.assertEqual(
+            home.layout_summary.text(), "Home — Host:   Port: 5550  CAN ID: 126"
+        )
+        other = self.window.layout_settings["Test Layout"]
+        other.update(connection_type="Serial", serial_port="/dev/ttyACM0", can_id=125)
+        action = next(
+            action
+            for action in self.window.layout_group.actions()
+            if action.data() == "Test Layout"
+        )
+        action.trigger()
+        view = self.window.layouts["Test Layout"]
+        self.assertEqual(
+            view.layout_summary.text(),
+            "Test Layout — Device: /dev/ttyACM0  CAN ID: 125",
+        )
+        view.tabs.setCurrentIndex(1)
+
+        def accept_edit(dialog):
+            dialog.name_edit.setText("Test Rig")
+            dialog.connection_type_combo.setCurrentText("TCP/IP")
+            dialog.host_edit.setText("railway")
+            dialog.port_spin.setValue(5551)
+            dialog.can_id_spin.setValue(127)
+            return QDialog.DialogCode.Accepted
+
+        with patch.object(LayoutSettingsDialog, "exec", accept_edit):
+            self.window.edit_layout()
+        self.assertEqual(
+            view.layout_summary.text(),
+            "Test Rig — Host: railway  Port: 5551  CAN ID: 127",
+        )
+        self.assertEqual(view.tabs.currentIndex(), 1)
+        self.assertEqual(
+            [view.tabs.tabText(i) for i in range(view.tabs.count())],
+            ["Nodes", "Events", "Backups"],
+        )
+
+    def test_summary_stays_beside_tabs_at_narrow_width(self):
+        view = self.window.layouts["Home"]
+        self.window.show()
+        self.window.resize(800, 600)
+        self.app.processEvents()
+        narrow_width = self.window.width()
+        settings = self.window.layout_settings["Home"]
+        settings["host"] = "a-long-railway-hostname-" * 5
+        view.show_summary("Home", settings)
+        self.window.show()
+        self.window.resize(800, 600)
+        self.app.processEvents()
+        self.assertLessEqual(self.window.width(), narrow_width)
+        summary = view.layout_summary
+        tabs = view.tabs.tabBar()
+        self.assertGreaterEqual(summary.x(), tabs.geometry().right())
+        self.assertLessEqual(summary.geometry().right(), view.tabs.width())
+        self.assertLessEqual(summary.y(), tabs.geometry().bottom())
+        self.assertGreaterEqual(summary.geometry().bottom(), tabs.y())
+        self.assertEqual(summary.toolTip(), summary.text())
+
     def test_new_layout_defaults_to_auto_connect_off(self):
         def accept_new(dialog):
             self.assertFalse(dialog.auto_connect_check.isChecked())

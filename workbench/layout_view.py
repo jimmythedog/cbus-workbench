@@ -2,14 +2,16 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QInputDialog,
+    QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -24,6 +26,17 @@ from .layout_events import LayoutEvents
 from .layout_restore_dialog import LayoutRestoreDialog
 from .node_snapshot import create_node_snapshot, restore_node_snapshot
 from .node_view import NodeView
+
+
+class LayoutSummaryLabel(QLabel):
+    """Keep Qt's tab-corner size hint compact even for long endpoint names."""
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        return QSize(min(hint.width(), 480), hint.height())
+
+    def minimumSizeHint(self):
+        return QSize(0, self.sizeHint().height())
 
 
 class LayoutView(QWidget):
@@ -55,6 +68,15 @@ class LayoutView(QWidget):
             self.events = {}
 
         self.tabs = QTabWidget()
+        self.layout_summary = LayoutSummaryLabel()
+        self.layout_summary.setTextFormat(Qt.TextFormat.PlainText)
+        self.layout_summary.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.layout_summary.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.tabs.setCornerWidget(self.layout_summary, Qt.Corner.TopRightCorner)
         self.node_view = NodeView(self.events)
         self.tabs.addTab(self.node_view, "Nodes")
 
@@ -98,6 +120,16 @@ class LayoutView(QWidget):
         self.layout_events.editing_changed.connect(self.on_layout_events_editing)
         self.tabs.currentChanged.connect(self.on_tab_changed)
         self.update_backup_buttons()
+
+    def show_summary(self, name, settings):
+        """Show configured values independently of the connection's current status."""
+        if settings["connection_type"] == "Serial":
+            endpoint = f"Device: {settings['serial_port']}"
+        else:
+            endpoint = f"Host: {settings['host']}  Port: {settings['port']}"
+        summary = f"{name} — {endpoint}  CAN ID: {settings['can_id']}"
+        self.layout_summary.setText(summary)
+        self.layout_summary.setToolTip(summary)
 
     def show_live_layout(self, logical_layout, discovery_states):
         if self.logical_layout is not None and self.logical_layout != logical_layout:

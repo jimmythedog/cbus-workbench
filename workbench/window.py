@@ -597,6 +597,7 @@ class MainWindow(QMainWindow):
             layout_logger, "Entering select_layout", extra={"fields": {"layout": name}}
         )
         self.layout_stack.setCurrentWidget(self.layouts[name])
+        self.layouts[name].show_summary(name, self.layout_settings[name])
         self.layouts[name].show_live_layout(
             self.layout_settings[name]["logical_layout"],
             lambda: (
@@ -848,6 +849,7 @@ class MainWindow(QMainWindow):
         self.update_default_indicator()
         del self.layout_settings[old_name]
         self.layout_settings[name] = settings
+        self.layouts[name].show_summary(name, settings)
         self.layouts[name].show_live_layout(
             settings["logical_layout"],
             lambda: (
