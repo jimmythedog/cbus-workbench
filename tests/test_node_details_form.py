@@ -4,7 +4,7 @@ import os
 import unittest
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QListWidgetItem
+from PySide6.QtWidgets import QApplication, QLabel, QListWidgetItem
 
 from workbench.cbus_service import CbusService, NodeState
 from workbench.node import Node
@@ -30,6 +30,162 @@ class NodeDetailsFormTests(unittest.TestCase):
         item.setData(Qt.ItemDataRole.UserRole, node)
         self.details.show_node(item)
         return item
+
+    def test_navigator_and_summary_names_refresh_without_changing_selection(self):
+        view = NodeView({})
+        self.addCleanup(view.close)
+        first = NodeState(Pnn(258, 165, 32, 5))
+        second = NodeState(Pnn(259, 165, 254, 5))
+        states = {258: first, 259: second}
+        view.state_lookup = states.get
+        view.show_identity(first.identity)
+        selected = view.node_list.currentItem()
+        self.assertEqual(selected.text(), "258 - CANMIO")
+        self.assertEqual(view.details.summary.title(), "Node 258 — CANMIO")
+        view.show_identity(second.identity)
+        self.assertIs(view.node_list.currentItem(), selected)
+        self.assertEqual(view.node_list.item(1).text(), "259 - 254")
+
+        # An update to an unselected node must not replace the selected details.
+        second.identity = Pnn(259, 165, 32, 5)
+        view.refresh_state(259)
+        self.assertEqual(view.node_list.item(1).text(), "259 - CANMIO")
+        self.assertIs(view.node_list.currentItem(), selected)
+        self.assertEqual(view.details.summary.title(), "Node 258 — CANMIO")
+
+        first.identity = Pnn(258, 1, 32, 5)
+        view.refresh_state(258)
+        self.assertEqual(selected.text(), "258 - 32")
+        self.assertEqual(view.details.summary.title(), "Node 258 — 32")
+        self.assertEqual(selected.data(Qt.ItemDataRole.UserRole).module_type, 32)
+        self.assertIs(view.node_list.currentItem(), selected)
+
+        first.identity = Pnn(258, 165, 32, 5)
+        view.show_identity(first.identity)
+        self.assertEqual(selected.text(), "258 - CANMIO")
+        self.assertEqual(view.details.summary.title(), "Node 258 — CANMIO")
+        self.assertIs(view.node_list.currentItem(), selected)
+        view.node_list.setCurrentRow(1)
+        self.assertEqual(view.details.summary.title(), "Node 259 — CANMIO")
+        view.details.show_node(None)
+        self.assertEqual(view.details.summary.title(), "Node details")
+        self.select(260)
+        self.assertEqual(self.details.summary.title(), "Node 260 (offline)")
+
+    def test_confirmed_identity_names_and_unknown_fallbacks(self):
+        for manufacturer, module_type, name, module, identifier in (
+            (165, 32, "MERG", "CANMIO", "A520"),
+            (165, 254, "MERG", "254", "A5FE"),
+            (1, 32, "1", "32", "0120"),
+            (255, 255, "unknown", "255", "FFFF"),
+        ):
+            with self.subTest(manufacturer=manufacturer, module_type=module_type):
+                identity = Pnn(42, manufacturer, module_type, 5)
+                self.select(identity)
+                self.assertEqual(self.details.manufacturer.text(), name)
+                self.assertEqual(self.details.module_type.text(), module)
+                self.assertEqual(
+                    self.details.details_page.module_identifier.text(), identifier
+                )
+                state = NodeState(identity)
+                self.details.show_live_state(state)
+                self.assertEqual(self.details.manufacturer.text(), name)
+                self.assertEqual(self.details.module_type.text(), module)
+                self.assertEqual(state.identity.manufacturer, manufacturer)
+                self.assertEqual(state.identity.module_type, module_type)
+        self.details.show_node(None)
+        self.assertEqual(self.details.manufacturer.text(), "-")
+        self.assertEqual(self.details.module_type.text(), "-")
+
+    def test_module_identifier_uses_confirmed_bytes(self):
+        form = self.details.details_page
+        self.assertEqual(form.module_identifier.text(), "-")
+        for manufacturer, module_type, expected in (
+            (165, 32, "A520"),
+            (0, 1, "0001"),
+            (255, 255, "FFFF"),
+            (None, 32, "-"),
+            (165, None, "-"),
+            (256, 32, "-"),
+            (165, -1, "-"),
+        ):
+            with self.subTest(manufacturer=manufacturer, module_type=module_type):
+                form.show_module_identifier(manufacturer, module_type)
+                self.assertEqual(form.module_identifier.text(), expected)
+        self.select(Pnn(42, 165, 32, 0x1F))
+        self.assertEqual(form.module_identifier.text(), "A520")
+        self.assertNotIn(
+            "Flags:", [label.text() for label in form.findChildren(QLabel)]
+        )
+        for label in (
+            form.producer,
+            form.consumer,
+            form.consumes_own_events,
+            form.supports_bootloading,
+        ):
+            self.assertEqual(label.text(), "Yes")
+        self.assertEqual(form.node_mode.text(), "FLiM")
+        self.select(Node(43, "CANMIO", 12, "3d", True))
+        self.assertEqual(form.module_identifier.text(), "-")
+        self.details.show_node(None)
+        self.assertEqual(form.module_identifier.text(), "-")
+
+    def test_can_id_visibility_and_identity_follow_discovery_and_selection(self):
+        view = NodeView({})
+        self.addCleanup(view.close)
+        first = NodeState(Pnn(42, 165, 32, 5), parameters={10: 1}, can_id=7)
+        second = NodeState(Pnn(43, 1, 2, 5), parameters={10: 2}, can_id=9)
+        states = {42: first, 43: second}
+        view.state_lookup = states.get
+        view.show()
+        details = view.details
+        form = details.details_page
+        caption = form.group.layout().labelForField(form.can_id)
+
+        def assert_can(visible, value):
+            self.app.processEvents()
+            self.assertEqual(form.can_id.isVisible(), visible)
+            self.assertEqual(caption.isVisible(), visible)
+            self.assertEqual(details.summary_can_id.isVisible(), visible)
+            self.assertEqual(form.can_id.text(), value)
+            self.assertEqual(details.summary_can_id.text(), f"CAN ID: {value}")
+
+        view.show_identity(first.identity)
+        view.show_identity(second.identity)
+        assert_can(True, "7")
+        layout = form.group.layout()
+        self.assertEqual(
+            layout.getWidgetPosition(form.can_id)[0],
+            layout.getWidgetPosition(form.interface)[0] + 1,
+        )
+        view.node_list.setCurrentRow(1)
+        assert_can(False, "9")
+        self.assertEqual(form.module_identifier.text(), "0102")
+        for interface, visible in (
+            (None, False),
+            (3, False),
+            (4, False),
+            (99, False),
+            (1, True),
+        ):
+            second.parameters = {} if interface is None else {10: interface}
+            view.refresh_state(43)
+            assert_can(visible, "9")
+        view.node_list.setCurrentRow(0)
+        assert_can(True, "7")
+        view.clear_identities()
+        assert_can(False, "-")
+        self.assertEqual(form.module_identifier.text(), "-")
+        # Reconnection starts with a fresh identity and unconfirmed interface.
+        first = NodeState(Pnn(42, 13, 3, 5), can_id=11)
+        states[42] = first
+        view.state_lookup = states.get
+        view.show_identity(first.identity)
+        assert_can(False, "11")
+        self.assertEqual(form.module_identifier.text(), "0D03")
+        first.parameters[10] = 1
+        view.refresh_state(42)
+        assert_can(True, "11")
 
     def test_vlcb_identification_uses_confirmed_parameter_8(self):
         self.select(Pnn(258, 13, 34, 0x43))

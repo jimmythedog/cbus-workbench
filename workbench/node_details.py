@@ -23,6 +23,7 @@ from .node_backups import NodeBackups
 from .node_details_form import NodeDetailsForm
 from .node_events import NodeEvents
 from .node_variables import MdfNodeVariables, RawNodeVariables
+from .parameter_names import manufacturer_name, module_name
 from .pnn import Pnn
 
 DEFAULT_NODE_TITLE = "Node details"
@@ -77,7 +78,6 @@ class NodeDetails(QWidget):
         self.firmware = self.details_page.firmware
         self.status = self.details_page.status
         self.manufacturer = self.details_page.manufacturer
-        self.flags = self.details_page.flags
         self.node_mode = self.details_page.node_mode
         self.nv_count = self.details_page.nv_count
         self.event_count = self.details_page.event_count
@@ -479,10 +479,23 @@ class NodeDetails(QWidget):
         """Display confirmed PARAN values; absent indices remain unknown."""
         firmware = self.details_page.show_parameters(parameters)
         self.summary_firmware.setText(f"Firmware: {firmware}")
+        is_can = parameters.get(10) == 1
+        self.details_page.show_can_id(is_can)
+        self.summary_can_id.setVisible(is_can)
 
     def show_live_state(self, state: NodeState) -> None:
         """Refresh the selected identity from confirmed service values."""
         self.live_state = state
+        self.details_page.show_module_identifier(
+            state.identity.manufacturer, state.identity.module_type
+        )
+        self.manufacturer.setText(manufacturer_name(state.identity.manufacturer))
+        self.module_type.setText(
+            module_name(state.identity.manufacturer, state.identity.module_type)
+        )
+        self.summary.setTitle(
+            f"Node {state.identity.node_number} — {self.module_type.text()}"
+        )
         self.update_connection_details()
         self.update_backup_buttons()
         self.show_parameters(state.parameters)
@@ -577,7 +590,9 @@ class NodeDetails(QWidget):
         self.raw_values.show_live_values(None, {})
         mode = "FLiM" if node.is_flim else "SLiM"
         self.details_page.show_live_identity(node, mode)
-        self.summary.setTitle(f"Node {node.node_number} — {node.module_type}")
+        self.summary.setTitle(
+            f"Node {node.node_number} — {module_name(node.manufacturer, node.module_type)}"
+        )
         self.summary_can_id.setText("CAN ID: -")
         self.summary_firmware.setText("Firmware: -")
         self.summary_mode.setText(f"Mode: {mode}")
@@ -628,6 +643,9 @@ class NodeDetails(QWidget):
                 self.events_result.setText(
                     "EV editing unavailable: EV capacity is unconfirmed."
                 )
+        is_can = self.live_state is not None and self.live_state.parameters.get(10) == 1
+        self.details_page.show_can_id(is_can)
+        self.summary_can_id.setVisible(is_can)
         can_id = self.live_state.can_id if self.live_state is not None else None
         status = "-"
         if self.node is not None:

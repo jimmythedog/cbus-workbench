@@ -513,9 +513,8 @@ class WindowStartupTests(unittest.TestCase):
         details = first_view.details
         self.assertEqual(item.text(), "258 - 34")
         self.assertEqual(details.node_number.text(), "258")
-        self.assertEqual(details.manufacturer.text(), "13")
+        self.assertEqual(details.manufacturer.text(), "DEVELOPMENT")
         self.assertEqual(details.module_type.text(), "34")
-        self.assertEqual(details.flags.text(), "0x03")
         self.assertEqual(details.firmware.text(), "-")
         self.assertFalse(details.edit_button.isEnabled())
 
@@ -524,7 +523,6 @@ class WindowStartupTests(unittest.TestCase):
         self.assertEqual(first_view.node_list.count(), 1)
         self.assertEqual(item.text(), "258 - 35")
         self.assertEqual(details.module_type.text(), "35")
-        self.assertEqual(details.flags.text(), "0x07")
 
         window.connections["Default"].frame_received.emit(b":SB040NB601030D2203;")
         default_action = next(
@@ -595,7 +593,6 @@ class WindowStartupTests(unittest.TestCase):
                 )
                 self.assertEqual(view.node_list.count(), 1)
                 self.assertIs(view.node_list.currentItem(), view.node_list.item(0))
-                self.assertEqual(details.flags.text(), f"0x{flags:02X}")
                 self.assertEqual(
                     (
                         details.node_mode.text(),
@@ -611,7 +608,6 @@ class WindowStartupTests(unittest.TestCase):
                 self.assertEqual(details.status.text(), "Online")
 
         connection.disconnect()
-        self.assertEqual(details.flags.text(), "-")
         self.assertEqual(details.node_mode.text(), "-")
         self.assertEqual(details.producer.text(), "-")
         self.assertEqual(details.consumer.text(), "-")
@@ -640,9 +636,8 @@ class WindowStartupTests(unittest.TestCase):
         self.assertEqual(details.event_count.text(), "0")
         self.assertEqual(details.ev_count.text(), "20")
         self.assertEqual(details.nv_count.text(), "0")
-        self.assertEqual(details.manufacturer.text(), "13")
+        self.assertEqual(details.manufacturer.text(), "DEVELOPMENT")
         self.assertEqual(details.module_type.text(), "34")
-        self.assertEqual(details.flags.text(), "0x03")
         self.assertEqual(details.node_name.text(), "-")
         self.assertEqual(details.cpu_name.text(), "-")
         connection.frame_received.emit(b":SB040N9B01021301;")
@@ -659,7 +654,6 @@ class WindowStartupTests(unittest.TestCase):
         self.assertEqual(details.nv_count.text(), "0")
         connection.frame_received.emit(b":SB040NB601020D2307;")
         self.assertEqual(details.module_type.text(), "35")
-        self.assertEqual(details.flags.text(), "0x07")
         self.assertEqual(details.firmware.text(), "3d")
         self.assertEqual(details.event_count.text(), "0")
 

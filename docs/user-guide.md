@@ -78,9 +78,16 @@ A late new node starts discovery again.
 ## Viewing node information
 
 Select a node in **Nodes** to view its details. Confirmed information includes
-node number, manufacturer, module type, CAN ID, flags, mode, firmware, CPU,
+node number, manufacturer, module type, module identifier, CAN ID, mode, firmware, CPU,
 interface, supported events, NV and EV counts, and capabilities such as producer,
 consumer, own-event consumption, bootloading and VLCB compatibility.
+Known manufacturer and module names appear as text (for example, MERG and CANMIO);
+unrecognised values retain their numeric IDs. The node navigator and summary title
+use the same module names.
+The module identifier combines the confirmed manufacturer and module type bytes
+as uppercase hexadecimal (for example, `A520`). CAN ID appears immediately below
+Interface, and in the compact summary, only when the node reports a CAN interface.
+This is independent of whether the layout connects through TCP/IP or serial.
 A confirmed nonzero beta build appears beside the firmware version.
 Unconfirmed fields show `-`; VLCB compatibility shows Yes, No or `-`.
 

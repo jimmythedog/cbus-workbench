@@ -5,6 +5,35 @@ CbusProcessorManufacturers, CbusMicrochipProcessors, and CbusArmProcessors.
 https://github.com/MERG-DEV/cbusdefs/blob/master/cbusdefs.csv
 """
 
+# Manufacturer names from CW-OLD's src/cbus-node-metadata.js.
+_MANUFACTURER_NAMES = {
+    13: "DEVELOPMENT",
+    42: "SHAG",
+    70: "ROCRAIL",
+    80: "SPECTRUM",
+    165: "MERG",
+    250: "VLCB",
+    255: "unknown",
+}
+
+# CW-OLD uses descriptor moduleName metadata. Keep names keyed by both bytes:
+# module type numbers are manufacturer-specific. Unlisted pairs stay numeric.
+# Source: CW-OLD module-definitions/CANMIO-A520-3d.json.
+_MODULE_NAMES = {(165, 32): "CANMIO"}
+
+
+def manufacturer_name(manufacturer: int) -> str:
+    """Display a known manufacturer name, retaining unknown numeric IDs."""
+    return _MANUFACTURER_NAMES.get(manufacturer, str(manufacturer))
+
+
+def module_name(manufacturer: int | None, module_type: int | None) -> str:
+    """Display a confirmed module name only for a known manufacturer/type pair."""
+    if module_type is None:
+        return "-"
+    return _MODULE_NAMES.get((manufacturer, module_type), str(module_type))
+
+
 _TRANSPORT_NAMES = {1: "CAN", 2: "Ethernet", 3: "MiWi", 4: "USB"}
 
 _MICROCHIP_PROCESSORS = {

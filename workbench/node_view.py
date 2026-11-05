@@ -8,6 +8,7 @@ from .cbus_service import NodeState
 from .logging_config import trace
 from .node_backup_files import saved_node_numbers
 from .node_details import NodeDetails
+from .parameter_names import module_name
 from .pnn import Pnn
 
 
@@ -53,27 +54,38 @@ class NodeView(QSplitter):
                 self.details.show_live_state(self.state_lookup(node.node_number))
 
     def refresh_state(self, node_number: int) -> None:
-        """Read current service state for the selected node after a change."""
-        current = self.node_list.currentItem()
-        if current is None or self.state_lookup is None:
+        """Refresh the navigator identity and selected details from service state."""
+        if self.state_lookup is None:
             return
-        node = current.data(Qt.ItemDataRole.UserRole)
-        if isinstance(node, Pnn) and node.node_number == node_number:
-            self.details.show_live_state(self.state_lookup(node_number))
+        state = self.state_lookup(node_number)
+        if state is None:
+            return
+        identity = state.identity
+        name = module_name(identity.manufacturer, identity.module_type)
+        for index in range(self.node_list.count()):
+            item = self.node_list.item(index)
+            node = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(node, Pnn) and node.node_number == node_number:
+                item.setData(Qt.ItemDataRole.UserRole, identity)
+                item.setText(f"{node_number} - {name}")
+                if item is self.node_list.currentItem():
+                    self.details.show_live_state(state)
+                return
 
     def show_identity(self, node: Pnn) -> None:
         """Update a PNN identity without changing the selected list item."""
+        name = module_name(node.manufacturer, node.module_type)
         for index in range(self.node_list.count()):
             item = self.node_list.item(index)
             if node_number(item.data(Qt.ItemDataRole.UserRole)) == node.node_number:
                 item.setData(Qt.ItemDataRole.UserRole, node)
-                item.setText(f"{node.node_number} - {node.module_type}")
+                item.setText(f"{node.node_number} - {name}")
                 if item is self.node_list.currentItem():
                     self.show_selected_node(item)
                 return
 
         first_node = self.node_list.count() == 0
-        item = NodeListItem(f"{node.node_number} - {node.module_type}")
+        item = NodeListItem(f"{node.node_number} - {name}")
         item.setData(Qt.ItemDataRole.UserRole, node)
         self.node_list.addItem(item)
         if first_node:

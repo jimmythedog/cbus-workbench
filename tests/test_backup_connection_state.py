@@ -142,9 +142,14 @@ class BackupConnectionTests(unittest.TestCase):
         self.assertEqual(len(titles), 4)
 
     def test_node_connection_details_follow_discovery_and_disconnect(self):
+        self.state.parameters[10] = 1
+
         def assert_details(can_id, status):
             self.assertEqual(self.details.can_id.text(), can_id)
             self.assertEqual(self.details.summary_can_id.text(), f"CAN ID: {can_id}")
+            visible = self.details.live_state is not None
+            self.assertEqual(self.details.can_id.isHidden(), not visible)
+            self.assertEqual(self.details.summary_can_id.isHidden(), not visible)
             self.assertEqual(self.details.status.text(), status)
             self.assertEqual(self.details.summary_status.text(), f"Status: {status}")
 

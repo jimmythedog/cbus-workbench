@@ -11,7 +11,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .parameter_names import cpu_name, firmware_version, transport_name, vlcb_compatible
+from .parameter_names import (
+    cpu_name,
+    firmware_version,
+    manufacturer_name,
+    module_name,
+    transport_name,
+    vlcb_compatible,
+)
 
 
 class NodeDetailsForm(QWidget):
@@ -39,7 +46,6 @@ class NodeDetailsForm(QWidget):
         self.firmware = QLabel("-")
         self.status = QLabel("-")
         self.manufacturer = QLabel("-")
-        self.flags = QLabel("-")
         self.module_identifier = QLabel("-")
         self.node_mode = QLabel("-")
         self.vlcb = QLabel("-")
@@ -58,13 +64,11 @@ class NodeDetailsForm(QWidget):
         # Identity
         form.addRow("Name:", self.node_name_stack)
         form.addRow("Node number:", self.node_number)
-        form.addRow("CAN ID:", self.can_id)
         form.addRow("Status:", self.status)
 
         # Module
         form.addRow("Manufacturer:", self.manufacturer)
         form.addRow("Module type:", self.module_type)
-        form.addRow("Flags:", self.flags)
         form.addRow("Module identifier:", self.module_identifier)
         form.addRow("Firmware:", self.firmware)
 
@@ -83,12 +87,31 @@ class NodeDetailsForm(QWidget):
         # Hardware
         form.addRow("CPU name:", self.cpu_name)
         form.addRow("Interface:", self.interface)
+        form.addRow("CAN ID:", self.can_id)
 
         # Definition
         form.addRow("Module descriptor:", self.module_descriptor)
 
         details_layout = QVBoxLayout(self)
         details_layout.addWidget(self.group, 1)
+
+    def show_module_identifier(
+        self, manufacturer: int | None, module_type: int | None
+    ) -> None:
+        """Use only confirmed identity bytes, never module names or descriptors."""
+        confirmed = (
+            manufacturer is not None
+            and module_type is not None
+            and 0 <= manufacturer <= 255
+            and 0 <= module_type <= 255
+        )
+        self.module_identifier.setText(
+            f"{manufacturer:02X}{module_type:02X}" if confirmed else "-"
+        )
+
+    def show_can_id(self, visible: bool) -> None:
+        """Hide the whole form row, including its caption and spacing."""
+        self.group.layout().setRowVisible(self.can_id, visible)
 
     def show_node_name(self, node) -> None:
         self.node_name.setText((node.name or "-") if node else "-")
@@ -101,7 +124,6 @@ class NodeDetailsForm(QWidget):
             self.module_type,
             self.firmware,
             self.status,
-            self.flags,
             self.manufacturer,
             self.module_identifier,
             self.node_mode,
@@ -124,11 +146,11 @@ class NodeDetailsForm(QWidget):
         self.node_number.setText(str(node.node_number))
         self.node_name.setText("-")
         self.can_id.setText("-")
-        self.module_type.setText(str(node.module_type))
+        self.module_type.setText(module_name(node.manufacturer, node.module_type))
         self.firmware.setText("-")
         self.status.setText("-")
-        self.manufacturer.setText(str(node.manufacturer))
-        self.flags.setText(f"0x{node.flags:02X}")
+        self.manufacturer.setText(manufacturer_name(node.manufacturer))
+        self.show_module_identifier(node.manufacturer, node.module_type)
         self.node_mode.setText(mode)
         for enabled, label in (
             (node.is_producer, self.producer),
@@ -138,7 +160,6 @@ class NodeDetailsForm(QWidget):
         ):
             label.setText("Yes" if enabled else "No")
         for label in (
-            self.module_identifier,
             self.vlcb,
             self.nv_count,
             self.stored_events,
@@ -154,11 +175,10 @@ class NodeDetailsForm(QWidget):
         self.node_number.setText(str(node.number))
         self.can_id.setText("-")
         self.module_type.setText("CANMIO")
-        self.flags.setText("-")
         self.firmware.setText("3d")
         self.status.setText("-")
         self.manufacturer.setText("MERG")
-        self.module_identifier.setText("A520")
+        self.module_identifier.setText("-")
         self.node_mode.setText("FLiM")
         self.vlcb.setText("No")
         self.producer.setText("Yes")
