@@ -63,6 +63,9 @@ A developer should understand a complicated section by scanning its comments bef
 - Start with the happy path; then cover important realistic exceptions and hardware-safety failures.
 - Test observable inputs, outputs and effects, not every conceivable path or permutation.
 - Keep tests few and meaningful: normal operation and realistic failures, without duplicating existing coverage.
+- Prefer extending an existing contract test over adding a near-duplicate.
+- Tests created solely to diagnose or locate a problem are temporary and must be removed once the problem is understood and fixed.
+- Retain a diagnostic test only if it protects a meaningful observable regression, and rewrite it as a contract test where necessary.
 - Do not assert logs, private calls, internal queues or signal wiring, and do not change production code solely to satisfy such tests.
 - Do not add tests merely for coverage or because a function or branch exists.
 - Avoid tests coupled to private methods, mock call counts or internal sequencing.
@@ -72,6 +75,10 @@ A developer should understand a complicated section by scanning its comments bef
 - Run focused tests during development and broader checks at agreed milestones.
 
 Before adding a test, ask: **Which contract or significant real-world risk does this protect?** If unclear, do not add it.
+
+Before completing a task, review all added or modified tests. Remove temporary
+diagnostic tests, eliminate redundant coverage, and ensure retained tests verify
+observable contracts rather than implementation details.
 
 ## 7. Scope and complexity control
 
