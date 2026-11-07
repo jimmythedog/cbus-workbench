@@ -4,9 +4,10 @@ import os
 import unittest
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QLabel, QListWidgetItem
+from PySide6.QtWidgets import QApplication, QLabel, QListWidgetItem, QScrollArea
 
 from workbench.cbus_service import CbusService, NodeState
+from workbench.layout_view import LayoutView
 from workbench.node import Node
 from workbench.node_details import NodeDetails
 from workbench.node_details_form import NodeDetailsForm
@@ -249,6 +250,61 @@ class NodeDetailsFormTests(unittest.TestCase):
         self.assertIs(details.node_name, details.details_page.node_name)
         self.assertEqual(details.node_number.text(), "-")
         self.assertEqual(details.summary.title(), "Node details")
+
+    def test_large_font_details_remain_readable_and_scroll_to_last_row(self):
+        details = self.details
+        font = details.font()
+        font.setPointSize(14)
+        details.setFont(font)
+        details.resize(850, 600)
+        details.show()
+        self.app.processEvents()
+
+        self.assertEqual(details.height(), 600)
+        for label in details.details_page.group.findChildren(QLabel):
+            if label.isVisible():
+                self.assertGreaterEqual(
+                    label.height(), label.minimumSizeHint().height()
+                )
+
+        scroll = details.details_page.findChild(QScrollArea)
+        last = details.details_page.module_descriptor
+        scroll.ensureWidgetVisible(last)
+        self.app.processEvents()
+        self.assertTrue(
+            scroll.viewport()
+            .rect()
+            .contains(last.mapTo(scroll.viewport(), last.rect().bottomLeft()))
+        )
+
+    def test_large_font_backup_actions_fit_in_requested_window(self):
+        view = LayoutView(empty=True)
+        self.addCleanup(view.close)
+        font = view.font()
+        font.setPointSize(14)
+        view.setFont(font)
+        view.resize(1000, 700)
+        view.show()
+        details = view.node_view.details
+
+        for tabs, page, buttons in (
+            (details.tabs, details.node_backups, details.backup_buttons),
+            (view.tabs, view.backups_page, view.backup_buttons),
+        ):
+            tabs.setCurrentWidget(page)
+            self.app.processEvents()
+            self.assertEqual(view.height(), 700)
+            for button in buttons.values():
+                self.assertTrue(button.isVisible())
+                self.assertGreaterEqual(button.height(), button.sizeHint().height())
+                self.assertTrue(
+                    view.rect().contains(button.mapTo(view, button.rect().topLeft()))
+                )
+                self.assertTrue(
+                    view.rect().contains(
+                        button.mapTo(view, button.rect().bottomRight())
+                    )
+                )
 
     def test_configured_zero_ev_is_visible(self):
         node = Node(42, "Configured", 12, "1a", False)

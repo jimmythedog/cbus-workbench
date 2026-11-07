@@ -3,8 +3,11 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFormLayout,
+    QFrame,
     QLabel,
+    QLayout,
     QLineEdit,
+    QScrollArea,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
@@ -30,6 +33,8 @@ class NodeDetailsForm(QWidget):
         self.group = QWidget()
         form = QFormLayout(self.group)
         form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        # Preserve font-based row heights when the viewport is shorter than the form.
+        form.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         self.node_number = QLabel("-")
         self.node_name = QLabel("-")
@@ -93,7 +98,11 @@ class NodeDetailsForm(QWidget):
         form.addRow("Module descriptor:", self.module_descriptor)
 
         details_layout = QVBoxLayout(self)
-        details_layout.addWidget(self.group, 1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(self.group)
+        details_layout.addWidget(scroll, 1)
 
     def show_module_identifier(
         self, manufacturer: int | None, module_type: int | None

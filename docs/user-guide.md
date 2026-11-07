@@ -77,7 +77,8 @@ A late new node starts discovery again.
 
 ## Viewing node information
 
-Select a node in **Nodes** to view its details. Confirmed information includes
+Select a node in **Nodes** to view its details. Scroll within **Node Details**
+when the rows do not fit the available height. Confirmed information includes
 node number, manufacturer, module type, module identifier, CAN ID, mode, firmware, CPU,
 interface, supported events, NV and EV counts, and capabilities such as producer,
 consumer, own-event consumption, bootloading and VLCB compatibility.
