@@ -226,11 +226,13 @@ def saved_node_numbers(logical_layout: str) -> list[int]:
         for path in directory.glob("*")
         if path.is_dir()
         and path.name.isdecimal()
-        and any((path / "backups").glob("*.yaml"))
+        and (
+            (path / "metadata.yaml").is_file() or any((path / "backups").glob("*.yaml"))
+        )
     )
     trace(
         logger,
-        "Saved backup nodes listed",
+        "Saved nodes listed",
         extra={
             "fields": {
                 "layout": logical_layout,

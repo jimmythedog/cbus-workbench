@@ -177,6 +177,7 @@ class NvWriteTests(unittest.TestCase):
         self.assertTrue(self.results[-1][1])
         self.assertEqual(self.connection.sent[-1], b":SBFC0N73010302;")
         self.reply("9B01030201")
+        self.reply("9B0103010D")
         self.assertEqual(self.connection.sent[-1], b":SBFC0N71010201;")
 
     def test_live_raw_edit_and_disconnect_discard_without_transmission(self):

@@ -155,11 +155,11 @@ class NodeDetailsForm(QWidget):
         self.node_number.setText(str(node.node_number))
         self.node_name.setText("-")
         self.can_id.setText("-")
-        self.module_type.setText(module_name(node.manufacturer, node.module_type))
+        self.module_type.setText("-")
         self.firmware.setText("-")
         self.status.setText("-")
-        self.manufacturer.setText(manufacturer_name(node.manufacturer))
-        self.show_module_identifier(node.manufacturer, node.module_type)
+        self.manufacturer.setText("-")
+        self.show_module_identifier(None, None)
         self.node_mode.setText(mode)
         for enabled, label in (
             (node.is_producer, self.producer),
@@ -204,6 +204,13 @@ class NodeDetailsForm(QWidget):
 
     def show_parameters(self, parameters: dict[int, int]) -> str:
         """Display confirmed PARAN values and return the formatted firmware."""
+        manufacturer = parameters.get(1)
+        module_type = parameters.get(3)
+        self.manufacturer.setText(
+            manufacturer_name(manufacturer) if manufacturer is not None else "-"
+        )
+        self.module_type.setText(module_name(manufacturer, module_type))
+        self.show_module_identifier(manufacturer, module_type)
         vlcb = vlcb_compatible(parameters.get(8))
         self.vlcb.setText("-" if vlcb is None else "Yes" if vlcb else "No")
         firmware = firmware_version(parameters) or "-"

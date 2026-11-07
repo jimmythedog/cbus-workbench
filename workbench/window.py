@@ -26,6 +26,7 @@ from .diagnostics import Diagnostics
 from .layout_settings import LayoutSettingsDialog
 from .layout_view import LayoutView
 from .logging_config import TRACE, trace
+from .node_metadata import save_metadata
 from .pnn import Pnn
 from .send_frame_dialog import SendFrameDialog
 from .serial_connection import SerialConnection
@@ -325,6 +326,15 @@ class MainWindow(QMainWindow):
         node_view.details.logical_layout = self.layout_settings[name]["logical_layout"]
         node_view.state_lookup = lambda node_number: service.node_states[node_number]
         service.node_state_updated.connect(node_view.refresh_state)
+        service.parameter_updated.connect(
+            lambda number, _index, _value: self.error_reporter.run(
+                f"Could not save metadata for node {number} on layout '{name}'",
+                lambda: save_metadata(
+                    self.layout_settings[name]["logical_layout"],
+                    service.node_states[number],
+                ),
+            )
+        )
         self.cbus_services[name] = service
         service.discovery_status_changed.connect(self.update_discovery_status)
         self.layouts[name].discovery_states = lambda: (
@@ -338,6 +348,14 @@ class MainWindow(QMainWindow):
         )
 
     def record_node_identity(self, name: str, node: Pnn) -> None:
+        service = self.cbus_services[name]
+        self.error_reporter.run(
+            f"Could not save metadata for node {node.node_number} on layout '{name}'",
+            lambda: save_metadata(
+                self.layout_settings[name]["logical_layout"],
+                service.node_states[node.node_number],
+            ),
+        )
         self.layouts[name].node_view.show_identity(node)
 
     def record_frame(self, name: str, direction: str, frame: bytes) -> None:

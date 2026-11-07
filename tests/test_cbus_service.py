@@ -131,6 +131,8 @@ class CbusServiceTests(unittest.TestCase):
         for index in (2, 4, 5):
             self.connection.frame_received.emit(f":SB040N9B0102{index:02X}00;".encode())
         self.connection.frame_received.emit(f":SB040N9B010206{nv_count:02X};".encode())
+        for index in (1, 3):
+            self.connection.frame_received.emit(f":SB040N9B0102{index:02X}00;".encode())
 
     def finish_short_parameter_pass(self, node_number: int = 258) -> None:
         """Complete a one-request parameter pass for a discovered node."""
@@ -771,10 +773,12 @@ class CbusServiceTests(unittest.TestCase):
             self.service.node_states[258].nv_progress, DiscoveryProgress.NOT_STARTED
         )
         self.connection.frame_received.emit(b":SB040N9B01020602;")
+        for index in (1, 3):
+            self.connection.frame_received.emit(f":SB040N9B0102{index:02X}00;".encode())
 
         self.assertEqual(
             self.connection.sent,
-            [f":SBFC0N730102{index:02X};".encode() for index in (0, 2, 4, 5, 6)]
+            [f":SBFC0N730102{index:02X};".encode() for index in (0, 2, 4, 5, 6, 1, 3)]
             + [b":SBFC0N71010201;"],
         )
         state = self.service.node_states[258]
@@ -820,7 +824,7 @@ class CbusServiceTests(unittest.TestCase):
         self.assertEqual(
             self.service.node_states[258].nv_progress, DiscoveryProgress.NOT_STARTED
         )
-        for index in (2, 4, 5, 6):
+        for index in (2, 4, 5, 6, 1, 3):
             value = 1 if index == 6 else 0
             self.connection.frame_received.emit(
                 f":SB040N9B0102{index:02X}{value:02X};".encode()
@@ -1007,6 +1011,10 @@ class CbusServiceTests(unittest.TestCase):
                 f":SB040N9B0102{index:02X}00;".encode()
             )
         other_connection.frame_received.emit(b":SB040N9B01020601;")
+        for index in (1, 3):
+            other_connection.frame_received.emit(
+                f":SB040N9B0102{index:02X}00;".encode()
+            )
 
         self.connection.frame_received.emit(b":SB040N9701020105;")
         self.assertEqual(other_service.node_states[258].nv_values, {})
@@ -1060,7 +1068,7 @@ class CbusServiceTests(unittest.TestCase):
             [b":SBFC0N73010200;", b":SBFC0N73010202;"],
         )
 
-    def test_automatic_requests_advance_only_on_matching_replies(self):
+    def test_all_supported_parameters_are_read_once_before_completing_discovery(self):
         self.connection.frame_received.emit(b":SB040NB601020D2203;")
         self.connection.frame_received.emit(b":SB040N9B01020014;")
         progress_updates = []
@@ -1072,8 +1080,44 @@ class CbusServiceTests(unittest.TestCase):
 
         self.service.node_state_updated.connect(record_parameter_progress)
 
-        values = {2: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 10: 1, 20: 1, 19: 1, 9: 13}
-        expected_indices = (0, 2, 4, 5, 6, 7, 8, 10, 20, 19, 9)
+        values = {
+            1: 165,
+            3: 32,
+            2: 0,
+            4: 0,
+            5: 0,
+            6: 0,
+            7: 0,
+            8: 0,
+            10: 1,
+            20: 1,
+            19: 1,
+            9: 13,
+        }
+        expected_indices = (
+            0,
+            2,
+            4,
+            5,
+            6,
+            7,
+            8,
+            10,
+            20,
+            19,
+            9,
+            1,
+            3,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+        )
+        values.update({index: index for index in range(11, 19)})
         for index in expected_indices[1:]:
             with self.subTest(index=index):
                 self.connection.frame_received.emit(
@@ -1105,7 +1149,28 @@ class CbusServiceTests(unittest.TestCase):
         self.connection.frame_received.emit(b":SB040NB601020D2203;")
         self.connection.frame_received.emit(b":SB040N9B01020013;")
 
-        expected_indices = (0, 2, 4, 5, 6, 7, 8, 10, 19, 9)
+        expected_indices = (
+            0,
+            2,
+            4,
+            5,
+            6,
+            7,
+            8,
+            10,
+            19,
+            9,
+            1,
+            3,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+        )
         for index in expected_indices[1:]:
             self.connection.frame_received.emit(f":SB040N9B0102{index:02X}00;".encode())
 
@@ -1155,13 +1220,19 @@ class CbusServiceTests(unittest.TestCase):
         self.connection.frame_received.emit(b":SB040N9B01020409;")
         self.assertEqual(self.connection.sent.count(b":SBFC0N73010204;"), 1)
         self.assertEqual(self.connection.sent.count(b":SBFC0N73010304;"), 0)
+        for index in (1, 3):
+            self.connection.frame_received.emit(f":SB040N9B0102{index:02X}00;".encode())
         self.assertEqual(
             self.service.node_states[258].parameter_progress,
             DiscoveryProgress.COMPLETE,
         )
 
     def test_parameter_count_limits_automatic_requests(self):
-        for count, expected_indices in ((0, ()), (4, (2, 4)), (6, (2, 4, 5, 6))):
+        for count, expected_indices in (
+            (0, ()),
+            (4, (2, 4, 1, 3)),
+            (6, (2, 4, 5, 6, 1, 3)),
+        ):
             with self.subTest(count=count):
                 connection = ConnectionStub("Other Layout")
                 service = CbusService(connection, can_id=127)
@@ -1214,7 +1285,7 @@ class CbusServiceTests(unittest.TestCase):
             [
                 b":SBFC0N73010200;",
                 b":SBFC0N73010202;",
-                b":SBFC0N580102;",
+                b":SBFC0N73010201;",
             ],
         )
         self.assertEqual(
@@ -1243,6 +1314,8 @@ class CbusServiceTests(unittest.TestCase):
 
         self.connection.frame_received.emit(b":SB040N9B01020200;")
         other_connection.frame_received.emit(b":SB040N9B01020200;")
+        self.assertEqual(self.connection.sent[-1], b":SBFC0N73010201;")
+        self.connection.frame_received.emit(b":SB040N9B01020100;")
         self.assertEqual(self.connection.sent[-1], b":SBFC0N580102;")
         self.assertEqual(other_connection.sent[-1], b":SBFE0N73010204;")
 
@@ -1261,6 +1334,8 @@ class CbusServiceTests(unittest.TestCase):
         self.connection.frame_received.emit(b":SB040N9B01020200;")
         self.assertEqual(self.connection.sent[-1], b":SBFC0N73010204;")
         self.connection.frame_received.emit(b":SB040N9B01020400;")
+        for index in (1, 3):
+            self.connection.frame_received.emit(f":SB040N9B0102{index:02X}00;".encode())
         self.assertEqual(self.connection.sent[-1], b":SBFC0N73010302;")
         self.assertEqual(
             self.service.node_states[258].parameter_progress,
@@ -1417,14 +1492,28 @@ class CbusServiceTests(unittest.TestCase):
         self.assertEqual(self.updated, [Pnn(258, 13, 35, 3)])
         self.assertEqual(self.parameter_updates, [(258, 7, 2)])
 
-    def test_repeated_pnn_is_silent_and_changed_identity_emits_update(self):
-        self.connection.frame_received.emit(b":SB040NB601020D2203;")
-        self.connection.frame_received.emit(b":SB060NB601020D2203;")
-        self.connection.frame_received.emit(b":SB040NB601020D2303;")
+    def test_repeated_pnn_is_silent_and_identity_or_can_id_changes_emit_update(self):
+        original = b":SB040NB601020D2203;"
+        changed_can_id = b":SB060NB601020D2203;"
+        changed_identity = b":SB060NB601020D2303;"
+        self.connection.frame_received.emit(original)
+        self.connection.frame_received.emit(original)
+        self.assertEqual(self.updated, [])
 
+        self.connection.frame_received.emit(changed_can_id)
+        self.assertEqual(self.updated, [Pnn(258, 13, 34, 3)])
+        self.assertEqual(self.service.node_states[258].can_id, 3)
+        self.connection.frame_received.emit(changed_can_id)
+        self.assertEqual(self.updated, [Pnn(258, 13, 34, 3)])
+
+        self.connection.frame_received.emit(changed_identity)
+        expected_updates = [Pnn(258, 13, 34, 3), Pnn(258, 13, 35, 3)]
+        self.assertEqual(self.updated, expected_updates)
+        self.connection.frame_received.emit(changed_identity)
+        self.assertEqual(self.updated, expected_updates)
         self.assertEqual(self.discovered, [Pnn(258, 13, 34, 3)])
-        self.assertEqual(self.updated, [Pnn(258, 13, 35, 3)])
         self.assertEqual(self.service.nodes[258], Pnn(258, 13, 35, 3))
+        self.assertEqual(self.service.node_states[258].can_id, 3)
         self.assertEqual(self.connection.sent, [b":SBFC0N73010200;"])
 
     def test_malformed_frames_do_not_block_later_pnn(self):

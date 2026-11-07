@@ -307,6 +307,8 @@ class EvWriteTests(unittest.TestCase):
         self.reply("9B01020201")
         self.reply("9B01020401")
         self.reply("9B01020503")
+        self.reply("9B0102010D")
+        self.reply("9B01020322")
         self.assertEqual(self.connection.sent[-1], b":SBFC0N9C01020401;")
         self.service.ev_write.begin(258, {(0, 1000, 2): 13})
         self.reply("6F010205")

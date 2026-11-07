@@ -250,7 +250,7 @@ class LayoutRestoreWorkflowTests(unittest.TestCase):
             opcode = data[0]
             if opcode == 0x73:
                 index = data[3]
-                value = {0: 8, 2: 97, 3: 2, 4: 0, 5: 0, 6: 2, 7: 1, 8: 4}[index]
+                value = {0: 8, 1: 1, 2: 97, 3: 2, 4: 0, 5: 0, 6: 2, 7: 1, 8: 4}[index]
                 reply = f"9B0001{index:02X}{value:02X}"
             elif opcode == 0x71:
                 index = data[3]

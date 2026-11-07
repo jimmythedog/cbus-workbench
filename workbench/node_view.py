@@ -8,6 +8,7 @@ from .cbus_service import NodeState
 from .logging_config import trace
 from .node_backup_files import saved_node_numbers
 from .node_details import NodeDetails
+from .node_metadata import load_metadata
 from .parameter_names import module_name
 from .pnn import Pnn
 
@@ -34,6 +35,7 @@ class NodeView(QSplitter):
         self.node_list.setSortingEnabled(True)
 
         self.details = NodeDetails(events)
+        self.saved_metadata = {}
         self.state_lookup: Callable[[int], NodeState] | None = None
 
         self.node_list.currentItemChanged.connect(self.show_selected_node)
@@ -101,8 +103,13 @@ class NodeView(QSplitter):
         self.node_list.clear()
 
     def show_saved_nodes(self, logical_layout):
-        """Reuse the navigator without retaining identities or discovery values."""
-        for number in saved_node_numbers(logical_layout):
+        """Load saved identification independently of live discovery and backups."""
+        self.saved_metadata = {
+            number: load_metadata(logical_layout, number)
+            for number in saved_node_numbers(logical_layout)
+        }
+        self.details.saved_metadata = self.saved_metadata
+        for number in self.saved_metadata:
             if any(
                 node_number(self.node_list.item(i).data(Qt.ItemDataRole.UserRole))
                 == number

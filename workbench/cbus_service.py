@@ -24,7 +24,7 @@ from .tcp_connection import TcpConnection
 from .wrack import decode_wrack
 
 logger = logging.getLogger("workbench.cbus")
-AUTOMATIC_PARAMETER_INDICES = (2, 4, 5, 6, 7, 8, 10, 20, 19, 9)
+PARAMETER_READ_ORDER = (2, 4, 5, 6, 7, 8, 10, 20, 19, 9, 1, 3)
 RequestIndex = int | tuple[int, int]
 
 
@@ -693,8 +693,8 @@ class CbusService(QObject):
                 )
                 self._send_next_request()
         else:
-            if previous != pnn:
-                self.node_updated.emit(pnn)
+            # A changed observed CAN ID also matters to metadata persistence.
+            self.node_updated.emit(pnn)
             self.node_state_updated.emit(pnn.node_number)
 
     def _receive_paran(self, node_number: int, index: int, value: int) -> None:
@@ -778,10 +778,16 @@ class CbusService(QObject):
 
         trace(logger, "Automatic PARAN received", extra={"fields": fields})
         if index == 0:
-            # Parameter zero counts available indices, excluding itself.
+            # Parameter zero counts available indices, excluding itself. Keep the
+            # existing UI/capability order, then read every other supported index.
+            indices = list(PARAMETER_READ_ORDER) + [
+                index
+                for index in range(1, value + 1)
+                if index not in PARAMETER_READ_ORDER
+            ]
             self._request_queue.extend(
                 ("parameter", node_number, requested)
-                for requested in AUTOMATIC_PARAMETER_INDICES
+                for requested in indices
                 if requested <= value
             )
         self._finish_request("parameter", node_number)

@@ -35,8 +35,8 @@ class NodeDetailsFormTests(unittest.TestCase):
     def test_navigator_and_summary_names_refresh_without_changing_selection(self):
         view = NodeView({})
         self.addCleanup(view.close)
-        first = NodeState(Pnn(258, 165, 32, 5))
-        second = NodeState(Pnn(259, 165, 254, 5))
+        first = NodeState(Pnn(258, 165, 32, 5), parameters={1: 165, 3: 32})
+        second = NodeState(Pnn(259, 165, 254, 5), parameters={1: 165, 3: 254})
         states = {258: first, 259: second}
         view.state_lookup = states.get
         view.show_identity(first.identity)
@@ -49,6 +49,7 @@ class NodeDetailsFormTests(unittest.TestCase):
 
         # An update to an unselected node must not replace the selected details.
         second.identity = Pnn(259, 165, 32, 5)
+        second.parameters[3] = 32
         view.refresh_state(259)
         self.assertEqual(view.node_list.item(1).text(), "259 - CANMIO")
         self.assertIs(view.node_list.currentItem(), selected)
@@ -57,7 +58,7 @@ class NodeDetailsFormTests(unittest.TestCase):
         first.identity = Pnn(258, 1, 32, 5)
         view.refresh_state(258)
         self.assertEqual(selected.text(), "258 - 32")
-        self.assertEqual(view.details.summary.title(), "Node 258 — 32")
+        self.assertEqual(view.details.summary.title(), "Node 258 — CANMIO")
         self.assertEqual(selected.data(Qt.ItemDataRole.UserRole).module_type, 32)
         self.assertIs(view.node_list.currentItem(), selected)
 
@@ -83,12 +84,14 @@ class NodeDetailsFormTests(unittest.TestCase):
             with self.subTest(manufacturer=manufacturer, module_type=module_type):
                 identity = Pnn(42, manufacturer, module_type, 5)
                 self.select(identity)
-                self.assertEqual(self.details.manufacturer.text(), name)
-                self.assertEqual(self.details.module_type.text(), module)
+                self.assertEqual(self.details.manufacturer.text(), "-")
+                self.assertEqual(self.details.module_type.text(), "-")
                 self.assertEqual(
-                    self.details.details_page.module_identifier.text(), identifier
+                    self.details.details_page.module_identifier.text(), "-"
                 )
-                state = NodeState(identity)
+                state = NodeState(
+                    identity, parameters={1: manufacturer, 3: module_type}
+                )
                 self.details.show_live_state(state)
                 self.assertEqual(self.details.manufacturer.text(), name)
                 self.assertEqual(self.details.module_type.text(), module)
@@ -114,7 +117,7 @@ class NodeDetailsFormTests(unittest.TestCase):
                 form.show_module_identifier(manufacturer, module_type)
                 self.assertEqual(form.module_identifier.text(), expected)
         self.select(Pnn(42, 165, 32, 0x1F))
-        self.assertEqual(form.module_identifier.text(), "A520")
+        self.assertEqual(form.module_identifier.text(), "-")
         self.assertNotIn(
             "Flags:", [label.text() for label in form.findChildren(QLabel)]
         )
@@ -161,7 +164,7 @@ class NodeDetailsFormTests(unittest.TestCase):
         )
         view.node_list.setCurrentRow(1)
         assert_can(False, "9")
-        self.assertEqual(form.module_identifier.text(), "0102")
+        self.assertEqual(form.module_identifier.text(), "-")
         for interface, visible in (
             (None, False),
             (3, False),
@@ -183,7 +186,7 @@ class NodeDetailsFormTests(unittest.TestCase):
         view.state_lookup = states.get
         view.show_identity(first.identity)
         assert_can(False, "11")
-        self.assertEqual(form.module_identifier.text(), "0D03")
+        self.assertEqual(form.module_identifier.text(), "-")
         first.parameters[10] = 1
         view.refresh_state(42)
         assert_can(True, "11")
@@ -380,7 +383,7 @@ class NodeDetailsFormTests(unittest.TestCase):
         self.select(Node(42, "Test module", 12, "1a", False))
         self.select(Pnn(258, 13, 34, 0x03))
         self.assertEqual(details.node_number.text(), "258")
-        self.assertEqual(details.summary.title(), "Node 258 — 34")
+        self.assertEqual(details.summary.title(), "Node 258 — -")
         self.assertTrue(
             details.tabs.isTabEnabled(details.tabs.indexOf(details.variables_page))
         )

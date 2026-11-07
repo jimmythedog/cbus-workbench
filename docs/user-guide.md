@@ -83,8 +83,14 @@ node number, manufacturer, module type, module identifier, CAN ID, mode, firmwar
 interface, supported events, NV and EV counts, and capabilities such as producer,
 consumer, own-event consumption, bootloading and VLCB compatibility.
 Known manufacturer and module names appear as text (for example, MERG and CANMIO);
-unrecognised values retain their numeric IDs. The node navigator and summary title
-use the same module names.
+unrecognised values retain their numeric IDs. Node Details and its summary use
+manufacturer parameter 1 and module type parameter 3 from current discovery, or
+persisted parameters for a saved node. Discovery reads all parameters supported
+by the node's reported count and saves confirmed values, including those not
+shown in Node Details. Unknown live parameters show `-` without
+falling back to saved values. The navigator continues to identify live nodes from PNN.
+Mode and operational capabilities still use live PNN flags and remain unknown for
+saved nodes.
 The module identifier combines the confirmed manufacturer and module type bytes
 as uppercase hexadecimal (for example, `A520`). CAN ID appears immediately below
 Interface, and in the compact summary, only when the node reports a CAN interface.
@@ -205,7 +211,11 @@ for the risks of restoring an incomplete file.
 Select a saved backup and choose **View** to inspect it. View works offline for
 both node and layout backups. Saved node backups remain accessible as
 **<node-number> (offline)** entries in **Nodes**, including after disconnecting or
-restarting. Reconnecting replaces these saved-only entries as nodes are discovered.
+restarting. Discovered nodes are also remembered without a backup. Their last
+confirmed parameters and CAN ID are saved per logical layout and loaded while
+disconnected; incomplete discovery preserves earlier values. These are last-known
+values, not proof that a node is currently reachable. Nodes absent from later
+discovery remain listed. Reconnecting replaces saved-only entries as nodes are discovered.
 
 Choose **Compare** while connected to compare a node backup with current discovered
 values. Events are matched by node number and event number. Unknown values make

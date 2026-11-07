@@ -113,7 +113,9 @@ class NodeRestoreTests(unittest.TestCase):
                     self.full_discovery = True
                 parameters = {
                     0: 8,
+                    1: 1,
                     2: 97,
+                    3: 2,
                     4: self.event_capacity,
                     5: 3,
                     6: len(self.nvs),

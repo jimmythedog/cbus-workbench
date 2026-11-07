@@ -108,7 +108,7 @@ class BackupConnectionTests(unittest.TestCase):
         )
         self.assertEqual(
             self.details.summary.title(),
-            f"Node 42 — {self.state.identity.module_type}",
+            "Node 42 — -",
         )
         self.view.set_connected(False)
         self.states.clear()
@@ -133,7 +133,7 @@ class BackupConnectionTests(unittest.TestCase):
         )
         self.assertEqual(
             self.details.summary.title(),
-            f"Node 42 — {self.state.identity.module_type}",
+            "Node 42 — -",
         )
         with (
             patch("workbench.backup_compare.BackupCompare.exec", inspect),

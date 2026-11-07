@@ -13,7 +13,9 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from workbench.app_settings import load_settings, save_settings
+from workbench.cbus_service import DiscoveryProgress
 from workbench.layout_settings import LayoutSettingsDialog
+from workbench.node_metadata import load_metadata
 from workbench.pnn import Pnn
 from workbench.window import MainWindow
 
@@ -92,6 +94,12 @@ class WindowStartupTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.path = Path(temporary.name) / "settings.yaml"
+        data_paths = patch(
+            "workbench.node_backup_files.application_directories",
+            return_value={"Data": Path(temporary.name) / "data"},
+        )
+        data_paths.start()
+        self.addCleanup(data_paths.stop)
 
     def open_window(self):
         with patch("workbench.app_settings.settings_path", return_value=self.path):
@@ -158,7 +166,7 @@ class WindowStartupTests(unittest.TestCase):
             connection = window.connections["Home"]
             connection.frame_received.emit(b":SB040NB601020D2203;")
             connection.frame_received.emit(b":SB040N9B01020006;")
-            for index in (2, 4, 5, 6):
+            for index in (2, 4, 5, 6, 1, 3):
                 connection.frame_received.emit(f":SB040N9B0102{index:02X}00;".encode())
             connection.frame_received.emit(b":SB040N74010200;")
             QTest.qWait(60)
@@ -384,6 +392,69 @@ class WindowStartupTests(unittest.TestCase):
             )
         )
 
+    def test_can_id_change_with_same_pnn_is_persisted(self):
+        self.save_startup_layouts([("Default", "TCP/IP", True)])
+        window = self.start_with_recording_connections()
+        connection = window.connections["Default"]
+        logical_layout = window.layout_settings["Default"]["logical_layout"]
+        connection.frame_received.emit(b":SB040NB601020D2203;")
+        connection.frame_received.emit(b":SB040N9B010201A5;")
+        connection.frame_received.emit(b":SB040N9B01020320;")
+        self.assertEqual(load_metadata(logical_layout, 258)["canId"], 2)
+        # The payload is identical; only the sender's CAN ID changes.
+        connection.frame_received.emit(b":SB0E0NB601020D2203;")
+        metadata = load_metadata(logical_layout, 258)
+        self.assertEqual(metadata["canId"], 7)
+        self.assertEqual(metadata["parameters"][1:4], [165, None, 32])
+        details = window.layouts["Default"].node_view.details
+        self.assertEqual(details.manufacturer.text(), "MERG")
+        self.assertEqual(details.module_type.text(), "CANMIO")
+        self.assertEqual(details.details_page.module_identifier.text(), "A520")
+
+    def test_all_parameters_persist_and_timeout_retains_saved_values_only(self):
+        self.save_startup_layouts([("Default", "TCP/IP", True)])
+        window = self.start_with_recording_connections()
+        connection = window.connections["Default"]
+        logical_layout = window.layout_settings["Default"]["logical_layout"]
+        values = {index: index for index in range(26)}
+        values.update({0: 25, 5: 0, 6: 0})
+        connection.frame_received.emit(b":SB040NB601020D2200;")
+        # Answer the actual serialized requests, including parameters beyond
+        # the former UI subset, without prescribing their incidental ordering.
+        read_indices = []
+        for _ in range(26):
+            request = connection.sent[-1]
+            self.assertIn(b"N730102", request)
+            index = int(request[-3:-1], 16)
+            read_indices.append(index)
+            connection.frame_received.emit(
+                f":SB040N9B0102{index:02X}{values[index]:02X};".encode()
+            )
+        self.assertEqual(sorted(read_indices), list(range(26)))
+        state = window.cbus_services["Default"].node_states[258]
+        self.assertEqual(state.parameter_progress, DiscoveryProgress.COMPLETE)
+        self.assertEqual(state.parameters, values)
+        saved = load_metadata(logical_layout, 258)
+        self.assertEqual(saved["parameters"], [values[index] for index in range(26)])
+
+        connection.disconnect()
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):
+            connection.connect()
+            connection.frame_received.emit(b":SB040NB601020D2200;")
+            connection.frame_received.emit(b":SB040N9B01020019;")
+            connection.frame_received.emit(b":SB040N9B01020263;")
+            # Parameter 4 never responds; the existing timeout ends this pass.
+            QTest.qWait(40)
+        fresh = window.cbus_services["Default"].node_states[258]
+        self.assertEqual(fresh.parameter_progress, DiscoveryProgress.INCOMPLETE)
+        self.assertEqual(fresh.parameters, {0: 25, 2: 99})
+        retained = load_metadata(logical_layout, 258)["parameters"]
+        self.assertEqual(retained[2], 99)
+        self.assertEqual(retained[4:], saved["parameters"][4:])
+        self.assertEqual(
+            window.layouts["Default"].node_view.details.module_type.text(), "-"
+        )
+
     def test_identical_pnn_frames_are_both_shown_but_discovered_once(self):
         self.save_startup_layouts([("Default", "TCP/IP", True)])
         window = self.start_with_recording_connections()
@@ -513,8 +584,8 @@ class WindowStartupTests(unittest.TestCase):
         details = first_view.details
         self.assertEqual(item.text(), "258 - 34")
         self.assertEqual(details.node_number.text(), "258")
-        self.assertEqual(details.manufacturer.text(), "DEVELOPMENT")
-        self.assertEqual(details.module_type.text(), "34")
+        self.assertEqual(details.manufacturer.text(), "-")
+        self.assertEqual(details.module_type.text(), "-")
         self.assertEqual(details.firmware.text(), "-")
         self.assertFalse(details.edit_button.isEnabled())
 
@@ -522,7 +593,7 @@ class WindowStartupTests(unittest.TestCase):
         self.assertIs(first_view.node_list.currentItem(), item)
         self.assertEqual(first_view.node_list.count(), 1)
         self.assertEqual(item.text(), "258 - 35")
-        self.assertEqual(details.module_type.text(), "35")
+        self.assertEqual(details.module_type.text(), "-")
 
         window.connections["Default"].frame_received.emit(b":SB040NB601030D2203;")
         default_action = next(
@@ -541,10 +612,11 @@ class WindowStartupTests(unittest.TestCase):
         self.assertEqual(first_view.node_list.item(0).text(), "258 - 35")
 
         window.connections["First"].disconnect()
-        self.assertEqual(first_view.node_list.count(), 0)
-        self.assertIsNone(first_view.node_list.currentItem())
-        self.assertIsNone(first_view.details.node)
-        self.assertEqual(first_view.details.node_number.text(), "-")
+        self.assertEqual(first_view.node_list.count(), 1)
+        self.assertEqual(first_view.node_list.currentItem().text(), "258 (offline)")
+        self.assertEqual(first_view.details.node, 258)
+        self.assertIsNone(first_view.details.live_state)
+        self.assertEqual(first_view.details.node_number.text(), "258")
         self.assertEqual(default_view.node_list.count(), 1)
 
     def test_navigator_keeps_selection_on_later_discoveries(self):
@@ -636,8 +708,8 @@ class WindowStartupTests(unittest.TestCase):
         self.assertEqual(details.event_count.text(), "0")
         self.assertEqual(details.ev_count.text(), "20")
         self.assertEqual(details.nv_count.text(), "0")
-        self.assertEqual(details.manufacturer.text(), "DEVELOPMENT")
-        self.assertEqual(details.module_type.text(), "34")
+        self.assertEqual(details.manufacturer.text(), "-")
+        self.assertEqual(details.module_type.text(), "-")
         self.assertEqual(details.node_name.text(), "-")
         self.assertEqual(details.cpu_name.text(), "-")
         connection.frame_received.emit(b":SB040N9B01021301;")
@@ -653,7 +725,7 @@ class WindowStartupTests(unittest.TestCase):
         self.assertEqual(details.event_count.text(), "0")
         self.assertEqual(details.nv_count.text(), "0")
         connection.frame_received.emit(b":SB040NB601020D2307;")
-        self.assertEqual(details.module_type.text(), "35")
+        self.assertEqual(details.module_type.text(), "-")
         self.assertEqual(details.firmware.text(), "3d")
         self.assertEqual(details.event_count.text(), "0")
 
@@ -671,6 +743,8 @@ class WindowStartupTests(unittest.TestCase):
         for index in (2, 4, 5):
             connection.frame_received.emit(f":SB040N9B0102{index:02X}00;".encode())
         connection.frame_received.emit(b":SB040N9B01020603;")
+        connection.frame_received.emit(b":SB040N9B010201A5;")
+        connection.frame_received.emit(b":SB040N9B01020320;")
 
         self.assertTrue(
             details.tabs.isTabEnabled(details.tabs.indexOf(details.variables_page))
@@ -815,12 +889,15 @@ class WindowStartupTests(unittest.TestCase):
         self.assertEqual(second_view.details.event_count.text(), "0")
 
         first.disconnect()
-        self.assertEqual(first_view.node_list.count(), 0)
-        self.assertEqual(first_view.details.event_count.text(), "-")
-        self.assertEqual(first_view.details.firmware.text(), "-")
-        self.assertEqual(first_view.details.summary_firmware.text(), "Firmware: -")
-        self.assertEqual(first_view.details.cpu_name.text(), "-")
-        self.assertEqual(first_view.details.interface.text(), "-")
+        self.assertEqual(first_view.node_list.count(), 1)
+        self.assertIsNone(first_view.details.live_state)
+        self.assertEqual(first_view.details.event_count.text(), "5")
+        self.assertEqual(first_view.details.firmware.text(), "3 Beta 1")
+        self.assertEqual(
+            first_view.details.summary_firmware.text(), "Firmware: 3 Beta 1"
+        )
+        self.assertEqual(first_view.details.cpu_name.text(), "P18F25K80")
+        self.assertEqual(first_view.details.interface.text(), "CAN")
         self.assertEqual(second_view.details.event_count.text(), "0")
 
         first.connect()
@@ -843,11 +920,11 @@ class WindowStartupTests(unittest.TestCase):
 
         window.disconnect_layout()
         self.assertEqual(window.cbus_services, {})
-        self.assertEqual(navigator.count(), 0)
+        self.assertEqual(navigator.count(), 1)
         self.assertIsNone(window.layouts["Default"].node_view.state_lookup)
         connection.frame_received.emit(b":SB040NB601030D2203;")
         self.assertEqual(first_service.nodes, {258: Pnn(258, 13, 34, 3)})
-        self.assertEqual(navigator.count(), 0)
+        self.assertEqual(navigator.count(), 1)
 
         window.connect_layout()
         self.assertEqual(
@@ -857,7 +934,7 @@ class WindowStartupTests(unittest.TestCase):
         self.assertIsNot(window.cbus_services["Default"], first_service)
         self.assertEqual(window.cbus_services["Default"].nodes, {})
         self.assertEqual(window.cbus_services["Default"].node_states, {})
-        self.assertEqual(navigator.count(), 0)
+        self.assertEqual(navigator.count(), 1)
 
     def test_failed_connection_does_not_prevent_other_startup_attempts(self):
         self.save_startup_layouts(

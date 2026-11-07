@@ -103,8 +103,21 @@ Connection changes in `MainWindow.set_connection_state()` refresh backup actions
 through `LayoutView.set_connected()`. Availability uses the connection state,
 independently of discovery results. Disconnect still closes the service and clears
 live identities and values. The existing node navigator then lists node numbers
-with saved YAML files as “<node-number> (offline)”; these entries contain only an integer,
-never a cached PNN or NodeState. Selecting one loads the ordinary backup list.
+with metadata or saved backups as “<node-number> (offline)”. These entries hold
+an integer rather than a cached PNN or NodeState. `node_metadata` stores confirmed
+parameters (a positional list including index zero, with null gaps) and optional
+last-observed `canId` in `layouts/<logical-layout>/nodes/<number>/metadata.yaml`.
+PNN and parameter update signals merge confirmed fields; missing replies preserve
+saved values, and equal records are not rewritten. No reachability status is saved.
+
+    PNN / PARAN -> merge metadata -> write only if changed
+    open layout -> metadata + backup inventory -> offline navigator/details
+    reconnect   -> fresh NodeState -> live details and write eligibility
+
+Offline metadata is loaded independently of connections and shown in the existing
+details fields. It never seeds live discovery or hardware-write eligibility.
+Missing nodes are retained, and backup-only directories remain supported.
+Selecting a saved node also loads the ordinary backup list.
 Discovery replaces that entry with a live identity after reconnection. Saved View
 reads files directly; New and Compare are guarded while disconnected.
 
@@ -681,10 +694,18 @@ per-layout FIFO -> pop/send
 Diagnostics observes each connection's queued and received frame signals, so it
 also shows traffic from other applications. Frame summaries are decoded outside
 the UI. Every received PNN frame appears in Diagnostics, while the service's
-change signals still filter duplicate identities in the navigator. The navigator
+change signals filter PNNs only when both identity and observed CAN ID are unchanged. The navigator
 shows PNN identities for each layout. Node Details reads that layout's service
-state to show confirmed PARAN parameters for the selected node; unknown values
-remain `-`. Each live node state also holds sparse confirmed NV values and
+state to show confirmed PARAN parameters for the selected node. Manufacturer,
+module type and the combined module identifier use parameters 1 and 3.
+Parameter 0 supplies the supported count: the normal queue reads every index
+from 1 through that count once, preserving the existing priority order before
+appending remaining indices. A parameter timeout retains confirmed live values,
+marks the pass incomplete and abandons remaining parameter reads for that node,
+as before. Confirmed responses are saved immediately; missing values preserve
+older metadata without becoming live evidence. PNN still supplies node numbers and operational
+flags; those flags are not inferred from parameters. Saved entries use persisted
+parameters, but unknown live values remain `-` without cached fallback. Each live node state also holds sparse confirmed NV values and
 independent parameter, NV, event identity and EV discovery progress. A
 stored-event count of `None` is unknown; zero is a confirmed empty table.
 Event identities are sparse
