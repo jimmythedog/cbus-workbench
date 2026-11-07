@@ -48,8 +48,10 @@ class NodeRestoreTests(unittest.TestCase):
         self.events = {(0, 1000): {1: 0, 2: 12, 3: None}}
         self.read_position = 0
         self.learn = False
+        self.ignore_exit = False
         self.reject_nv = None
         self.reject_ev = False
+        self.mismatch_ev = None
         self.change_earlier_nv = False
         self.remove_event = False
         self.withhold_final_read = False
@@ -143,11 +145,15 @@ class NodeRestoreTests(unittest.TestCase):
             elif op == 0x53:
                 self.learn = True
             elif op == 0x54:
-                self.learn = False
+                if not self.ignore_exit:
+                    self.learn = False
             elif op == 0xD2:
                 identity = (int.from_bytes(data[1:3]), int.from_bytes(data[3:5]))
-                if self.reject_ev:
+                key = (*identity, data[5])
+                if self.reject_ev is True or self.reject_ev == key:
                     self.reply("6F010201")
+                elif self.mismatch_ev == key:
+                    self.reply("590102")
                 elif identity not in self.events and data[6] == 0:
                     # Acknowledgement alone does not prove event creation.
                     self.reply("590102")
@@ -368,11 +374,13 @@ class NodeRestoreTests(unittest.TestCase):
             [b":SBFC0N9601021702;", b":SBFC0N9601021981;", b":SBFC0N9601021A0A;"],
         )
 
-    def test_recovery_read_mismatch_stops_and_rediscover_partial_result(self):
+    def test_recovery_read_mismatch_blocks_writes_even_after_delayed_response(self):
         self.begin_type_and_position_change()
         self.service.nv_write.timer.timeout.emit()
         self.nvs[25] = 128
         self.reply("9701021980")
+        # A late matching reply to the other NVRD cannot resolve the failure.
+        self.reply("9701021981")
         self.run_node()
         self.app.processEvents()
         self.assertEqual(len(self.results), 1)
@@ -380,12 +388,16 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertIn("readback was 128, expected 129", self.results[0][2])
         self.assertEqual(self.state.nv_values[25], 128)
         self.assertEqual(self.state.nv_values[26], 9)
+        before = list(self.connection.sent)
+        for delayed in ("9701021981", "590102", "6F010201"):
+            self.reply(delayed)
+            with self.assertRaisesRegex(ValueError, "Reconnect"):
+                self.service.restore.begin(258, self.backup)
+        self.assertEqual(self.connection.sent, before)
         self.assertEqual(
-            [f for f in self.connection.sent if b"N96" in f],
+            [f for f in self.connection.sent if b"N96" in f or b"ND2" in f],
             [b":SBFC0N9601021702;", b":SBFC0N9601021981;"],
         )
-        with self.assertRaisesRegex(ValueError, "Reconnect"):
-            self.service.restore.begin(258, self.backup)
 
     def test_nv25_readback_after_events_continues_configuration_to_success(self):
         self.begin_type_and_position_change()
@@ -453,7 +465,7 @@ class NodeRestoreTests(unittest.TestCase):
             self.service.restore.begin(258, self.backup)
         self.assertEqual(self.connection.sent, [])
 
-    def test_nv_side_effect_is_not_reconciled_and_prevents_ev_teaching(self):
+    def test_nv_side_effect_is_reported_and_independent_events_continue(self):
         self.nvs = {1: 6, 2: 0, 3: 0}
         self.state.nv_values = dict(self.nvs)
         self.change_earlier_nv = True
@@ -461,7 +473,7 @@ class NodeRestoreTests(unittest.TestCase):
         self.run_node()
         self.assertFalse(self.results[-1][1])
         self.assertIn("NV verification", self.results[-1][2])
-        self.assertFalse(any(b"ND2" in f for f in self.connection.sent))
+        self.assertEqual(self.events[(0, 1000)][2], 13)
         self.assertEqual(self.state.nv_values[1], 99)
         self.assertEqual(len([f for f in self.connection.sent if b"N96" in f]), 3)
 
@@ -532,16 +544,20 @@ class NodeRestoreTests(unittest.TestCase):
                     any(b"ND2" in f or b"N95" in f for f in self.connection.sent)
                 )
 
-    def test_nv_failure_stops_and_rediscover_partial_result(self):
+    def test_nv_rejection_continues_independent_nvs_and_events(self):
         self.nvs = {1: 6, 2: 0, 3: 0}
         self.state.nv_values = dict(self.nvs)
         self.reject_nv = 2
         self.service.restore.begin(258, self.backup)
         self.run_node()
         self.assertFalse(self.results[-1][1])
-        self.assertIn("Partial restoration: 1 NV writes", self.results[-1][2])
+        self.assertIn("Partial restoration: 2 NV writes", self.results[-1][2])
         self.assertEqual(self.state.nv_values, self.nvs)
-        self.assertFalse(any(b"N96010203" in f for f in self.connection.sent))
+        self.assertEqual(self.nvs, {1: 7, 2: 128, 3: 9})
+        self.assertEqual(self.events[(0, 1000)][2], 13)
+        differences, inconclusive = compare_live_node(self.state, self.backup)
+        self.assertEqual([row[1] for row in differences], ["NV 2"])
+        self.assertFalse(inconclusive)
 
     def test_ev_failure_stops_exits_learn_mode_and_rediscover_partial_result(self):
         self.reject_ev = True
@@ -552,6 +568,70 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertFalse(self.learn)
         self.assertEqual(self.state.nv_values, self.nvs)
         self.assertEqual(compare_live_node(self.state, self.backup)[0][0][1], "EV 2")
+
+    def test_ev_failure_continues_remaining_values_and_retry_only_writes_difference(
+        self,
+    ):
+        for failure in ("rejection", "mismatch"):
+            with self.subTest(failure=failure):
+                self.backup["events"][0]["eventVariables"] = [4, 13, 9]
+                if failure == "rejection":
+                    self.reject_ev = (0, 1000, 1)
+                else:
+                    self.mismatch_ev = (0, 1000, 1)
+                details = self.backup_details()
+                self.service.restore.finished.connect(details.finish_restore)
+                self.service.restore.begin(258, self.backup)
+                self.run_node()
+                self.assertFalse(self.results[-1][1])
+                self.assertEqual(self.events[(0, 1000)], {1: 0, 2: 13, 3: 9})
+                self.assertFalse(self.learn)
+                report = details.failure_report
+                self.assertTrue(report.dialog.retry_button.isEnabled())
+                self.assertIn(("EV 1", "4", "0"), self.report_rows(details))
+                self.reject_ev = False
+                self.mismatch_ev = None
+                self.results.clear()
+                before = len(self.connection.sent)
+                report.dialog.retry_button.click()
+                self.run_node()
+                self.assertTrue(self.results[-1][1], self.results)
+                writes = [f for f in self.connection.sent[before:] if b"ND2" in f]
+                self.assertEqual(writes, [b":SBFC0ND2000003E80104;"])
+                report.dialog.close()
+                self.service.restore.finished.disconnect(details.finish_restore)
+                self.events[(0, 1000)] = {1: 0, 2: 12, 3: None}
+                self.state.ev_values = {9: dict(self.events[(0, 1000)])}
+                self.results.clear()
+
+    def test_resolved_ev_rejection_with_unconfirmed_exit_stops_further_changes(self):
+        self.backup["events"][0]["eventVariables"] = [4, 13, 9]
+        self.reject_ev = (0, 1000, 1)
+        self.ignore_exit = True
+        self.service.restore.begin(258, self.backup)
+        self.run_node()
+        self.assertFalse(self.results[-1][1])
+        self.assertIn("still reports learn mode", self.results[-1][2])
+        self.assertEqual(self.events[(0, 1000)], {1: 0, 2: 12, 3: None})
+        with self.assertRaisesRegex(ValueError, "Reconnect"):
+            self.service.restore.check(258, self.backup)
+
+    def test_failed_creation_skips_dependent_evs_but_restores_other_event(self):
+        self.backup["events"].insert(
+            0,
+            {
+                "nodeNumber": 258,
+                "eventNumber": 2000,
+                "eventVariables": [7, 0, None],
+            },
+        )
+        self.reject_ev = (258, 2000, 1)
+        self.service.restore.begin(258, self.backup)
+        self.run_node()
+        self.assertFalse(self.results[-1][1])
+        self.assertNotIn((258, 2000), self.events)
+        self.assertEqual(self.events[(0, 1000)][2], 13)
+        self.assertFalse(any(b"ND2010207D00200" in f for f in self.connection.sent))
 
     def test_final_discovery_timeout_never_reports_success(self):
         self.withhold_final_read = True
@@ -740,7 +820,8 @@ class NodeRestoreTests(unittest.TestCase):
             "1 event removals transmitted, 0 event removals verified",
             self.results[-1][2],
         )
-        self.assertFalse(any(b"ND2" in f for f in self.connection.sent))
+        self.assertEqual(self.events[(0, 1000)][2], 13)
+        self.assertIn((258, 2000), self.events)
 
     def test_reconstruction_verifies_absence_before_teaching_without_nv_reread(self):
         self.events[(0, 1000)][3] = 42
@@ -966,15 +1047,14 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertEqual(details.nv_result.text(), details.events_result.text())
         self.assertEqual(details.raw_values.item(0, 1).text(), "7")
         event = details.node_events.consumed_table.topLevelItem(0)
-        self.assertEqual(event.child(1).text(1), "12")
+        self.assertEqual(event.child(1).text(1), "")
         self.assertIsNone(details.desired_configuration)
         self.assertFalse(details.saving_configuration)
         self.assertTrue(details.variables.isEnabled())
         self.assertTrue(details.node_events.isEnabled())
-        self.assertFalse(details.edit_button.isEnabled())
-        self.assertFalse(details.events_edit_button.isEnabled())
-        with self.assertRaisesRegex(ValueError, "Reconnect"):
-            self.service.restore.begin(258, node_backup(self.state))
+        self.assertTrue(details.edit_button.isEnabled())
+        self.assertTrue(details.events_edit_button.isEnabled())
+        self.service.restore.check(258, node_backup(self.state))
 
     def test_failed_save_rediscovery_updates_raw_and_mdf_views(self):
         from PySide6.QtCore import Qt
@@ -1263,7 +1343,7 @@ class NodeRestoreTests(unittest.TestCase):
         self.run_node()
         self.assertIn(("NV 1", "10", "7"), self.report_rows(details))
         self.assertIn("CMDERR", details.failure_report.dialog.message.text())
-        self.assertFalse(details.failure_report.dialog.retry_button.isEnabled())
+        self.assertTrue(details.failure_report.dialog.retry_button.isEnabled())
         self.addCleanup(details.failure_report.dialog.close)
 
     def test_restore_ev_failure_uses_the_same_report(self):
@@ -1280,8 +1360,8 @@ class NodeRestoreTests(unittest.TestCase):
         self.addCleanup(report.dialog.close)
         self.assertIn("EV", report.dialog.message.text())
         self.assertIn("Partial Restore:", report.dialog.message.text())
-        self.assertFalse(report.dialog.retry_button.isEnabled())
-        self.assertIn("Reconnect", report.dialog.retry_status.text())
+        self.assertTrue(report.dialog.retry_button.isEnabled())
+        self.assertEqual(report.dialog.retry_status.text(), "")
         self.assertTrue(
             any(row[0].startswith("EV") for row in self.report_rows(details))
         )

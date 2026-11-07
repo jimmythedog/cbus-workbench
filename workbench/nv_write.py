@@ -30,6 +30,7 @@ class NvWrite(QObject):
         self.changes = []
         self.verified = 0
         self.recovered = 0
+        self.resolved = False
         # Late readbacks after failure must not silently confirm a failed write.
         self.unverified: set[tuple[int, int]] = set()
         self.timer = QTimer(self)
@@ -50,6 +51,7 @@ class NvWrite(QObject):
         self.changes = sorted(changes.items())
         self.verified = 0
         self.recovered = 0
+        self.resolved = False
         self.total = len(self.changes)
         self.active = True
         self.stage = "waiting for discovery reply"
@@ -93,8 +95,8 @@ class NvWrite(QObject):
 
     def receive_value(self, node_number: int, index: int, value: int) -> bool:
         """Consume unverified write replies before normal discovery records them."""
-        # Restore's failure refresh may confirm physical state, but must retain
-        # the failed-write marker so another application requires reconnecting.
+        # Failure rediscovery may confirm physical state without resolving an
+        # ambiguous transaction; its uncertainty marker still requires reconnecting.
         if (
             not self.active
             and self.service.refreshing_node == node_number
@@ -114,6 +116,11 @@ class NvWrite(QObject):
                 "NV readback received", nv_index=index, value=value, expected=expected
             )
             if value != expected:
+                # Recovery sent a second NVRD: its response may still arrive.
+                self.resolved = self.stage != "recovery NVANS"
+                if self.resolved:
+                    self.unverified.remove((node_number, index))
+                self.service.record_nv(node_number, index, value)
                 self.finish(
                     False, f"NV {index}: readback was {value}, expected {expected}."
                 )
@@ -151,6 +158,10 @@ class NvWrite(QObject):
         ):
             return False
         index = self.changes[0][0]
+        # A recovery read can leave a second unindexed CMDERR outstanding.
+        self.resolved = self.stage != "recovery NVANS"
+        if self.resolved:
+            self.unverified.remove((node_number, index))
         self.finish(
             False, f"NV {index}: node rejected {self.stage} with CMDERR {code}."
         )

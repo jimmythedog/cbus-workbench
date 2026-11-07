@@ -165,13 +165,17 @@ class NodeRestore(QObject):
                     v is not None and state.nv_values.get(i) != v
                     for i, v in enumerate(self.desired_nvs, 1)
                 ):
-                    raise ValueError(
-                        "NV verification after rediscovery differs from the desired configuration; no further writes will be made."
+                    self.record_failure(
+                        "NV verification after rediscovery differs from the desired configuration."
                     )
                 self.schedule("restoring events")
             elif self.stage == "restoring events":
                 self.restore_evs(state)
-            elif self.stage == "rediscovering final configuration":
+            elif self.stage in (
+                "refreshing after NV failure",
+                "refreshing after EV failure",
+                "rediscovering final configuration",
+            ):
                 self.service.rediscover_node(self.node_number)
         except ValueError as error:
             self.fail(str(error))
@@ -210,9 +214,12 @@ class NodeRestore(QObject):
         # its writes. A matching event needs no learn-mode transaction.
         while not self.event_steps and self.pending_events:
             event = self.pending_events.pop(0)
-            self.event_steps = plan_event_restore(
-                state, {**self.backup, "events": [event]}
-            )
+            try:
+                self.event_steps = plan_event_restore(
+                    state, {**self.backup, "events": [event]}
+                )
+            except ValueError as error:
+                self.record_failure(str(error))
         if not self.event_steps:
             self.schedule("rediscovering final configuration")
             return
@@ -241,7 +248,11 @@ class NodeRestore(QObject):
         self.nvs_verified += self.service.nv_write.verified
         self.nvs_recovered += self.service.nv_write.recovered
         if not success:
-            self.fail(message)
+            if self.service.nv_write.resolved:
+                self.record_failure(message)
+                self.schedule("refreshing after NV failure")
+            else:
+                self.fail(message)
 
     def nv_refreshed(self, number: int, message: str) -> None:
         if self.active and number == self.node_number and self.stage == "writing NVs":
@@ -257,36 +268,77 @@ class NodeRestore(QObject):
         self.evs_verified += self.service.ev_write.verified
         self.removals_transmitted += self.service.ev_write.removals_transmitted
         self.events_removed += self.service.ev_write.removed
-        if not success:
-            self.fail(message)
-            return
         step = self.event_steps[0]
         state = self.service.node_states[number]
-        if not event_step_matches(state, step, self.backup["complete"]):
-            self.fail(
-                f"Event {step.identity[0]}:{step.identity[1]} did not match after rediscovery; no further events written."
-            )
+        if not success:
+            writer = self.service.ev_write
+            if writer.blocked:
+                self.fail(message)
+                return
+            self.record_failure(f"Event {step.identity}: {message}")
+            self.schedule("refreshing after EV failure")
             return
+        elif not event_step_matches(state, step, self.backup["complete"]):
+            self.record_failure(
+                f"Event {step.identity} did not match after rediscovery."
+            )
         self.event_steps.pop(0)
         self.schedule("restoring events")
 
+    def record_failure(self, reason: str) -> None:
+        self.failure = f"{self.failure} {reason}".strip()
+        self.log("Configuration operation failed", reason=reason)
+
     def fail(self, reason: str) -> None:
-        if self.failure and reason != self.failure:
-            reason = f"{self.failure} Resulting configuration refresh failed: {reason}"
-        self.failure = reason
+        self.record_failure(reason)
         self.log(
             "Configuration application stopped; refreshing resulting configuration",
             reason=reason,
         )
         if self.stage == "rediscovering final configuration":
-            self.finish(False, reason)
+            self.finish(False, self.failure)
         else:
             self.schedule("rediscovering final configuration")
+
+    def continue_events(self, state) -> None:
+        """Resume only remaining independent EVs after a failed operation refresh."""
+        writer = self.service.ev_write
+        step = self.event_steps.pop(0)
+        # Failed creation/removal must never trigger dependent teaching.
+        if writer.identity_established and writer.unlearn is None:
+            slot = next(
+                (
+                    slot
+                    for slot, identity in state.event_identities.items()
+                    if identity == step.identity
+                ),
+                None,
+            )
+            if slot is not None:
+                step.values = {
+                    key[2]: value
+                    for key, value in writer.changes[1:]
+                    if state.ev_values.get(slot, {}).get(key[2]) != value
+                }
+                step.unlearn = False
+                if step.values:
+                    self.event_steps.insert(0, step)
+        self.schedule("restoring events")
 
     def refreshed(self, number: int) -> None:
         if not self.active or number != self.node_number:
             return
         state = self.service.node_states[number]
+        if self.stage in ("refreshing after NV failure", "refreshing after EV failure"):
+            if not node_backup(state)["complete"]:
+                self.fail(
+                    "Discovery after failed operation is incomplete; further writes blocked."
+                )
+            elif self.stage == "refreshing after NV failure":
+                self.schedule("writing NVs")
+            else:
+                self.continue_events(state)
+            return
         differences, inconclusive = compare_live_node(state, self.backup)
         self.log(
             "Final restore comparison",

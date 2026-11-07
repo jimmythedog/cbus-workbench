@@ -123,7 +123,7 @@ class NvWriteTests(unittest.TestCase):
         self.service.nv_write.begin(258, {1: 9, 2: 10})
         self.reply("590102")
         self.reply("9701020106")
-        self.assertEqual(self.state.nv_values, {1: 7, 2: 8})
+        self.assertEqual(self.state.nv_values, {1: 6, 2: 8})
         self.assertFalse(self.results[-1][1])
         self.assertIn("readback was 6", self.results[-1][2])
         self.assertEqual(len(self.connection.sent), 2)

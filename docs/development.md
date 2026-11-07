@@ -204,7 +204,8 @@ selection. Raw sending is also guarded during restore.
            different -> NvWrite(one NV), acknowledgement + readback
                      -> reread all higher NVs -> continue from next saved NV
       -> full NV reread + event/EV refresh -> verify all known saved NVs
-           mismatch / incomplete -> stop before event restoration
+           confirmed mismatch -> record; continue events
+           incomplete -> stop before event restoration
       -> remove extra events by identity (EVULN), freeing event-table capacity
       -> process backed-up identities (NN, EN)
            missing -> EVLRN numeric EVs
@@ -212,14 +213,27 @@ selection. Raw sending is also guarded during restore.
            numeric differences -> EVLRN changed EVs
            confirmed extra EV -> EVULN -> learn exit -> event/EV rediscovery
              absence confirmed -> re-enter learn -> EVLRN all saved numeric EVs
-             present / incomplete discovery -> stop without teaching
+             present -> record failure; skip dependent teaching
+             incomplete discovery -> stop without teaching
          each operation -> existing learn exit -> event/EV refresh -> verify
       -> full parameter/NV/event/EV rediscovery -> compare known backup data
            complete backup + no uncertainty/differences -> full success
            incomplete + known data verified -> success with explicit uncertainty
            otherwise -> partial result with write/removal counts
-      failure -> stop writes, existing learn cleanup -> rediscover -> partial result
+      resolved failure -> existing learn cleanup -> full rediscovery
+                       -> complete + same identity -> independent operations
+                       -> incomplete / changed identity -> stop writes
+      unresolved failure -> stop writes, cleanup -> rediscover -> partial result
       disconnect -> existing writer cleanup -> unverified partial result
+
+Writers distinguish resolved operation failures from unresolved protocol uncertainty.
+`NodeRestore` accumulates operation errors without replacing the desired configuration.
+After a resolved EV failure and confirmed learn-mode exit, full rediscovery must
+complete before another operation. Remaining EVs of an established event are compared
+again; failed creation or removal skips dependent teaching. A planner refusal (such as
+an unreconstructable empty event) is local to that event. Final comparison still
+reports all remaining differences; errors remain visible even if later reads match.
+No service safety gates are bypassed or weakened.
 
 Restore compares each saved numeric NV with confirmed live state and writes only
 when it differs. Unknown saved NVs are skipped; unknown live values or incomplete
@@ -232,15 +246,22 @@ event identities before any event replacement.
 Only a verification NVANS timeout after WRACK permits one additional NVRD,
 retaining writer ownership and the unverified marker. Matching readback clears
 the marker and follows the same higher-NV refresh path; the coordinator retains
-a recovery count for the final result. A second timeout or any other write failure
-uses the existing stop-and-rediscover path. NVSET is never retried.
+a recovery count for the final result. A second timeout or transmission failure
+uses the existing stop-and-rediscover path. NVSET is never retried. A confirmed
+mismatch records the actual value. An ordinary mismatch or CMDERR resolves
+the transaction, but a recovery-read mismatch or CMDERR retains uncertainty because
+a response from the other NVRD could still be outstanding. Resolved failures clear
+only their own uncertainty marker;
+the coordinator performs full rediscovery before continuing at the next saved NV.
 
     NVSET -> WRACK -> NVRD -> timeout -> one NVRD
                                          matching -> higher-NV refresh -> continue
-                                         failure  -> stop -> full rediscovery
+                                         mismatch -> stop -> full rediscovery
+                                         timeout  -> stop -> full rediscovery
 
 Each saved index is visited once. Firmware may also change earlier NVs: the full
-verification detects these differences and fails without retry or rollback. The
+verification records these differences without retry or rollback, then continues
+independent event changes. The
 ascending order is a generic policy, not an assumption about firmware dependencies.
 The final full configuration discovery after event restoration remains required;
 EV teaching that changes an NV cannot produce a successful result.
@@ -260,7 +281,9 @@ has no specified acknowledgement: transmission starts no WRACK wait and is count
 separately from verified removal. The writer leaves learn mode and reuses event/EV
 discovery without rereading NVs. Only complete discovery showing the identity
 absent verifies removal. A retained identity, incomplete discovery, send failure
-or interrupted verification stops further teaching. For reconstruction the same
+or interrupted verification prevents dependent teaching. A confirmed retained
+identity after safe exit allows independent events to continue; incomplete or
+unsafe outcomes stop further writes. For reconstruction the same
 writer retains its pending EVs and connection ownership across discovery, then
 re-enters learn mode after absence is confirmed. Disconnect reports transmitted
 and verified removals separately; a late reply cannot resume reconstruction.
@@ -296,7 +319,7 @@ operator confirmation rather than an inferred compatibility guarantee.
 retaining its PNN identity/CAN ID. Completion is emitted after the request queue
 has exhausted follow-on work, including failures. During a failure refresh,
 matching NVRD replies can reveal an unverified NV's physical value without clearing
-the failed-write marker that requires reconnecting before another application.
+the unresolved-transaction marker that requires reconnecting before another application.
 The coordinator advances through a single-shot Qt timer so writer completion
 callbacks finish their queue cleanup before the next operation begins. TRACE
 records restore stages, target, write counts, failure reasons and final differences.
@@ -456,7 +479,7 @@ no learn mode is needed. WRACK and CMDERR carry no NV index or transaction ID.
 Serialisation prevents ambiguity between Workbench's own requests; another tool
 must not write the same node concurrently. Each reply uses the shared response
 timeout. Writes are never retried or rolled back; only the bounded NV read
-recovery described above is automatic. Failed writes retain their
+recovery described above is automatic. Unresolved failures retain their
 uncertainty markers: failure rediscovery can reveal physical values without
 allowing another Save before reconnecting.
 
@@ -670,7 +693,8 @@ Coordinator -> validate planned EV transaction -> wait for outstanding discovery
        reliable flag -> RQNPN(8): require learn bit clear
                        failure -> report uncertainty; require reconnect
        no reliable flag -> record lack of exit confirmation in TRACE
-       earlier failure -> report verified count and failure; require reconnect
+       resolved failure + confirmed exit -> full rediscovery -> independent changes
+       unresolved failure / unconfirmed exit -> require reconnect
        all verified -> clear old slots -> RQEVN / NERD / existing EV discovery
                          complete -> transaction finished; coordinator verifies step
                          incomplete -> transaction failure; coordinator stops writes

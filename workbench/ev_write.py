@@ -40,6 +40,7 @@ class EvWrite(QObject):
         self.verified = 0
         self.learn_requested = False
         self.failure = ""
+        self.resolved = False
         self.flag_reliable = False
         self.exit_confirmed = False
         self.timer = QTimer(self)
@@ -77,11 +78,13 @@ class EvWrite(QObject):
                     i for i, (key, _) in enumerate(self.changes) if key[:2] == identity
                 )
                 self.changes.insert(first, self.changes.pop(nonzero))
+        self.identity_established = not creating
         self.removals_transmitted = 0
         self.removed = 0
         self.total = len(self.changes)
         self.verified = 0
         self.failure = ""
+        self.resolved = False
         self.learn_requested = False
         flags = self.service.node_states[node_number].parameters.get(8, 0)
         # VLCB specifies the flag; a CBUS set bit is also positive evidence.
@@ -143,7 +146,10 @@ class EvWrite(QObject):
             if value & 0x20:
                 self.flag_reliable = True
             elif self.flag_reliable:
-                self.fail("Node did not confirm learn mode; no EVs written.")
+                self.identity_established = False
+                self.fail(
+                    "Node did not confirm learn mode; no EVs written.", resolved=True
+                )
                 return True
             self.log("Starting teaching", learn_flag_reliable=self.flag_reliable)
             self.write_next()
@@ -230,7 +236,8 @@ class EvWrite(QObject):
         self.log("EV readback received", identity=key, value=value, expected=expected)
         if value != expected:
             self.fail(
-                f"EV {key[2]}: readback mismatch (received {value}, expected {expected})."
+                f"EV {key[2]}: readback mismatch (received {value}, expected {expected}).",
+                resolved=True,
             )
             return
         self.timer.stop()
@@ -247,6 +254,7 @@ class EvWrite(QObject):
         # verifies this identity/value; the normal refresh will find its new slot.
         if slot is not None:
             state.ev_values.setdefault(slot, {})[key[2]] = value
+        self.identity_established = True
         self.verified += 1
         self.changes.pop(0)
         self.service.node_state_updated.emit(self.node_number)
@@ -269,16 +277,21 @@ class EvWrite(QObject):
                 self.exit_uncertain("Node rejected learn-mode exit confirmation."),
             )
         else:
+            if self.stage == "confirming learn mode":
+                self.identity_established = False
             self.fail(
                 "Node rejected event unlearn."
                 if self.unlearn is not None
                 else "Node rejected the EV write."
                 if self.stage == "WRACK"
-                else "Node rejected EV verification or learn-mode entry."
+                else "Node rejected EV verification or learn-mode entry.",
+                resolved=True,
             )
         return True
 
-    def fail(self, reason):
+    def fail(self, reason, *, resolved=False):
+        # A reply resolves an individual operation; safe exit is still required.
+        self.resolved = resolved
         self.failure = reason
         self.blocked = True
         self.log("EV Save failed; attempting learn-mode exit", reason=reason)
@@ -311,6 +324,7 @@ class EvWrite(QObject):
         self.service._send_next_request()
 
     def exit_uncertain(self, reason):
+        self.resolved = False
         return f"{self.failure or 'EV writes verified.'} {reason} Learn-mode exit is unconfirmed; check the node before reconnecting."
 
     def timed_out(self):
@@ -371,6 +385,8 @@ class EvWrite(QObject):
             if absent:
                 self.removed = 1
             if self.failure or not absent:
+                self.resolved = success and not self.failure
+                self.identity_established = False
                 self.finish(
                     False,
                     self.failure
@@ -379,6 +395,7 @@ class EvWrite(QObject):
                 )
                 return
             self.unlearn = None
+            self.identity_established = False
             if self.changes:
                 # Keep write ownership across verification. Re-enter learn mode
                 # only after absence is proven; ordinary teaching is unchanged.
@@ -401,10 +418,11 @@ class EvWrite(QObject):
         self.timer.stop()
         self.active = False
         if not success:
-            self.blocked = True
+            self.blocked = not (self.resolved and self.exit_confirmed)
             if self.verified:
                 message = f"{self.verified} of {self.total} changes verified. {message}"
-            message += " Reconnect to rediscover before another Save."
+            if self.blocked:
+                message += " Reconnect to rediscover before another Save."
         self.log(
             "EV Save finished", success=success, verified=self.verified, result=message
         )

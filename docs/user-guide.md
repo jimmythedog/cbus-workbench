@@ -273,12 +273,25 @@ and full equivalence is not established. Unverified reads or mismatches are
 reported as partial restoration. Progress and the final result appear beside the
 backup buttons. NV/EV editing and raw sending are blocked on that connection.
 
-A failure stops further writes and reports verified NV/EV writes, transmitted
-event removals and removals verified by event rediscovery. Transmission alone does
-not confirm removal. Earlier changes remain applied; there is no rollback. Workbench
-attempts learn-mode cleanup and rediscovers the resulting configuration while the
-connection remains available. After failure, check any learn-mode warning,
-reconnect and **Compare** before deciding whether to retry manually.
+An individual rejected write or confirmed readback mismatch is recorded, while
+independent changes continue after the required refresh and safe learn-mode cleanup.
+A failed event creation or removal prevents dependent teaching, but does not by
+itself prevent restoring other events. Verified NV/EV writes, transmitted event
+removals and verified removals are reported separately; transmission alone does not
+confirm removal. Earlier changes remain applied; there is no rollback.
+
+Further changes stop if the node cannot be reached, discovery cannot confirm the
+configuration needed to continue, or protocol safety remains uncertain. This includes
+missing write acknowledgements, exhausted verification reads, unconfirmed learn-mode
+exit after a failure, and another node acknowledging broadcast teaching. An open
+connection alone does not prove the node is reachable. Some legacy nodes cannot
+confirm learn-mode exit after failure and therefore require reconnection.
+
+Workbench reads the resulting configuration and shows **Requested vs Actual** with
+remaining differences and unknown values. **Retry**, when available, reads hardware
+afresh and applies only outstanding differences. Follow any safety blocker or
+learn-mode warning before reconnecting and comparing again.
+
 Layout restoration remains unavailable.
 
 ## Diagnostics and application directories

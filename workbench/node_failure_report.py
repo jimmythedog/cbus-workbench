@@ -57,7 +57,7 @@ class NodeFailureReport(QObject):
         outcome = "" if message == self.original_reason else f"\n\n{message}"
         return (
             f"Original failure: {self.original_reason}{outcome}\n"
-            "The original application stopped at the failure; later work may not have been attempted. "
+            "Independent changes were attempted while safe; blocked or dependent work may remain. "
             "A write may have succeeded even if verification failed. No rollback was performed."
         )
 
