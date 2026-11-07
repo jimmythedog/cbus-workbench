@@ -1,8 +1,50 @@
 from PySide6.QtWidgets import QTreeWidgetItem
 
+from .configuration_compare import NodeComparison, ValueState
+
+
+def set_comparison_headings(tree, headings=("Backup", "Current")):
+    tree.setHeaderLabels(["Item", *headings])
+
+
+def _comparison_rows(comparison):
+    events_with_details = {
+        row.event
+        for row in comparison.rows
+        if row.label.startswith("EV ")
+        and ValueState.EVENT_ABSENT in (row.left.state, row.right.state)
+        and ValueState.CONFIRMED in (row.left.state, row.right.state)
+    }
+    for row in comparison.rows:
+        if row.outcome == "equal":
+            continue
+        # EV details already show which side lacks the event. Keep membership
+        # alone when there are no confirmed values to inspect beneath it.
+        if row.label == "Event" and row.event in events_with_details:
+            continue
+        section = row.section
+        if row.event is not None:
+            section += f"/{row.event[0]}:{row.event[1]}"
+        values = []
+        for value in (row.left, row.right):
+            values.append(
+                {
+                    ValueState.ABSENT: "—",
+                    ValueState.EVENT_ABSENT: "—",
+                    ValueState.UNKNOWN: "Unknown",
+                }.get(value.state, str(value.value))
+            )
+        yield section, row.label, *values
+
 
 def add_node_differences(parent, differences):
-    """Add compare_node() differences beneath a tree or node item."""
+    """Render structured results, or the unchanged prototype difference tuples.
+
+    Equal rows stay in the dataset. Unverified values display as Unknown;
+    the caller also shows the comparison's uncertainty summary.
+    """
+    if isinstance(differences, NodeComparison):
+        differences = _comparison_rows(differences)
     sections = {}
 
     for section_name, item_name, old, new in differences:
@@ -27,17 +69,11 @@ def add_node_differences(parent, differences):
                 section.setExpanded(True)
                 sections[section_name] = section
 
-        absent = (
-            "Absent"
-            if section_name.startswith("Consumed events/")
-            and item_name.startswith("EV ")
-            else "—"
-        )
         QTreeWidgetItem(
             section,
             [
                 item_name,
-                str(old) if old is not None else absent,
-                str(new) if new is not None else absent,
+                str(old) if old is not None else "—",
+                str(new) if new is not None else "—",
             ],
         )

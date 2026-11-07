@@ -1,8 +1,10 @@
-from .backup_view import backup_contents
+from .configuration_compare import Confirmation, ValueState, compare_configurations
 
 
 def compare_node(node, backup):
     """Return differences between a node backup and the current node."""
+
+    from .backup_view import backup_contents
 
     contents = backup_contents(backup)
     differences = []
@@ -75,75 +77,52 @@ def compare_node(node, backup):
     return differences
 
 
-def compare_live_node(state, backup):
-    """Compare only confirmed values; return differences and an uncertainty flag.
-
-    Missing live keys are unknown, while present EV None values are confirmed
-    absent. A partial file cannot distinguish absence from unread positions.
-    """
+def compare_live_configuration(state, backup):
+    """Adapt live confirmation evidence without changing the persisted format."""
     from .cbus_service import DiscoveryProgress
-    from .node_backup_files import node_backup
+    from .node_backup_files import node_backup, positional_values
 
-    differences = []
-    inconclusive = not backup["complete"] or not node_backup(state)["complete"]
-    unknown = object()
-
-    def compare(section, label, old, new):
-        nonlocal inconclusive
-        if old is unknown or new is unknown:
-            inconclusive = True
-        elif old != new:
-            differences.append((section, label, old, new))
-
-    compare("Node details", "Number", backup["node"], state.identity.node_number)
-    saved_nvs = dict(enumerate(backup["nvs"], 1))
-    for index in sorted(saved_nvs.keys() | state.nv_values.keys()):
-        old = saved_nvs.get(index)
-        compare(
-            "Node variables",
-            f"NV {index}",
-            unknown if old is None else old,
-            state.nv_values.get(index, unknown),
-        )
-
-    saved_events = {
-        (event["nodeNumber"], event["eventNumber"]): event["eventVariables"]
-        for event in backup["events"]
-    }
-    live_events = {
+    events = {
         identity: state.ev_values.get(index, {})
         for index, identity in state.event_identities.items()
     }
-    # Event membership needs a completed enumeration, independently of EV reads.
     enumeration_complete = (
         state.event_progress == DiscoveryProgress.COMPLETE
         and state.stored_event_count is not None
-        and len(live_events) == state.stored_event_count
+        and len(events) == state.stored_event_count
     ) or (
         not state.identity.is_consumer
         and state.event_progress == DiscoveryProgress.SKIPPED
-        and not live_events
+        and not events
     )
-    for identity in sorted(saved_events.keys() | live_events.keys()):
-        section = f"Consumed events/{identity[0]}:{identity[1]}"
-        if identity not in saved_events:
-            compare(
-                section, "Event", None if backup["complete"] else unknown, "Present"
-            )
+    current = node_backup(state)
+    current["nvs"] = positional_values(
+        state.nv_values,
+        max(state.parameters.get(6, 0), max(state.nv_values, default=0)),
+    )
+    return compare_configurations(
+        backup,
+        current,
+        right_confirmation=Confirmation(enumeration_complete, events),
+    )
+
+
+def compare_live_node(state, backup):
+    """Keep the legacy confirmed-difference tuples and uncertainty flag for Restore."""
+    result = compare_live_configuration(state, backup)
+    differences = []
+
+    for row in result.rows:
+        if row.outcome != "different":
             continue
-        if identity not in live_events:
-            compare(
-                section, "Event", "Present", None if enumeration_complete else unknown
-            )
+        # One-sided EV rows add inspection detail, not additional restore failures.
+        if row.label.startswith("EV ") and ValueState.EVENT_ABSENT in (
+            row.left.state,
+            row.right.state,
+        ):
             continue
-        saved = dict(enumerate(saved_events[identity], 1))
-        current = live_events[identity]
-        last = max(len(saved), state.parameters.get(5, 0), max(current, default=0))
-        for index in range(1, last + 1):
-            old = saved.get(index)
-            # Complete files trim trailing confirmed absences. Partial files do
-            # not carry enough information to interpret any null or omission.
-            if old is None and not backup["complete"]:
-                old = unknown
-            compare(section, f"EV {index}", old, current.get(index, unknown))
-    return differences, inconclusive
+        section = row.section
+        if row.event is not None:
+            section += f"/{row.event[0]}:{row.event[1]}"
+        differences.append((section, row.label, row.left.value, row.right.value))
+    return differences, result.inconclusive

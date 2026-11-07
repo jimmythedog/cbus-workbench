@@ -8,14 +8,23 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from .backup_diff_tree import add_node_differences
+from .backup_diff_tree import add_node_differences, set_comparison_headings
 from .cbus_service import NodeState
+from .configuration_compare import NodeComparison
 from .logging_config import trace
-from .node_backup_diff import compare_live_node, compare_node
+from .node_backup_diff import compare_live_configuration, compare_node
 
 
 class BackupCompare(QDialog):
-    def __init__(self, node, backup, parent=None):
+    def __init__(
+        self,
+        node,
+        backup,
+        parent=None,
+        *,
+        headings=("Backup", "Current"),
+        comparison=None,
+    ):
         super().__init__(parent)
 
         number = (
@@ -29,13 +38,16 @@ class BackupCompare(QDialog):
         layout = QVBoxLayout(self)
 
         tree = QTreeWidget()
-        tree.setHeaderLabels(["Item", "Backup", "Current"])
+        set_comparison_headings(tree, headings)
         tree.setColumnWidth(0, 250)
         layout.addWidget(tree)
 
-        if "format_version" in backup:
+        if comparison is not None:
+            differences, inconclusive = comparison, comparison.inconclusive
+        elif "format_version" in backup:
             if isinstance(node, NodeState):
-                differences, inconclusive = compare_live_node(node, backup)
+                differences = compare_live_configuration(node, backup)
+                inconclusive = differences.inconclusive
             else:
                 differences, inconclusive = [], True
         else:
@@ -49,7 +61,11 @@ class BackupCompare(QDialog):
             extra={
                 "fields": {
                     "node_number": number,
-                    "differences": len(differences),
+                    "differences": sum(
+                        row.outcome == "different" for row in differences.rows
+                    )
+                    if isinstance(differences, NodeComparison)
+                    else len(differences),
                     "inconclusive": inconclusive,
                 }
             },

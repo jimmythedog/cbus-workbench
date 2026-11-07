@@ -693,6 +693,14 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertIn("differs from the known backup data", self.results[-1][2])
         self.assertEqual(set(self.events), {(0, 1000), (258, 2000)})
         self.assertNotIn(b":SBFC0N95010207D0;", self.connection.sent)
+        # Rich inspection rows must not change Restore's legacy difference contract.
+        self.assertEqual(
+            compare_live_node(self.state, self.backup),
+            (
+                [("Consumed events/258:2000", "Event", None, "Present")],
+                False,
+            ),
+        )
 
     def test_unlearn_rejection_stops_teaching_and_preserves_later_events(self):
         self.reject_unlearn = True

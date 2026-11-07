@@ -97,9 +97,9 @@ class LayoutBackupCompareTests(unittest.TestCase):
         prefix = ("Node configurations", "Node 42")
         self.assertIn((prefix + ("Node variables", "NV 1"), "0", "8"), rows)
         event = prefix + ("Consumed events", "100:200")
-        self.assertIn((event + ("EV 1",), "0", "Absent"), rows)
-        self.assertIn((event + ("EV 2",), "Absent", "0"), rows)
-        self.assertFalse(any(path[-1] == "EV 3" for path, _, _ in rows))
+        self.assertIn((event + ("EV 1",), "0", "—"), rows)
+        self.assertIn((event + ("EV 2",), "—", "0"), rows)
+        self.assertIn((event + ("EV 3",), "—", "Unknown"), rows)
         self.assertTrue(any("inconclusive" in path[-1] for path, _, _ in rows))
         self.assertFalse(any(path[-1] == "No differences found" for path, _, _ in rows))
 
@@ -112,16 +112,25 @@ class LayoutBackupCompareTests(unittest.TestCase):
         self.state.nv_values[1] = 99
         self.state.ev_values[7] = {1: 99, 2: 99, 3: 99}
         rows = self.rows()
-        self.assertFalse(
-            any(path[-1].startswith(("NV ", "EV ")) for path, _, _ in rows)
-        )
+        values = [
+            (old, new) for path, old, new in rows if path[-1].startswith(("NV ", "EV "))
+        ]
+        self.assertTrue(values)
+        self.assertTrue(all(old == "Unknown" for old, _ in values))
         self.assertTrue(any("inconclusive" in path[-1] for path, _, _ in rows))
 
     def test_incomplete_live_node_and_empty_manifest_are_inconclusive(self):
         self.state.nv_values.clear()
         self.state.nv_progress = DiscoveryProgress.INCOMPLETE
         rows = self.rows()
-        self.assertFalse(any(path[-1] == "NV 1" for path, _, _ in rows))
+        self.assertIn(
+            (
+                ("Node configurations", "Node 42", "Node variables", "NV 1"),
+                "0",
+                "Unknown",
+            ),
+            rows,
+        )
         self.assertTrue(any("inconclusive" in path[-1] for path, _, _ in rows))
         self.manifest.write_text(
             yaml.safe_dump(
@@ -178,3 +187,32 @@ class LayoutBackupCompareTests(unittest.TestCase):
         self.assertEqual(tree.topLevelItem(0).child(0).text(0), "Node 256")
         event = tree.topLevelItem(1).child(0).child(0)
         self.assertEqual([event.text(i) for i in range(3)], ["Event 12", "Old", "New"])
+
+    def test_layout_one_sided_events_include_zero_evs_in_both_directions(self):
+        del self.state.event_identities[2]
+        self.state.event_identities[9] = (258, 2)
+        self.state.ev_values[9] = {1: 0, 2: 13, 3: None}
+        rows = self.rows()
+        prefix = ("Node configurations", "Node 42", "Consumed events")
+        self.assertFalse(
+            any(path == prefix + ("258:2", "Event") for path, _, _ in rows)
+        )
+        self.assertIn((prefix + ("258:2", "EV 1"), "—", "0"), rows)
+        self.assertFalse(any(path == prefix + ("0:12", "Event") for path, _, _ in rows))
+        self.assertIn((prefix + ("0:12", "EV 1"), "5", "—"), rows)
+
+    def test_layout_accepts_caller_headings(self):
+        backup = yaml.safe_load(self.manifest.read_text())
+        dialog = LayoutBackupCompare(
+            backup,
+            self.states,
+            {},
+            None,
+            manifest_path=self.manifest,
+            headings=("Before", "After"),
+        )
+        self.addCleanup(dialog.close)
+        tree = dialog.findChild(QTreeWidget)
+        self.assertEqual(
+            [tree.headerItem().text(i) for i in range(3)], ["Item", "Before", "After"]
+        )

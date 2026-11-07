@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QApplication, QTreeWidget
 from workbench.backup_compare import BackupCompare
 from workbench.backup_view import BackupView
 from workbench.cbus_service import DiscoveryProgress, NodeState
-from workbench.node_backup_diff import compare_live_node
+from workbench.node_backup_diff import compare_live_configuration, compare_live_node
 from workbench.node_backup_files import node_backup
 from workbench.pnn import Pnn
 
@@ -40,11 +40,11 @@ class LiveBackupCompareTests(unittest.TestCase):
         event = tree.topLevelItem(0).child(0)
         self.assertEqual(
             [event.child(0).text(column) for column in range(3)],
-            ["EV 1", "0", "Absent"],
+            ["EV 1", "0", "—"],
         )
         self.assertEqual(
             [event.child(1).text(column) for column in range(3)],
-            ["EV 2", "Absent", "0"],
+            ["EV 2", "—", "0"],
         )
         self.assertIn("inconclusive", tree.topLevelItem(1).text(0))
 
@@ -101,3 +101,72 @@ class LiveBackupCompareTests(unittest.TestCase):
         self.backup["events"] = []
         self.backup["complete"] = False
         self.assertEqual(compare_live_node(self.state, self.backup), ([], True))
+
+    def test_one_sided_event_details_and_supplied_results_headings(self):
+        from copy import deepcopy
+
+        from workbench.configuration_compare import compare_configurations
+
+        present = deepcopy(self.backup)
+        present["events"] = [
+            {"nodeNumber": 258, "eventNumber": 2, "eventVariables": [0, None, 13]}
+        ]
+        absent = deepcopy(present)
+        absent["events"] = []
+        for left, right, expected in (
+            (
+                absent,
+                present,
+                [["EV 1", "—", "0"], ["EV 3", "—", "13"]],
+            ),
+            (
+                present,
+                absent,
+                [["EV 1", "0", "—"], ["EV 3", "13", "—"]],
+            ),
+        ):
+            result = compare_configurations(left, right)
+            dialog = BackupCompare(
+                None, left, comparison=result, headings=("Requested", "Actual")
+            )
+            self.addCleanup(dialog.close)
+            tree = dialog.findChild(QTreeWidget)
+            self.assertEqual(
+                [tree.headerItem().text(i) for i in range(3)],
+                ["Item", "Requested", "Actual"],
+            )
+            event = tree.topLevelItem(0).child(0)
+            self.assertTrue(event.isExpanded())
+            self.assertEqual(event.text(0), "258:2")
+            self.assertEqual(
+                [
+                    [event.child(i).text(c) for c in range(3)]
+                    for i in range(event.childCount())
+                ],
+                expected,
+            )
+
+    def test_live_confirmation_survives_partial_snapshot(self):
+        from workbench.configuration_compare import ABSENT, EVENT_ABSENT, UNKNOWN
+
+        # Enumeration is complete, but an unrelated NV and EV remain unread.
+        self.state.nv_values.clear()
+        self.state.ev_values[7] = {1: None, 2: 0}
+        del self.state.event_identities[2]
+        self.state.stored_event_count = 1
+        self.assertFalse(node_backup(self.state)["complete"])
+        result = compare_live_configuration(self.state, self.backup)
+        rows = {(row.event, row.label): row for row in result.rows}
+        self.assertEqual(rows[((256, 101), "EV 1")].right, ABSENT)
+        self.assertEqual(rows[((256, 101), "EV 3")].right, UNKNOWN)
+        self.assertEqual(rows[((0, 12), "Event")].right, EVENT_ABSENT)
+        differences, inconclusive = compare_live_node(self.state, self.backup)
+        self.assertTrue(inconclusive)
+        self.assertEqual(
+            differences,
+            [
+                ("Consumed events/0:12", "Event", "Present", None),
+                ("Consumed events/256:101", "EV 1", 0, None),
+                ("Consumed events/256:101", "EV 2", None, 0),
+            ],
+        )

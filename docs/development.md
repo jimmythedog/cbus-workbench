@@ -154,10 +154,28 @@ layout backup. Errors propagate; earlier node files remain, with no rollback.
 Layout View resolves each manifest node number using the shared filename and checks
 node identity and ownership. Node View shows the ownership flag; ordinary node View
 and Compare use the same loader for standalone and associated files.
-`LayoutBackupCompare` retains its prototype path and uses `compare_live_node()`
-for matching discovered nodes in saved YAML layouts. View and Compare share the
-associated-file loader, including identity and ownership checks. Differences retain
-the existing node/section/event hierarchy. Incomplete saved or current values make
+Node and layout Compare use the Qt-independent `compare_configurations()` for
+matching node configurations. It accepts two existing backup-format dictionaries
+and returns rows with explicit confirmed, absent, event-absent and unknown values,
+plus equal/different/unknown outcomes and an uncertainty flag. Event identities
+are `(node number, event number)`, never table slots. The live adapter supplies
+completed-enumeration evidence and sparse EV mappings, preserving confirmed
+absence even when the serialized snapshot is incomplete. No YAML fields change.
+
+    backup dictionary + current snapshot + live confirmation evidence
+                         -> structured comparison
+                              +-> existing tree (caller-supplied headings)
+                              +-> compare_live_node() legacy tuples -> Restore
+
+The tree shows confirmed differences, including numeric EVs under one-sided
+events; equal and unknown rows remain available in the result, with uncertainty
+shown as a summary. Event absence renders as `—`; confirmed EV absence within an
+existing event renders as `Absent`. `compare_live_node()` retains its existing
+confirmed-difference tuples and inconclusive flag for restore verification,
+without adding one-sided EV detail tuples. Prototype comparisons remain unchanged.
+
+View and Compare share the associated-file loader, including identity and ownership
+checks. Differences retain the existing node/section/event hierarchy. Incomplete saved or current values make
 the result inconclusive while confirmed differences remain visible. A node seen on
 only one side is also inconclusive: neither a manifest nor the current connection
 proves absence elsewhere on the logical layout. Layout Restore and Delete remain disabled.

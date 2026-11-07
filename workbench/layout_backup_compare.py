@@ -9,15 +9,23 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from .backup_diff_tree import add_node_differences
+from .backup_diff_tree import add_node_differences, set_comparison_headings
 from .logging_config import trace
-from .node_backup_diff import compare_live_node, compare_node
+from .node_backup_diff import compare_live_configuration, compare_node
 from .node_backup_files import load_layout_node
 
 
 class LayoutBackupCompare(QDialog):
     def __init__(
-        self, backup, nodes, events, node_backups, parent=None, *, manifest_path=None
+        self,
+        backup,
+        nodes,
+        events,
+        node_backups,
+        parent=None,
+        *,
+        manifest_path=None,
+        headings=("Backup", "Current"),
     ):
         super().__init__(parent)
 
@@ -27,7 +35,7 @@ class LayoutBackupCompare(QDialog):
         layout = QVBoxLayout(self)
 
         tree = QTreeWidget()
-        tree.setHeaderLabels(["Item", "Backup", "Current"])
+        set_comparison_headings(tree, headings)
         header = tree.header()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -73,7 +81,8 @@ class LayoutBackupCompare(QDialog):
                     ],
                 )
             else:
-                differences, partial = compare_live_node(current[number], snapshot)
+                differences = compare_live_configuration(current[number], snapshot)
+                partial = differences.inconclusive
                 add_node_differences(node_item, differences)
                 inconclusive = inconclusive or partial
                 if partial:

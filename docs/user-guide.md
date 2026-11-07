@@ -210,7 +210,9 @@ restarting. Reconnecting replaces these saved-only entries as nodes are discover
 Choose **Compare** while connected to compare a node backup with current discovered
 values. Events are matched by node number and event number. Unknown values make
 the result inconclusive rather than definite differences; complete backups
-distinguish absent EVs from unread values.
+distinguish absent EVs from unread values. Expand an event present on only one
+side to inspect its confirmed EV values, including zero. The missing-event side
+shows `—`; `Absent` means a confirmed absent EV within an existing event.
 
 For a layout backup, **View** shows each saved node's discovery status, NVs and
 events. **Compare** compares its associated node files with current discovery.
