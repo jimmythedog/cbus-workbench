@@ -48,6 +48,7 @@ class NodeDetails(QWidget):
         self.desired_configuration = None
         self.failure_report = None
         self.saving_configuration = False
+        self.layout_restoring = False
 
         layout = QVBoxLayout(self)
 
@@ -713,6 +714,8 @@ class NodeDetails(QWidget):
             self.backup_workflow.restore(self.node)
 
     def show_restore_progress(self, node_number: int, message: str) -> None:
+        if self.layout_restoring:
+            return
         self.update_backup_buttons()
         saving = self.saving_configuration or (
             self.failure_report is not None
@@ -730,6 +733,8 @@ class NodeDetails(QWidget):
         self.events_edit_button.setEnabled(False)
 
     def finish_restore(self, node_number: int, success: bool, message: str) -> None:
+        if self.layout_restoring:
+            return
         saving = self.saving_configuration
         if self.failure_report is not None and self.failure_report.running:
             saving = self.failure_report.saving

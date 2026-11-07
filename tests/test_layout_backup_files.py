@@ -173,8 +173,8 @@ class LayoutBackupTests(unittest.TestCase):
         self.assertEqual(row.text(1), "")
         self.view.layout_backups.setCurrentItem(row)
         self.assertTrue(self.view.backup_buttons["View"].isEnabled())
-        for name in ("Restore", "Delete"):
-            self.assertFalse(self.view.backup_buttons[name].isEnabled())
+        self.assertTrue(self.view.backup_buttons["Restore"].isEnabled())
+        self.assertFalse(self.view.backup_buttons["Delete"].isEnabled())
 
         def inspect_layout(dialog):
             tree = dialog.findChild(QTreeWidget)

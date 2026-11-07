@@ -56,6 +56,7 @@ class NodeState:
 
 
 class CbusService(QObject):
+    presence_checked = Signal(int, bool, int)  # Node, responded, module type.
     node_refresh_finished = Signal(int)
     discovery_status_changed = Signal(str)
     node_discovered = Signal(Pnn)
@@ -233,6 +234,26 @@ class CbusService(QObject):
             self._outstanding_request
             or self._request_queue
             or self.refreshing_node is not None
+        )
+
+    def check_presence(self, numbers) -> None:
+        """Queue read-only RQNPN(3) checks without starting discovery."""
+        if self._closed or self.connection.state != "Connected":
+            raise ValueError("Presence checks require an active connection")
+        if self.writes_busy() or self.discovery_pending():
+            raise ValueError("Wait for discovery or configuration writes to finish")
+        self._request_queue.extend(("presence", number, 3) for number in numbers)
+        self._send_next_request()
+
+    def cancel_presence_checks(self) -> None:
+        """Drop unsent checks; let an in-flight read drain before reusing the wire."""
+        self._request_queue = deque(
+            request for request in self._request_queue if request[0] != "presence"
+        )
+        trace(
+            logger,
+            "Unsent presence checks cancelled",
+            extra={"fields": {"layout": self.connection.layout_name}},
         )
 
     def rediscover_node(self, node_number: int) -> None:
@@ -474,6 +495,8 @@ class CbusService(QObject):
     def _set_progress(
         self, kind: str, node_number: int, progress: DiscoveryProgress
     ) -> None:
+        if kind == "presence":
+            return
         state = self.node_states[node_number]
         if kind == "parameter":
             if state.parameter_progress == progress:
@@ -675,6 +698,23 @@ class CbusService(QObject):
             self.node_state_updated.emit(pnn.node_number)
 
     def _receive_paran(self, node_number: int, index: int, value: int) -> None:
+        if index == 3 and self._outstanding_request == ("presence", node_number, 3):
+            self._request_timer.stop()
+            self._outstanding_request = None
+            trace(
+                logger,
+                "Presence confirmed",
+                extra={
+                    "fields": {
+                        "layout": self.connection.layout_name,
+                        "node_number": node_number,
+                        "module_type": value,
+                    }
+                },
+            )
+            self.presence_checked.emit(node_number, True, value)
+            self._send_next_request()
+            return
         if self.ev_write.receive_mode(node_number, index, value):
             return
         state = self.node_states.get(node_number)
@@ -1056,9 +1096,13 @@ class CbusService(QObject):
             elif kind == "event":
                 fields["request"] = "RQEVN" if index == 0 else "NERD"
             else:
-                fields["parameter_index" if kind == "parameter" else "nv_index"] = index
+                fields[
+                    "parameter_index"
+                    if kind in ("parameter", "presence")
+                    else "nv_index"
+                ] = index
             try:
-                if kind == "parameter":
+                if kind in ("parameter", "presence"):
                     self.request_parameter(node_number, index)
                 elif kind == "nv":
                     self.request_nv(node_number, index)
@@ -1077,6 +1121,8 @@ class CbusService(QObject):
                 )
                 logger.error("Automatic requests stopped", extra={"fields": fields})
                 self._set_progress(kind, node_number, DiscoveryProgress.INCOMPLETE)
+                if kind == "presence":
+                    self.presence_checked.emit(node_number, False, 0)
                 if kind == "parameter":
                     self._queue_event_count(node_number)
                 continue
@@ -1179,12 +1225,16 @@ class CbusService(QObject):
                     self.node_states[node_number].event_identities
                 )
         else:
-            fields["parameter_index" if kind == "parameter" else "nv_index"] = index
+            fields[
+                "parameter_index" if kind in ("parameter", "presence") else "nv_index"
+            ] = index
         logger.warning(
             "Automatic request timed out; remaining requests of this kind abandoned",
             extra={"fields": fields},
         )
         self._set_progress(kind, node_number, DiscoveryProgress.INCOMPLETE)
+        if kind == "presence":
+            self.presence_checked.emit(node_number, False, 0)
         if kind == "parameter":
             self._queue_event_count(node_number)
         self._send_next_request()

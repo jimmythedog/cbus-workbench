@@ -19,7 +19,9 @@ Early development. Currently implemented:
   Uncertain writes or learn-mode state require reconnecting before another attempt.
 - Messages / Diagnostics, raw GridConnect frame sending and persistent logs.
 
-Layout backup restoration and backup deletion are not available yet.
+Layout Restore confirms and restores selected online nodes sequentially, then shows
+remaining differences, unknown values and offline nodes. Retry reads hardware afresh
+and applies outstanding differences when safe. Backup deletion is not available yet.
 See [Requirements](REQUIREMENTS.md) for intended capabilities, including planned work.
 
 ## Installation and running

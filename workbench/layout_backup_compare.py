@@ -4,12 +4,14 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QHeaderView,
+    QLabel,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
 )
 
 from .backup_diff_tree import add_node_differences, set_comparison_headings
+from .configuration_compare import ValueState, compare_configurations
 from .logging_config import trace
 from .node_backup_diff import compare_live_configuration, compare_node
 from .node_backup_files import load_layout_node
@@ -26,13 +28,26 @@ class LayoutBackupCompare(QDialog):
         *,
         manifest_path=None,
         headings=("Backup", "Current"),
+        snapshots=None,
+        offline=(),
+        message="",
+        connection=None,
+        retry_available=None,
+        retry_signals=(),
     ):
         super().__init__(parent)
+        self.retry_available = retry_available
+        self.retry_button = None
 
         self.setWindowTitle("Layout backup — Compare with current")
         self.resize(750, 500)
 
         layout = QVBoxLayout(self)
+
+        if message:
+            label = QLabel(message)
+            label.setWordWrap(True)
+            layout.addWidget(label)
 
         tree = QTreeWidget()
         set_comparison_headings(tree, headings)
@@ -43,7 +58,13 @@ class LayoutBackupCompare(QDialog):
         tree.setColumnWidth(0, 250)
         layout.addWidget(tree)
 
-        if manifest_path is not None:
+        if snapshots is not None:
+            self._compare_selected(tree, snapshots, nodes, offline)
+            self.selected_snapshots = snapshots
+            self.tree = tree
+            if connection is not None:
+                connection.state_changed.connect(self.connection_changed)
+        elif manifest_path is not None:
             self._compare_live(tree, backup, nodes, manifest_path)
         else:
             self._compare_prototype(tree, backup, nodes, events, node_backups)
@@ -53,7 +74,59 @@ class LayoutBackupCompare(QDialog):
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
+        if snapshots is not None and retry_available is not None:
+            self.retry_button = buttons.addButton(
+                "Retry", QDialogButtonBox.ButtonRole.ActionRole
+            )
+            self.retry_button.clicked.connect(self.accept)
+            for signal in retry_signals:
+                signal.connect(self.update_retry)
+            self.update_retry()
         layout.addWidget(buttons)
+
+    def update_retry(self, *_args):
+        if self.retry_button is not None:
+            self.retry_button.setVisible(self.needs_retry)
+            self.retry_button.setEnabled(self.needs_retry and self.retry_available())
+
+    def connection_changed(self, state):
+        if state != "Connected":
+            self.tree.clear()
+            self._compare_selected(
+                self.tree, self.selected_snapshots, [], self.selected_snapshots
+            )
+        self.update_retry()
+
+    def _compare_selected(self, tree, snapshots, states, offline):
+        """Use the same comparison engine; unread targets have unknown actual data."""
+        self.needs_retry = False
+        current = {state.identity.node_number: state for state in states}
+        for number, snapshot in snapshots.items():
+            item = QTreeWidgetItem(tree, [f"Node {number}"])
+            if number in offline:
+                QTreeWidgetItem(item, ["Offline"])
+            if number in current:
+                comparison = compare_live_configuration(current[number], snapshot)
+            else:
+                unknown = {"node": number, "complete": False, "nvs": [], "events": []}
+                comparison = compare_configurations(snapshot, unknown)
+            self.needs_retry |= any(
+                row.outcome == "different"
+                or (
+                    row.left.state != ValueState.UNKNOWN
+                    and row.right.state == ValueState.UNKNOWN
+                )
+                for row in comparison.rows
+            )
+            add_node_differences(item, comparison)
+            if comparison.inconclusive:
+                if number not in offline and not any(
+                    row.outcome == "unknown" for row in comparison.rows
+                ):
+                    QTreeWidgetItem(item, ["Unknown"])
+            elif not any(row.outcome != "equal" for row in comparison.rows):
+                QTreeWidgetItem(item, ["No differences found"])
+            item.setExpanded(True)
 
     def _compare_live(self, tree, backup, states, manifest_path):
         current = {state.identity.node_number: state for state in states}

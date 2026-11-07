@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -24,6 +25,8 @@ from .layout_backup_workflow import create_layout_backup
 from .layout_backups import LayoutBackups
 from .layout_events import LayoutEvents
 from .layout_restore_dialog import LayoutRestoreDialog
+from .layout_restore_selection import LayoutRestoreSelection
+from .layout_restore_workflow import LayoutRestoreWorkflow
 from .node_snapshot import create_node_snapshot, restore_node_snapshot
 from .node_view import NodeView
 
@@ -167,7 +170,7 @@ class LayoutView(QWidget):
         self.backup_buttons["New"].setEnabled(self.connected)
         self.backup_buttons["View"].setEnabled(selected)
         self.backup_buttons["Compare"].setEnabled(self.connected and selected)
-        self.backup_buttons["Restore"].setEnabled(False)
+        self.backup_buttons["Restore"].setEnabled(self.connected and selected)
         self.backup_buttons["Delete"].setEnabled(False)
 
     def set_connected(self, connected):
@@ -304,6 +307,41 @@ class LayoutView(QWidget):
             window.statusBar().showMessage("Layout backup deleted", 5000)
 
     def restore_backup(self):
+        selected = self.layout_backups.selectedItems()
+        path = selected[0].data(0, Qt.ItemDataRole.UserRole) if selected else None
+        if isinstance(path, Path):
+            service = self.node_view.details.cbus_service
+            if service is None or service.connection.state != "Connected":
+                return
+            try:
+                selection = LayoutRestoreSelection(self, service, path)
+                try:
+                    selection.start()
+                    accepted = selection.dialog.exec() == QDialog.DialogCode.Accepted
+                    chosen = selection.dialog.selected_nodes()
+                    selection.dispose()
+                    if accepted and chosen:
+                        LayoutRestoreWorkflow(
+                            self,
+                            service,
+                            {number: selection.backups[number] for number in chosen},
+                        ).run()
+                finally:
+                    selection.dispose()
+                    selection.dialog.deleteLater()
+                    selection.deleteLater()
+            except (ValueError, OSError, yaml.YAMLError) as error:
+                logging.getLogger("workbench.ui").exception(
+                    "Layout restore selection failed",
+                    extra={
+                        "fields": {"path": str(path), "layout": self.logical_layout}
+                    },
+                )
+                QMessageBox.warning(self, "Cannot check layout backup", str(error))
+            return
+        self.restore_prototype_backup()
+
+    def restore_prototype_backup(self):
         selected = self.layout_backups.selectedItems()
         if not selected:
             return

@@ -292,7 +292,37 @@ remaining differences and unknown values. **Retry**, when available, reads hardw
 afresh and applies only outstanding differences. Follow any safety blocker or
 learn-mode warning before reconnecting and comparing again.
 
-Layout restoration remains unavailable.
+For a saved layout backup, **Restore** opens an eligibility selection. All backed-up nodes start as **Checking…**. Responding eligible nodes
+become **Online** and checked; offline nodes and nodes with supported compatibility
+mismatches remain disabled. A single mismatch appears beside the node; multiple
+issues appear in its tooltip. **Select All / Select None** affects eligible nodes
+only. Closing the dialog stops unsent checks. Disconnecting disables all rows.
+
+**Restore selected** asks for explicit confirmation before any hardware writes.
+Incomplete backups require acknowledgement that uncaptured configuration may be removed. Backups do not identify manufacturer or firmware;
+confirm that they belong to the connected modules.
+
+Nodes are restored sequentially. Each target is checked again and read afresh before
+restoration. Independent node failures do not stop other selected nodes, but existing
+protocol-safety blockers prevent further writes. Do not use another configuration
+tool during the operation. There is no rollback.
+
+At completion, Workbench reads available hardware again and shows **Desired vs Actual**
+with remaining differences, **No differences found** for confirmed matches,
+**Unknown** for unconfirmed values and **Offline** for unreachable nodes. Blocked and
+unattempted selected nodes remain in the comparison. Concise warnings identify
+unresolved protocol safety or learn mode; detailed failure explanations are in
+Diagnostics.
+
+When differences or unknown values remain, **Retry** repeats the same restoration
+workflow against the original desired configuration. It first reads the hardware
+afresh; the existing node restore applies only outstanding changes, then the layout
+is read again for an updated comparison. Retry occurs only when clicked. It is hidden
+for a conclusive match and disabled while disconnected, busy, or blocked by unresolved
+protocol safety or reported learn mode. An offline node does not disable Retry while
+the connection is active; presence and identity are revalidated before writes. Follow any safety
+warning before reconnecting and comparing again; a report from a disconnected service
+cannot retry through a replacement connection. Ordinary backup Compare has no Retry.
 
 ## Diagnostics and application directories
 

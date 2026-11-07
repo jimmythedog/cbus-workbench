@@ -65,6 +65,7 @@ class LayoutBackupCompareTests(unittest.TestCase):
         rows = []
 
         def inspect(dialog):
+            self.assertIsNone(dialog.retry_button)
             tree = dialog.findChild(QTreeWidget)
             self.assertEqual(
                 [tree.headerItem().text(i) for i in range(3)],

@@ -118,7 +118,7 @@ format. `NodeDetails` retains the selected live state and logical layout;
 `NodeBackupWorkflow` requests acknowledgement for incomplete discovery before
 writing. Filenames provide timestamps; listing reads actual files from the Qt
 Data directory. Live node restore uses the verified writers as described below;
-backup deletion and layout restore remain disabled.
+backup deletion remains disabled; Layout Restore coordinates the existing single-node engine for selected nodes.
 
 Live layout saves capture the selected view's service states with the same
 `node_backup` serializer. The manifest contains `format_version`, `complete`,
@@ -178,7 +178,73 @@ View and Compare share the associated-file loader, including identity and owners
 checks. Differences retain the existing node/section/event hierarchy. Incomplete saved or current values make
 the result inconclusive while confirmed differences remain visible. A node seen on
 only one side is also inconclusive: neither a manifest nor the current connection
-proves absence elsewhere on the logical layout. Layout Restore and Delete remain disabled.
+proves absence elsewhere on the logical layout. Delete remains disabled.
+
+Layout Restore loads the manifest and associated node files, then queues one
+read-only RQNPN(3) per member through CbusService. The `presence` request kind
+shares the sender, PARAN decoder and timeout but does not change discovery progress
+or trigger NV/event discovery. Eligibility uses the response plus existing discovered
+capabilities, never invented hardware metadata. NodeRestore and its pre-write checks
+are unchanged. Selection hands the original selected dictionaries to the layout
+workflow, which requires explicit confirmation before restoration. LayoutBackupCompare
+is shown only after the batch to report the resulting configuration.
+
+    manifest members -> Checking -> shared FIFO RQNPN(3)
+                                      |             |
+                                  PARAN(3)        timeout
+                                      |             |
+                              capability checks   Offline
+                                      |
+                              Online / disabled reason
+
+Closing detaches the observer and removes unsent presence requests; an in-flight
+read drains normally so the wire is not reused prematurely. Disconnecting also
+disables previously eligible rows. The selected view's service is used explicitly;
+a responding node without a discovered identity is disabled, not guessed.
+
+After confirmation, the coordinator uses a straightforward loop and local Qt event
+loops to wait for existing service completion signals. This keeps network processing
+responsive while the existing window is disabled to prevent competing user operations.
+Signal observers detach before advancing; there is no second restore planner or
+retry algorithm. NodeDetails suppresses its single-node failure popup while the batch
+owns reporting. A node failure is recorded and the next selected node is considered;
+NodeRestore's existing safety gates remain authoritative.
+
+    selected original snapshots -> explicit confirmation
+                                                    |
+                         for each selected node: RQNPN(3) + rediscover_node
+                                                    |
+                                    NodeRestore.begin -> finished outcome
+                                                    |
+                                    next node (including after failure)
+                                                    |
+                         fresh read of each available selected target
+                                                    |
+                         LayoutBackupCompare (differences / unknown / offline)
+                                                    |
+                                     explicit Retry, when safe
+                                                    |
+                                     repeat the same restore pass
+
+The original desired dictionaries are retained throughout, without reloading files
+or replacing them with hardware readbacks. Final reads clear old configuration via
+existing rediscovery. Unavailable nodes are compared against an unknown partial
+configuration through the same comparison engine. Disconnecting an open report
+also marks selected nodes offline and replaces actual values with unknowns.
+The comparison displays confirmed matches, differences and unknown values directly;
+operation outcomes remain in diagnostics. Only protocol-safety or learn-mode warnings
+are shown separately because configuration equality cannot establish protocol safety.
+
+Layout results alone may expose Retry. The dialog uses the existing comparison
+result's differences/uncertainty to decide whether to show it; service signals update
+connection, busy and writer/learn-mode safety availability without polling. Offline
+nodes may be retried on an active connection; target identity is revalidated by
+`read_target()` before writes rather than used to gate the Retry button.
+Retry closes the report and repeats `restore_selected()` on the same workflow object,
+retaining original desired dictionaries and target identities. Each pass clears its
+prior actual-state collection, reads targets afresh and delegates differences to
+NodeRestore. Final reads rebuild the comparison; there is no automatic retry or
+retry-specific write orchestration. Ordinary layout backup comparison is unchanged.
 
 Incomplete records use `complete: false` and positional YAML `null` for
 unconfirmed known values. Descriptions are omitted when blank. Live snapshots do
@@ -350,7 +416,8 @@ signals update availability without polling. Closing or replacing a report
 disconnects its observers and cancels the deferred write handoff. Read-only
 rediscovery may finish, but cannot start a Retry for a closed report; an already
 active writer retains responsibility for finishing protocol cleanup. There is no
-automatic retry, rollback, independent write path or layout-level retry.
+automatic retry, rollback or independent write path. Layout Retry reuses the same
+NodeRestore engine through the layout workflow described above.
 
 ### Application settings and connections
 
