@@ -271,6 +271,8 @@ class NodeRestore(QObject):
         self.schedule("restoring events")
 
     def fail(self, reason: str) -> None:
+        if self.failure and reason != self.failure:
+            reason = f"{self.failure} Resulting configuration refresh failed: {reason}"
         self.failure = reason
         self.log(
             "Configuration application stopped; refreshing resulting configuration",
@@ -329,14 +331,15 @@ class NodeRestore(QObject):
                 self.events_removed += self.service.ev_write.removed
             self.finish(
                 False,
-                "Connection ended; resulting configuration could not be fully verified. Check learn mode if EV teaching was interrupted.",
+                (self.failure + " " if self.failure else "")
+                + "Connection ended; resulting configuration could not be fully verified. Check learn mode if EV teaching was interrupted.",
             )
 
     def finish(self, success: bool, message: str) -> None:
         self.timer.stop()
         self.active = False
         if not success:
-            message = f"Partial restoration: {self.nvs_verified} NV writes and {self.evs_verified} EV writes verified; {self.removals_transmitted} event removals transmitted, {self.events_removed} event removals verified. {message} Reconnect and compare before retrying."
+            message = f"Partial restoration: {self.nvs_verified} NV writes and {self.evs_verified} EV writes verified; {self.removals_transmitted} event removals transmitted, {self.events_removed} event removals verified. {message}"
         if self.nvs_recovered:
             message += (
                 f" Verification required recovery for {self.nvs_recovered} NV write(s)."

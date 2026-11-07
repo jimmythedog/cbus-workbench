@@ -13,6 +13,10 @@ Early development. Currently implemented:
   shared editing session and verified application of the complete configuration.
 - Node and layout backups, optional descriptions, incomplete-backup warnings,
   offline viewing, comparison and node restoration with final verification.
+  Node backup New, Compare and Restore actions remain disabled throughout restoration.
+- Failed node Save/Restore reports requested versus actual differences and unknown
+  values, with optional Retry after fresh discovery when the connection is safe.
+  Uncertain writes or learn-mode state require reconnecting before another attempt.
 - Messages / Diagnostics, raw GridConnect frame sending and persistent logs.
 
 Layout backup restoration and backup deletion are not available yet.

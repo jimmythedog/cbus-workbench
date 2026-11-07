@@ -301,6 +301,34 @@ The coordinator advances through a single-shot Qt timer so writer completion
 callbacks finish their queue cleanup before the next operation begins. TRACE
 records restore stages, target, write counts, failure reasons and final differences.
 
+Failed editor Save and backup Restore meet in `NodeDetails.finish_restore()`.
+`NodeFailureReport` retains a copy of the coordinator's original backup dictionary
+before editor cleanup, and uses `compare_live_configuration()` with the latest
+live state. The shared `BackupCompare` tree hides equal rows; operation errors
+remain separate text. After transport loss cached values are labelled unknown
+with their last-confirmed value, including formerly matching rows.
+
+The dialog only calls an optional action. Its owning report keeps Retry tied to
+the same service, target identity and configuration operation. Existing writer
+safety locks still require reconnecting after uncertain transactions; a report
+from the old connection cannot retry on a replacement service. Otherwise:
+
+```text
+Retry -> connection/identity/ownership/safety checks
+      -> full node rediscovery (no writes)
+      -> repeat checks after discovery releases the wire
+      -> NodeRestore.begin(original requested dictionary)
+      -> existing reconciliation/writers -> same updated comparison dialog
+```
+
+Retry is disabled during this attempt and after verified success. Another
+configuration application invalidates older reports. Existing service/connection
+signals update availability without polling. Closing or replacing a report
+disconnects its observers and cancels the deferred write handoff. Read-only
+rediscovery may finish, but cannot start a Retry for a closed report; an already
+active writer retains responsibility for finishing protocol cleanup. There is no
+automatic retry, rollback, independent write path or layout-level retry.
+
 ### Application settings and connections
 
 `workbench.paths` resolves Qt's application directories for `cbus-workbench`;

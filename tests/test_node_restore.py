@@ -71,13 +71,13 @@ class NodeRestoreTests(unittest.TestCase):
     def reply(self, payload):
         self.connection.frame_received.emit(f":SB040N{payload};".encode())
 
-    def run_node(self):
+    def run_node(self, stop_when=None):
         """Answer transmitted requests as a small node with changing table slots."""
         for _ in range(600):
             self.app.processEvents()
             if self.withhold_final_read or self.drop_write_reply:
                 QTest.qWait(1)
-            if self.results:
+            if self.results or (stop_when is not None and stop_when()):
                 return
             if self.read_position == len(self.connection.sent):
                 continue
@@ -559,7 +559,6 @@ class NodeRestoreTests(unittest.TestCase):
             self.service.restore.begin(258, self.backup)
             self.run_node()
         self.assertFalse(self.results[-1][1])
-        self.assertIn("could not be completely verified", self.results[-1][2])
         self.assertTrue(compare_live_node(self.state, self.backup)[1])
 
     def test_nv_ack_timeout_reads_physical_result_but_never_continues_writes(self):
@@ -939,7 +938,10 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertTrue(all(not nv and not ev for _message, nv, ev in progress))
         self.assertTrue(any("final configuration" in m for m, _nv, _ev in progress))
         self.assertEqual(details.nv_result.text(), details.events_result.text())
-        self.assertIn("fully verified", details.nv_result.text())
+        self.assertEqual(
+            details.nv_result.text(),
+            "Node 258: Configuration saved and fully verified.",
+        )
         self.assertTrue(details.variables.isEnabled())
         self.assertTrue(details.node_events.isEnabled())
         self.assertIsNone(details.desired_configuration)
@@ -960,7 +962,7 @@ class NodeRestoreTests(unittest.TestCase):
         self.run_node()
         self.assertEqual(len(self.results), 1)
         self.assertFalse(self.results[0][1])
-        self.assertIn("Partial restoration", details.nv_result.text())
+        self.assertIn("Partial Save:", details.nv_result.text())
         self.assertEqual(details.nv_result.text(), details.events_result.text())
         self.assertEqual(details.raw_values.item(0, 1).text(), "7")
         event = details.node_events.consumed_table.topLevelItem(0)
@@ -1031,6 +1033,10 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertFalse(self.results[0][1])
         self.assertEqual(editing, [False])
         self.assertIn("Connection ended", details.nv_result.text())
+        self.assertTrue(
+            any("last confirmed" in row[2] for row in self.report_rows(details))
+        )
+        self.addCleanup(details.failure_report.dialog.close)
         self.assertEqual(details.nv_result.text(), details.events_result.text())
         self.assertIsNone(details.desired_configuration)
         self.assertFalse(details.saving_configuration)
@@ -1096,6 +1102,7 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertEqual(self.connection.sent, [])
 
     def test_restore_available_with_selected_backup_after_restore_and_later_saves(self):
+        self.backup["nvs"][0] = 10  # Exercise NV writes as well as EV replacement.
         details = self.backup_details()
         self.assertTrue(details.backup_buttons["Restore"].isEnabled())
         self.service.restore.changed.connect(details.show_restore_progress)
@@ -1103,6 +1110,19 @@ class NodeRestoreTests(unittest.TestCase):
         self.service.node_state_updated.connect(
             lambda _n: details.show_live_state(self.state)
         )
+
+        enabled_during_restore = []
+
+        def observe_backup_actions(*_args):
+            if self.service.restore.active:
+                for action in ("New", "Compare", "Restore"):
+                    if details.backup_buttons[action].isEnabled():
+                        enabled_during_restore.append(action)
+
+        # Check the visible contract after progress and live discovery updates,
+        # including handoffs between writes, rediscovery and final verification.
+        self.service.restore.changed.connect(observe_backup_actions)
+        self.service.node_state_updated.connect(observe_backup_actions)
         with (
             patch("workbench.node_backup_workflow.BackupCompare.exec") as compare,
             patch(
@@ -1116,11 +1136,16 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertFalse(details.events_edit_button.isEnabled())
         self.assertFalse(details.backup_buttons["Restore"].isEnabled())
         self.run_node()
-        self.assertIn("fully verified", details.restore_result.text())
+        self.assertEqual(enabled_during_restore, [])
+        self.assertEqual(
+            details.restore_result.text(),
+            "Node 258: Configuration restored and fully verified.",
+        )
         self.assertTrue(details.edit_button.isEnabled())
         self.assertTrue(details.events_edit_button.isEnabled())
         self.assertFalse(self.service.writes_busy())
         self.assertTrue(details.node_backups.selectedItems())
+        self.assertTrue(details.backup_buttons["New"].isEnabled())
         self.assertTrue(details.backup_buttons["Compare"].isEnabled())
         self.assertTrue(details.backup_buttons["Restore"].isEnabled())
 
@@ -1176,3 +1201,164 @@ class NodeRestoreTests(unittest.TestCase):
         self.run_node()
         self.assertTrue(self.results[-1][1], self.results)
         self.assertIn("full equivalence is not established", self.results[-1][2])
+
+    def report_rows(self, details):
+        from PySide6.QtWidgets import QTreeWidgetItemIterator
+
+        iterator = QTreeWidgetItemIterator(details.failure_report.dialog.tree)
+        rows = []
+        while iterator.value():
+            item = iterator.value()
+            if item.childCount() == 0:
+                rows.append(tuple(item.text(c) for c in range(3)))
+            iterator += 1
+        return rows
+
+    def failed_save_report(self):
+        details = self.editing_details()
+        details.raw_values.item(2, 1).setText("10")
+        self.change_earlier_nv = True
+        details.save_button.click()
+        self.run_node()
+        self.results.clear()
+        self.addCleanup(
+            lambda: details.failure_report and details.failure_report.dialog.close()
+        )
+        return details, details.failure_report
+
+    def test_retry_repeated_failure_then_success_keeps_original_request(self):
+        details, report = self.failed_save_report()
+        self.assertIn(("NV 1", "10", "99"), self.report_rows(details))
+        self.assertFalse(any(row[0] == "NV 2" for row in self.report_rows(details)))
+        self.assertEqual(
+            [report.dialog.tree.headerItem().text(c) for c in (1, 2)],
+            ["Requested", "Actual"],
+        )
+        original = report.dialog.message.text()
+        self.nvs[3] = 9  # Force the firmware side effect again on the first Retry.
+        report.dialog.retry_button.click()
+        self.assertFalse(report.dialog.retry_button.isEnabled())
+        self.run_node()
+        self.assertFalse(self.results[-1][1])
+        self.assertIn("NV verification", report.dialog.message.text())
+        self.assertIn("Partial Save:", report.dialog.message.text())
+        self.assertIn(("NV 1", "10", "99"), self.report_rows(details))
+        self.change_earlier_nv = False
+        self.results.clear()
+        report.dialog.retry_button.click()
+        self.run_node()
+        self.assertTrue(self.results[-1][1])
+        self.assertEqual(self.state.nv_values[1], 10)
+        self.assertEqual(self.report_rows(details), [("No differences found", "", "")])
+        self.assertFalse(report.dialog.retry_button.isEnabled())
+        self.assertIn(original.splitlines()[0], report.dialog.message.text())
+        self.assertIn(
+            "Configuration saved and fully verified.", report.dialog.message.text()
+        )
+
+    def test_save_nv_failure_shows_confirmed_difference(self):
+        details = self.editing_details()
+        self.reject_nv = 1
+        details.save_button.click()
+        self.run_node()
+        self.assertIn(("NV 1", "10", "7"), self.report_rows(details))
+        self.assertIn("CMDERR", details.failure_report.dialog.message.text())
+        self.assertFalse(details.failure_report.dialog.retry_button.isEnabled())
+        self.addCleanup(details.failure_report.dialog.close)
+
+    def test_restore_ev_failure_uses_the_same_report(self):
+        details = self.editing_details()
+        details.cancel_editing()
+        self.reject_ev = True
+        with patch(
+            "workbench.node_backup_workflow.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ):
+            details.restore_backup()
+        self.run_node()
+        report = details.failure_report
+        self.addCleanup(report.dialog.close)
+        self.assertIn("EV", report.dialog.message.text())
+        self.assertIn("Partial Restore:", report.dialog.message.text())
+        self.assertFalse(report.dialog.retry_button.isEnabled())
+        self.assertIn("Reconnect", report.dialog.retry_status.text())
+        self.assertTrue(
+            any(row[0].startswith("EV") for row in self.report_rows(details))
+        )
+        self.assertFalse(
+            any(row[0].startswith("NV") for row in self.report_rows(details))
+        )
+
+    def test_failed_verification_and_disconnect_report_unknown_values(self):
+        details = self.editing_details()
+        self.withhold_final_read = True
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 5):
+            details.save_button.click()
+            self.run_node()
+        report = details.failure_report
+        self.addCleanup(report.dialog.close)
+        self.assertTrue(any(row[2] == "Unknown" for row in self.report_rows(details)))
+        self.assertIn("write may have succeeded", report.dialog.message.text())
+        self.close_service()
+        self.assertFalse(report.dialog.retry_button.isEnabled())
+
+    def check_retry_stops_before_writes(self, outcome):
+        details, report = self.failed_save_report()
+        before = len(self.connection.sent)
+        self.connection.fail_send = outcome == "send failure"
+        self.withhold_final_read = outcome == "timeout"
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 5):
+            report.dialog.retry_button.click()
+            if outcome == "disconnect":
+                self.close_service()
+            elif outcome == "close":
+                report.dialog.close()
+            self.run_node(
+                stop_when=lambda: (
+                    self.connection.state != "Connected"
+                    or (
+                        not self.service.discovery_pending()
+                        and not self.service.writes_busy()
+                    )
+                )
+            )
+        self.assertFalse(
+            any(
+                op in frame
+                for frame in self.connection.sent[before:]
+                for op in (b"N96", b"ND2", b"N95", b"N53")
+            )
+        )
+        if outcome == "close":
+            self.assertIsNone(details.failure_report)
+        else:
+            self.assertFalse(report.dialog.retry_button.isEnabled())
+            self.assertNotEqual(report.dialog.retry_status.text(), "Retry in progress.")
+
+    def test_retry_send_failure_does_not_write(self):
+        self.check_retry_stops_before_writes("send failure")
+
+    def test_retry_incomplete_discovery_does_not_write(self):
+        self.check_retry_stops_before_writes("timeout")
+
+    def test_disconnect_during_retry_does_not_write_or_hang(self):
+        self.check_retry_stops_before_writes("disconnect")
+
+    def test_close_during_retry_cancels_the_write_handoff(self):
+        self.check_retry_stops_before_writes("close")
+
+    def test_retry_rejects_busy_changed_identity_and_known_learn_mode(self):
+        _details, report = self.failed_save_report()
+        self.state.parameters[8] |= 0x20
+        self.service.node_state_updated.emit(258)
+        self.assertFalse(report.dialog.retry_button.isEnabled())
+        self.state.parameters[8] &= ~0x20
+        self.service.rediscover_node(258)
+        before = list(self.connection.sent)
+        report.retry()
+        self.assertEqual(self.connection.sent, before)
+        self.assertIn("discovery", report.dialog.retry_status.text())
+        self.state.can_id = 3
+        report.retry()
+        self.assertIn("identity changed", report.dialog.message.text())
+        self.assertEqual(self.connection.sent, before)

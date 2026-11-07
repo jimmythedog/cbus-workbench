@@ -15,6 +15,7 @@ from workbench.wrack import decode_wrack
 
 class Connection(QObject):
     frame_received = Signal(bytes)
+    state_changed = Signal(str)
     state = "Connected"
     layout_name = "NV test"
 

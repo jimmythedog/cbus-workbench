@@ -132,9 +132,9 @@ class SendFrameDialogTests(unittest.TestCase):
             self.wait_for(lambda: "Home" not in self.window.cbus_services)
             self.assertEqual(len(results), 1)
             self.assertFalse(results[0][1])
-            expected = f"Node 258: {results[0][2]}"
+            expected = details.nv_result.text()
+            self.assertTrue(expected.startswith("Node 258: Partial Save:"))
             self.assertIn("Connection ended", expected)
-            self.assertEqual(details.nv_result.text(), expected)
             self.assertEqual(details.events_result.text(), expected)
             self.assertEqual(view.node_list.currentItem().text(), "258 (offline)")
             self.assertIsNone(details.desired_configuration)

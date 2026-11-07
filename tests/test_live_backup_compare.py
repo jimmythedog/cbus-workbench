@@ -36,7 +36,9 @@ class LiveBackupCompareTests(unittest.TestCase):
         self.state.ev_values[7] = {1: None, 2: 0}  # EV3 remains unknown.
         dialog = BackupCompare(self.state, self.backup)
         self.addCleanup(dialog.close)
+        self.assertIsNone(dialog.retry_button)
         tree = dialog.findChild(QTreeWidget)
+        self.assertEqual(tree.headerItem().text(1), "Backup")
         event = tree.topLevelItem(0).child(0)
         self.assertEqual(
             [event.child(0).text(column) for column in range(3)],

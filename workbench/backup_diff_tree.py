@@ -31,7 +31,11 @@ def _comparison_rows(comparison):
                 {
                     ValueState.ABSENT: "—",
                     ValueState.EVENT_ABSENT: "—",
-                    ValueState.UNKNOWN: "Unknown",
+                    ValueState.UNKNOWN: (
+                        f"Unknown (last confirmed: {value.value})"
+                        if value.value is not None
+                        else "Unknown"
+                    ),
                 }.get(value.state, str(value.value))
             )
         yield section, row.label, *values

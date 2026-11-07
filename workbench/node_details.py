@@ -22,6 +22,7 @@ from .node_backup_workflow import NodeBackupWorkflow
 from .node_backups import NodeBackups
 from .node_details_form import NodeDetailsForm
 from .node_events import NodeEvents
+from .node_failure_report import NodeFailureReport
 from .node_variables import MdfNodeVariables, RawNodeVariables
 from .parameter_names import manufacturer_name, module_name
 from .pnn import Pnn
@@ -45,6 +46,7 @@ class NodeDetails(QWidget):
         self.cbus_service = None
         self.original_configuration = None
         self.desired_configuration = None
+        self.failure_report = None
         self.saving_configuration = False
 
         layout = QVBoxLayout(self)
@@ -661,13 +663,17 @@ class NodeDetails(QWidget):
 
     def update_backup_buttons(self):
         selected = bool(self.node_backups.selectedItems())
+        # Restore stays active between writer callbacks and through rediscovery.
+        # Live-state refreshes must keep its actions disabled for that whole time.
+        restoring = self.cbus_service is not None and self.cbus_service.restore.active
+        available = self.connected and not restoring
 
         live_node = self.node is not None and not isinstance(self.node, int)
-        self.backup_buttons["New"].setEnabled(self.connected and live_node)
+        self.backup_buttons["New"].setEnabled(available and live_node)
         self.backup_buttons["View"].setEnabled(selected)
-        self.backup_buttons["Compare"].setEnabled(self.connected and selected)
+        self.backup_buttons["Compare"].setEnabled(available and selected)
         self.backup_buttons["Restore"].setEnabled(
-            self.connected
+            available
             and selected
             and isinstance(self.node, Pnn)
             and self.live_state is not None
@@ -707,6 +713,14 @@ class NodeDetails(QWidget):
             self.backup_workflow.restore(self.node)
 
     def show_restore_progress(self, node_number: int, message: str) -> None:
+        self.update_backup_buttons()
+        saving = self.saving_configuration or (
+            self.failure_report is not None
+            and self.failure_report.running
+            and self.failure_report.saving
+        )
+        if saving:
+            message = message.replace("Restoring ", "Saving ")
         if self.saving_configuration:
             self.show_configuration_result(message)
             return
@@ -714,10 +728,25 @@ class NodeDetails(QWidget):
         self.editing_changed.emit(True)
         self.edit_button.setEnabled(False)
         self.events_edit_button.setEnabled(False)
-        for name in ("New", "Compare", "Restore"):
-            self.backup_buttons[name].setEnabled(False)
 
     def finish_restore(self, node_number: int, success: bool, message: str) -> None:
+        saving = self.saving_configuration
+        if self.failure_report is not None and self.failure_report.running:
+            saving = self.failure_report.saving
+        # The writer is shared; display the initiating action, including on Retry.
+        action = "Save" if saving else "Restore"
+        verb = "saved" if saving else "restored"
+        message = message.replace(
+            "Node configuration restored and fully verified.",
+            f"Configuration {verb} and fully verified.",
+        ).replace("Partial restoration:", f"Partial {action}:")
+        message = message.replace("after restoration.", f"after {action}.")
+        if self.failure_report is not None and self.failure_report.running:
+            self.failure_report.completed(success, message)
+        elif not success:
+            if self.failure_report is not None:
+                self.failure_report.dialog.close()
+            self.failure_report = NodeFailureReport(self, self.cbus_service, message)
         if self.saving_configuration:
             trace(
                 logger,

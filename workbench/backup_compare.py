@@ -3,6 +3,7 @@ import logging
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QLabel,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -24,6 +25,8 @@ class BackupCompare(QDialog):
         *,
         headings=("Backup", "Current"),
         comparison=None,
+        message="",
+        retry_action=None,
     ):
         super().__init__(parent)
 
@@ -37,7 +40,12 @@ class BackupCompare(QDialog):
 
         layout = QVBoxLayout(self)
 
-        tree = QTreeWidget()
+        self.message = QLabel(message)
+        self.message.setWordWrap(True)
+        self.message.setVisible(bool(message))
+        layout.addWidget(self.message)
+
+        tree = self.tree = QTreeWidget()
         set_comparison_headings(tree, headings)
         tree.setColumnWidth(0, 250)
         layout.addWidget(tree)
@@ -74,6 +82,30 @@ class BackupCompare(QDialog):
         if tree.topLevelItemCount() == 0:
             QTreeWidgetItem(tree, ["No differences found"])
 
+        self.retry_status = QLabel()
+        self.retry_status.setWordWrap(True)
+        self.retry_status.hide()
+        layout.addWidget(self.retry_status)
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        self.retry_button = None
+        if retry_action is not None:
+            self.retry_button = buttons.addButton(
+                "Retry", QDialogButtonBox.ButtonRole.ActionRole
+            )
+            self.retry_button.clicked.connect(retry_action)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def show_result(self, comparison, message):
+        """Replace presentation data; the caller retains all operation ownership."""
+        self.message.setText(message)
+        self.message.show()
+        self.tree.clear()
+        add_node_differences(self.tree, comparison)
+        if comparison.inconclusive:
+            QTreeWidgetItem(
+                self.tree, ["Comparison inconclusive: some values are unknown"]
+            )
+        elif self.tree.topLevelItemCount() == 0:
+            QTreeWidgetItem(self.tree, ["No differences found"])
