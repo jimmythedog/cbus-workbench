@@ -68,7 +68,7 @@ A developer should understand a complicated section by scanning its comments bef
 - Retain a diagnostic test only if it protects a meaningful observable regression, and rewrite it as a contract test where necessary.
 - Do not assert logs, private calls, internal queues or signal wiring, and do not change production code solely to satisfy such tests.
 - Do not add tests merely for coverage or because a function or branch exists.
-- Avoid tests coupled to private methods, mock call counts or internal sequencing.
+- Avoid tests coupled to private methods, mock call counts or incidental internal sequencing. Test protocol ordering where it is part of the observable contract or necessary for hardware safety.
 - Use small fixtures and minimal stubs; do not create test frameworks without approval.
 - Behaviour-preserving refactors should not require extensive test rewrites.
 - If a test fails after a behaviour-preserving change, question whether it tests an implementation detail.
