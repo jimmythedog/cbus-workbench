@@ -94,6 +94,11 @@ observable contracts rather than implementation details.
 - Avoid both monolithic modules and unnecessary abstraction layers.
 - Prefer small, independently testable changes.
 
+Alpha development policy: Prioritise simple, working implementations of common user workflows.
+Include essential data-integrity and hardware-safety checks, but avoid speculative edge-case handling, excessive defensive code, broad abstractions and exhaustive testing.
+Defer uncommon problems until demonstrated by real-world testing.
+Prefer shipping a usable alpha over pursuing theoretical completeness.
+
 **Do not turn a simple requirement into a subsystem.**
 
 ## 8. Model choice and token economy
