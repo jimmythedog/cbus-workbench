@@ -1,13 +1,16 @@
 """Verified NV transactions and discovery through observable wire exchanges."""
 
+import json
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QListWidgetItem
+from PySide6.QtWidgets import QApplication, QCheckBox, QListWidgetItem
 
 from workbench.cbus_service import CbusService, DiscoveryProgress, NodeState
+from workbench.mdfs import Mdf
 from workbench.node_details import NodeDetails
 from workbench.pnn import Pnn
 from workbench.wrack import decode_wrack
@@ -191,13 +194,69 @@ class NvWriteTests(unittest.TestCase):
         item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, self.identity)
         details.show_node(item)
-        details.show_live_state(self.state)
+        self.state.parameters[6] = 17
+        self.state.nv_values = {i: 0 for i in range(1, 18)}
+        self.state.nv_values.update({1: 7, 16: 2, 17: 85})
+        fixture = Path(__file__).parent / "fixtures/mdfs/canmio-3d-flags.json"
+        mdf = Mdf(fixture, json.loads(fixture.read_text()))
+        details.show_live_state(self.state, mdf)
+        details.mdf_values.navigation.setCurrentRow(1)
+        checks = details.mdf_values.pages.currentWidget().findChildren(QCheckBox)
+        self.assertEqual(
+            [c.text() for c in checks if not c.isHidden()],
+            [
+                "TRIGGER_INVERTED",
+                "CUTOFF",
+                "STARTUP",
+                "PULLUP",
+                "ACTION_INVERTED",
+                "EVENT_INVERTED",
+            ],
+        )
+        self.assertEqual(
+            [c.isChecked() for c in checks],
+            [True, False, True, False, True, False, True, False],
+        )
         details.start_editing()
+        details.mdf_values.navigation.setCurrentRow(0)
         details.raw_values.item(0, 1).setText("255")
+        details.raw_values.item(15, 1).setText("0")
+        details.raw_values.item(16, 1).setText("32")
+        details.mdf_values.navigation.setCurrentRow(1)
+        self.assertEqual(
+            [c.text() for c in checks if not c.isHidden()],
+            [
+                "TRIGGER_INVERTED",
+                "DISABLE_OFF",
+                "TOGGLE",
+                "INPUT_DISABLE_SOD_RESPONSE",
+                "EVENT_INVERTED",
+            ],
+        )
+        self.assertEqual(
+            [c.isChecked() for c in checks],
+            [False, False, False, False, False, True, False, False],
+        )
+        self.assertTrue(all(c.isEnabled() for c in checks))
         details.show_live_state(self.state)  # Background updates retain the edit.
         self.assertEqual(details.raw_values.item(0, 1).text(), "255")
         self.assertEqual(self.state.nv_values[1], 7)
         details.cancel_editing()
+        self.assertEqual(
+            [c.text() for c in checks if not c.isHidden()],
+            [
+                "TRIGGER_INVERTED",
+                "CUTOFF",
+                "STARTUP",
+                "PULLUP",
+                "ACTION_INVERTED",
+                "EVENT_INVERTED",
+            ],
+        )
+        self.assertEqual(
+            [c.isChecked() for c in checks],
+            [True, False, True, False, True, False, True, False],
+        )
         self.assertEqual(details.raw_values.item(0, 1).text(), "7")
         details.start_editing()
         details.raw_values.item(0, 1).setText("9")

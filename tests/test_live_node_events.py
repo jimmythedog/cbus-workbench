@@ -1,4 +1,4 @@
-"""Visible contracts for the live node Events tab."""
+"""Visible contracts for the live node event tabs."""
 
 import os
 import unittest
@@ -86,7 +86,7 @@ class LiveNodeEventsTests(unittest.TestCase):
         self.view.show_identity(node)
         self.assertEqual(self.view.details.node, node)
 
-    def test_live_events_use_original_panels_and_expand_to_matching_evs(self):
+    def test_live_event_tabs_use_full_width_and_preserve_event_state(self):
         node = Pnn(258, 13, 34, 0x03)
         self.states[258] = NodeState(
             node,
@@ -99,8 +99,37 @@ class LiveNodeEventsTests(unittest.TestCase):
         events = details.node_events
         details.tabs.setCurrentWidget(events)
 
-        self.assertEqual(events.widget(0).title(), "Known produced events")
-        self.assertEqual(events.widget(1).title(), "Consumed events")
+        self.assertEqual(
+            [details.tabs.tabText(i) for i in range(details.tabs.count())],
+            [
+                "Node Details",
+                "Node Variables",
+                "Consumed Events",
+                "Produced Events",
+                "Backups",
+            ],
+        )
+        self.view.resize(1200, 700)
+        self.view.show()
+        self.app.processEvents()
+        tree = events.consumed_table
+        tree.topLevelItem(0).setExpanded(True)
+        tree.setCurrentItem(tree.topLevelItem(0).child(1))
+        self.assertGreater(tree.width(), details.tabs.width() * 0.9)
+        details.tabs.setCurrentWidget(details.produced_events_page)
+        self.app.processEvents()
+        self.assertGreater(events.produced_table.width(), details.tabs.width() * 0.9)
+        self.assertFalse(details.events_edit_button.isVisible())
+        events.produced_table.selectRow(0)
+        details.tabs.setCurrentWidget(details.consumed_events_page)
+        self.app.processEvents()
+        self.assertTrue(tree.topLevelItem(0).isExpanded())
+        self.assertIs(tree.currentItem(), tree.topLevelItem(0).child(1))
+        self.assertTrue(events.produced_table.item(0, 0).isSelected())
+        self.assertTrue(details.events_edit_button.isVisible())
+        details.tabs.setCurrentWidget(details.node_backups)
+        self.assertTrue(details.backup_buttons["New"].isVisible())
+        details.tabs.setCurrentWidget(details.consumed_events_page)
         self.assertEqual(events.produced_table.item(0, 0).text(), "258:45")
         self.assertEqual(events.produced_table.item(0, 1).text(), "Signal cleared")
         first = events.consumed_table.topLevelItem(0)

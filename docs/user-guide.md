@@ -88,7 +88,12 @@ manufacturer parameter 1 and module type parameter 3 from current discovery, or
 persisted parameters for a saved node. Discovery reads all parameters supported
 by the node's reported count and saves confirmed values, including those not
 shown in Node Details. Unknown live parameters show `-` without
-falling back to saved values. The navigator continues to identify live nodes from PNN.
+falling back to saved values. Known manufacturer/module-type pairs use Workbench's static module-name table,
+even when a matching MDF supplies a different name. Otherwise, a compatible MDF's
+`moduleName` is used, followed by the numeric module type when no name is known.
+MERG type 8 uses its newer name CANSOL; MERG type 36 remains CANCDU despite its
+MDF naming it CANACC4. Saved-only nodes retain their offline labels
+and saved details; they do not resolve MDF names.
 Mode and operational capabilities still use live PNN flags and remain unknown for
 saved nodes.
 The module identifier combines the confirmed manufacturer and module type bytes
@@ -98,6 +103,16 @@ This is independent of whether the layout connects through TCP/IP or serial.
 A confirmed nonzero beta build appears beside the firmware version.
 Unconfirmed fields show `-`; VLCB compatibility shows Yes, No or `-`.
 
+**Module descriptor** shows the compatible MDF selected from confirmed live node
+identity, firmware and any processor restriction, for example
+`CANMIO-A520-3d.json (System)` or `CANMIO-A520-3d.json (User)`. Hover over it to see
+the full file path. Compatible user MDFs take precedence over system MDFs.
+`None` means no compatible MDF can be established; `Error` means lookup failed
+or a matching file is invalid. Error details are recorded in the application log;
+an invalid user override does not silently fall back to a system file.
+The selected MDF also supplies NV forms when its presentation constructs
+are supported. Supported EV controls appear beside the raw values in consumed events.
+
 **Online** means the node was discovered during the current connection; Workbench
 does not continually poll its liveness. Disconnected nodes show **Offline**;
 connected nodes without discovery evidence show `-` for status.
@@ -106,6 +121,41 @@ connected nodes without discovery evidence show `-` for status.
 
 The live node's **Raw Node Variables** tab shows confirmed values as they arrive.
 Unread values show `-`; confirmed zero shows `0`.
+
+For live nodes with a compatible MDF using the supported presentation subset,
+Node Variables offers compact settings pages with Raw Values first in the
+left-hand navigation. Flat MDF settings appear on a Settings page. Native bordered groups
+keep their titles and compact controls together; nested groups do not
+add navigation. Large settings pages scroll within the settings area without
+enlarging the application window. Settings controls support editing Select, Number, Slider, BitSingle and BitArray
+values during Edit. Both views show the same working copy, and Cancel returns to confirmed
+values. Unsupported controls are omitted from settings pages; pages with no
+supported controls are omitted too. Raw Values always remains available,
+including NVs whose settings controls are unsupported. If no supported pages
+remain, or the MDF is missing or invalid, the raw table is shown.
+Unknown values remain blank or indeterminate; an unknown visibility condition
+leaves its rows visible and read-only with a `Visibility unknown` tooltip.
+Settings can depend on a whole NV or a single bit; for example, CANCMD 4d
+shows SoD Delay when NV2 bit 6 is set and Honk Interval when bit 7 is set.
+These conditions follow edits and return to confirmed values on Cancel.
+
+During Edit, supported MDF controls and Raw Values edit the same desired raw NV/EV
+configuration. Changes immediately refresh other controls representing the same
+value, including visibility and NV-dependent event labels. Bit and masked edits
+preserve all other bits. Unknown values remain unknown and their MDF controls
+stay read-only; Dual controls also remain read-only. Outside Edit, all MDF controls
+show confirmed hardware values and are read-only. Save applies the raw desired
+configuration through the existing verified Save operation; Cancel discards it.
+Event MDF controls are constructed when an event is first expanded.
+
+MDF numbers and sliders display scaled
+values and units in compact numeric controls. Values outside the MDF limits
+remain visible, with the range discrepancy explained in a tooltip. Masked selections
+use only their specified bits; unknown or unmatched values leave the choice unselected.
+Bit arrays show labelled checkboxes in MDF order; unread NVs show
+indeterminate marks. Overloaded bit labels follow their controlling NV; known
+unmatched labels are hidden, while unread controlling NVs show “label unknown”.
+Annotations are skipped; template labels are displayed literally without substitution.
 
 1. Wait for complete node configuration discovery on a connected FLiM node.
 2. Choose **Edit** on either **Node Variables** or **Events**. Both tabs become
@@ -216,6 +266,9 @@ confirmed parameters and CAN ID are saved per logical layout and loaded while
 disconnected; incomplete discovery preserves earlier values. These are last-known
 values, not proof that a node is currently reachable. Nodes absent from later
 discovery remain listed. Reconnecting replaces saved-only entries as nodes are discovered.
+MDF selections are not saved. Saved-only nodes show `None` for Module descriptor,
+even when remembered parameters are displayed. Remembered details do not establish
+MDF compatibility or make a node eligible for configuration.
 
 Choose **Compare** while connected to compare a node backup with current discovered
 values. Events are matched by node number and event number. Unknown values make

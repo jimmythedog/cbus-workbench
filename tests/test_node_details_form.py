@@ -45,7 +45,7 @@ class NodeDetailsFormTests(unittest.TestCase):
         self.assertEqual(view.details.summary.title(), "Node 258 — CANMIO")
         view.show_identity(second.identity)
         self.assertIs(view.node_list.currentItem(), selected)
-        self.assertEqual(view.node_list.item(1).text(), "259 - 254")
+        self.assertEqual(view.node_list.item(1).text(), "259 - EMPTY")
 
         # An update to an unselected node must not replace the selected details.
         second.identity = Pnn(259, 165, 32, 5)
@@ -77,7 +77,7 @@ class NodeDetailsFormTests(unittest.TestCase):
     def test_confirmed_identity_names_and_unknown_fallbacks(self):
         for manufacturer, module_type, name, module, identifier in (
             (165, 32, "MERG", "CANMIO", "A520"),
-            (165, 254, "MERG", "254", "A5FE"),
+            (165, 254, "MERG", "EMPTY", "A5FE"),
             (1, 32, "1", "32", "0120"),
             (255, 255, "unknown", "255", "FFFF"),
         ):
@@ -131,6 +131,8 @@ class NodeDetailsFormTests(unittest.TestCase):
         self.assertEqual(form.node_mode.text(), "FLiM")
         self.select(Node(43, "CANMIO", 12, "3d", True))
         self.assertEqual(form.module_identifier.text(), "-")
+        self.assertEqual(form.module_descriptor.text(), "None")
+        self.assertEqual(form.module_descriptor.toolTip(), "")
         self.details.show_node(None)
         self.assertEqual(form.module_identifier.text(), "-")
 
@@ -256,6 +258,10 @@ class NodeDetailsFormTests(unittest.TestCase):
 
     def test_large_font_details_remain_readable_and_scroll_to_last_row(self):
         details = self.details
+        details.details_page.show_module_descriptor(
+            "CANMIO-A520-3d.json (System)",
+            "/application/resources/mdfs/CANMIO-A520-3d.json",
+        )
         font = details.font()
         font.setPointSize(14)
         details.setFont(font)
@@ -366,7 +372,12 @@ class NodeDetailsFormTests(unittest.TestCase):
 
         details.start_name_editing()
         self.assertIs(details.node_name_stack.currentWidget(), details.node_name_editor)
-        for page in (details.variables_page, details.events_page, details.node_backups):
+        for page in (
+            details.variables_page,
+            details.produced_events_page,
+            details.consumed_events_page,
+            details.node_backups,
+        ):
             self.assertFalse(details.tabs.isTabEnabled(details.tabs.indexOf(page)))
 
         details.node_name_editor.setText("  Garden  ")
@@ -375,7 +386,12 @@ class NodeDetailsFormTests(unittest.TestCase):
         self.assertEqual(details.node_name.text(), "Garden")
         self.assertEqual(details.summary.title(), "Node 42 — Test module — Garden")
         self.assertEqual(item.text(), "42 - Test module — Garden")
-        for page in (details.variables_page, details.events_page, details.node_backups):
+        for page in (
+            details.variables_page,
+            details.produced_events_page,
+            details.consumed_events_page,
+            details.node_backups,
+        ):
             self.assertTrue(details.tabs.isTabEnabled(details.tabs.indexOf(page)))
 
     def test_switching_to_live_identity_and_no_node_updates_tabs_and_header(self):
@@ -414,7 +430,8 @@ class NodeDetailsFormTests(unittest.TestCase):
         for page in (
             details.details_page,
             details.variables_page,
-            details.events_page,
+            details.produced_events_page,
+            details.consumed_events_page,
             details.node_backups,
         ):
             with self.subTest(tab=details.tabs.tabText(details.tabs.indexOf(page))):
@@ -442,7 +459,9 @@ class NodeDetailsFormTests(unittest.TestCase):
         self.select(configured)
 
         self.assertTrue(
-            details.tabs.isTabEnabled(details.tabs.indexOf(details.events_page))
+            details.tabs.isTabEnabled(
+                details.tabs.indexOf(details.consumed_events_page)
+            )
         )
 
         details.tabs.setCurrentWidget(details.node_backups)

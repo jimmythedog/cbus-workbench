@@ -12,6 +12,7 @@ from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import QApplication, QLineEdit, QPushButton
 
 from workbench.application_directories_dialog import ApplicationDirectoriesDialog
+from workbench.paths import system_mdf_directory
 
 
 class ApplicationDirectoryTests(unittest.TestCase):
@@ -27,9 +28,10 @@ class ApplicationDirectoryTests(unittest.TestCase):
             env[f"XDG_{key}_HOME"] = str(self.root / key.lower())
         code = (
             "from PySide6.QtCore import QCoreApplication; "
-            "from workbench.paths import application_directories; "
+            "from workbench.paths import application_directories, user_mdf_directory; "
             "QCoreApplication.setApplicationName('cbus-workbench'); "
-            "print('\\n'.join(map(str, application_directories().values())))"
+            "print('\\n'.join(map(str, application_directories().values()))); "
+            "print(user_mdf_directory())"
         )
         output = subprocess.check_output(
             [sys.executable, "-c", code], env=env, text=True
@@ -39,8 +41,18 @@ class ApplicationDirectoryTests(unittest.TestCase):
             [
                 str(self.root / key / "cbus-workbench")
                 for key in ("config", "data", "state", "cache")
-            ],
+            ]
+            + [str(self.root / "data" / "cbus-workbench" / "mdfs")],
         )
+
+    def test_system_mdfs_resolve_from_source_and_bundle_root(self):
+        self.assertEqual(
+            system_mdf_directory(),
+            Path(__file__).resolve().parents[1] / "resources" / "mdfs",
+        )
+        with patch.object(sys, "_MEIPASS", str(self.root), create=True):
+            self.assertEqual(system_mdf_directory(), self.root / "resources" / "mdfs")
+        self.assertFalse((self.root / "resources").exists())
 
     def test_dialog_displays_copies_and_opens_resolved_paths(self):
         app = QApplication.instance() or QApplication([])

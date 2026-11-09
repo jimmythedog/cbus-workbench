@@ -31,6 +31,148 @@ The repository's `.envrc` loads `.shell.nix`, which provides Python, PySide6, uv
 
 The NixOS setup is a development-environment exception, not a separate application implementation. The application code remains cross-platform. Dependencies installed only into uv's `.venv/` will not automatically be available to Nix-provided Python; when adding dependencies, verify the NixOS setup as well.
 
+### Development MDF collection
+
+Run `make mdfs` to download the MMC-SERVER release pinned by
+`[tool.cbus-workbench].mmc_version` in `pyproject.toml` (currently `v0.23.2`).
+Use `make mdfs MMC_VERSION=<tag>` to try another explicit release without changing
+the pin. The script can also be run as `python scripts/fetch_mdfs.py`, with an
+optional `--version <tag>`.
+
+The [upstream release](https://github.com/david284/MMC-SERVER/releases/tag/v0.23.2)
+has no separately uploaded assets. Its GitHub source tarball contains the JSON
+MDF collection in `VLCB-server/config/modules/`. Only those JSON files are copied
+into `resources/mdfs/`, a generated application-resource directory explicitly
+ignored by Git. Do not commit the downloaded MDFs.
+Each successful fetch replaces the previous collection and reports the release
+tag and MDF count. Download, archive and missing/empty collection errors return
+a nonzero status; download/extraction failures leave the previous collection intact.
+The generated directory is intended for development and future packaging work.
+
+### MDF form visual reference
+
+The UI specification is the prototype screenshots in
+[`screenshots/prototype/NV Globals.png`](screenshots/prototype/NV%20Globals.png),
+[`NV Channel1.png`](screenshots/prototype/NV%20Channel1.png) and
+[`EVs.png`](screenshots/prototype/EVs.png). Preserve their compact native forms
+and left-hand NV navigation. Live NV forms use the descriptor already selected
+by `NodeView`. Root `NodeVariableTabs` panels become left-hand navigation entries;
+flat definitions share a Settings page. Mixed flat runs and root tabs retain their
+order, using Settings, Settings 2, etc. for the flat runs. `NodeVariableGroup`
+uses native `QGroupBox` borders with a compact `QFormLayout` inside each box,
+including nested groups. Ancestor visibility conditions apply to every descendant
+row. Empty groups and groups without visible children are omitted. Nested tabs inside groups or
+panels remain an explicit unsupported structure; no nested navigation is created.
+The supported leaves remain selection, byte-number, slider, dual-byte number, single-bit and bit-array. Unsupported controls are skipped with their type, panel and
+original item number logged; supported controls retain MDF order. Panels with
+no supported controls are omitted. If none remain, the raw table is shown.
+Entries with unsupported visibility conditions are also skipped, including all
+children when the entry is a group; their visibility is never guessed. Malformed
+structures, invalid supported definitions and unsupported containers remain
+errors and leave Raw Values available. Configured offline prototypes
+still use representative definitions. Raw Values retains editing of the existing
+shared working copy. Visibility uses the Qt-independent `mdf_visibility.evaluate_visibility()` for
+byte/bit comparisons and the supported JLL comparisons, membership and boolean
+combinations. It reads the same confirmed values or editing working copy; no
+separate visibility state is kept. Conditions on controls and ancestor groups
+hide complete rows, including within tab panels, only when a condition is false.
+Unknown conditions leave rows read-only
+and visible with a `Visibility unknown` tooltip. Invalid or unsupported conditions
+are logged and skip only their entry/subtree, preserving supported siblings.
+
+Number and Slider use the same compact numeric control. MMC-SERVER v0.23.2's bundled
+client (`public/js/641.397e101a.js`, `NodeVariableSlider`) defines raw `min`/`max`
+(default 0/255), optional `startBit`/`endBit` (default 0/7), and displayed value
+`raw * displayScale + displayOffset` (default scale 1, offset 0). Sub-unit scales
+use MMC's 1/2/3 decimal-place display rounding; units are a suffix. An observed
+value outside the MDF limits is displayed intact with a tooltip and warning log;
+the display range temporarily includes it to prevent Qt clamping.
+Number uses the same extraction/scale/offset order, but MMC's `getDisplayValue()`
+always rounds scales >= 1 to zero decimal places. Its raw maximum is the smaller
+of `max` and the selected bit-field's capacity. Slider retains fractional precision
+at scales >= 1 and uses `max` directly. Select matches `NV & bitMask` without
+shifting (default mask 255); an unknown or unmatched result has no selection.
+These differences follow the v0.23.2 bundled Number/Select components and
+`getDisplayValue()` helper, rather than inferring semantics from labels.
+
+
+Dual uses that same numeric widget in read-only mode. The v0.23.2 `NodeVariableDual`
+component combines the explicitly named `nodeVariableIndexHigh` and
+`nodeVariableIndexLow` as `(high << 8) + low`; indices need not be adjacent.
+It then extracts `startBit`–`endBit` (defaults 0–15), scales and offsets using
+Number's rounding rules. Default raw limits are 0–65535, with the maximum capped
+by the selected bit width. Either missing byte leaves the field blank; observed
+outliers remain visible with the usual range warning. Both bytes come from the
+same confirmed values or working edit copy as other controls. Dual remains
+read-only during Raw Values editing. The focused fixture is an unchanged extract
+of the Dual controls in v0.23.2 `MMCTEST-0001-1a.json`.
+Unsupported Dual properties are logged and ignored, including `linkedVariables`,
+subtitles and comments. Annotations and `${channel1}` substitution remain outside
+this slice; no Dual writing or restore behaviour is added.
+
+
+### Runtime MDF lookup
+
+`MdfRepository` in `workbench/mdfs.py` resolves two separate locations:
+
+- **System:** `resources/mdfs/` under the source root during development, or
+  `resources/mdfs/` under PyInstaller's bundle root (`sys._MEIPASS`). This collection
+  is treated as read-only. Packaging workflows do not yet include it.
+- **User:** `mdfs/` under `application_directories()["Data"]`, using Qt's
+  `QStandardPaths.AppDataLocation`, for example
+  `$XDG_DATA_HOME/cbus-workbench/mdfs/` on Linux (normally
+  `~/.local/share/cbus-workbench/mdfs/`). Help → Application Directories shows
+  the Data parent directory. Lookup does not create directories; create the user
+  folder manually when adding descriptors. Fetching system MDFs never touches it.
+
+Call `repository.lookup(state.identity, state.parameters)` with the current live
+`NodeState`'s confirmed PNN identity and PARAN values. It returns an `Mdf` containing
+the selected path and JSON data, or `None` when no compatible descriptor exists.
+Lookup is independent of the settings widgets and all configuration writing.
+`NodeView` calls it when displaying selected live discovery state, including
+identity and parameter updates, and passes the result to the existing Module
+descriptor field in Node Details. Saved metadata is never used for lookup; MDF
+results are not persisted. The selected descriptor also supplies NV
+forms when its presentation constructs are supported.
+
+    NodeView lookup -> NodeDetails -> MdfNodeVariables definitions
+    confirmed NodeState.nv_values ------> both raw tables and MDF forms
+    Edit -> desired_configuration["nvs"] -> both raw tables and MDF forms
+    Cancel -> confirmed values; Save -> existing NodeRestore verification
+
+No presentation-owned NV copy is created. Discovery updates refresh the confirmed
+view; an active Edit keeps its existing definitions and desired working copy.
+
+MMC filenames encode identity as `<name>-<manufacturer/type hex>-<major><minor>.json`,
+optionally ending in `--P<decimal processor>.json`. Names are not identity keys.
+Matching requires the confirmed manufacturer/type and exact major/minor firmware,
+including minor-letter case; there is no nearest-version fallback. Following
+MMC-SERVER v0.23.2, parameter 20 (beta version) does not affect selection and need
+not be present. Missing major/minor firmware replies and conflicting PNN/PARAN
+identity return `None`. Processor-restricted files additionally require the
+matching confirmed parameter 9; unrestricted files need no processor value.
+
+Lookup checks compatible user files first, then compatible system files. Within
+each directory a matching processor-specific descriptor takes precedence over an
+unrestricted one. Files for other firmware or identities do not override a match.
+Multiple equally applicable files are an error, rather than an arbitrary choice.
+
+```text
+confirmed identity + firmware
+  -> compatible user file?   -> validate -> MDF or MdfError (stop)
+  -> compatible system file? -> validate -> MDF or MdfError (stop)
+  -> None (raw editing remains available)
+```
+
+Matching unreadable files, invalid JSON or invalid top-level descriptor structure
+raise `MdfError` with the path and write an exception traceback to the application
+log. Directory read errors also raise `MdfError`. An invalid matching user override
+never silently falls back to system data. Callers should report the error and
+retain raw editing. Validation here checks the descriptor object, `moduleName`,
+NV/optional EV lists and their typed entries; interpreting nested controls and
+their constraints belongs to a later stage. Unknown descriptor fields and control
+types are preserved unchanged.
+
 ### Experimental hardware response timeout
 
 Set `CBUS_WORKBENCH_RESPONSE_TIMEOUT_MS` before launching to override the default
@@ -56,6 +198,7 @@ The project provides a `Makefile` with convenient commands for common developmen
 |---|---|
 | `make` | Show available commands |
 | `make run` | Run the application |
+| `make mdfs` | Download the pinned development MDF collection |
 | `make test` | Run the full Python test suite |
 | `make lint` | Run Ruff lint checks |
 | `make format` | Format Python source files |
@@ -522,6 +665,13 @@ Live editing uses the existing backup dictionary directly. `NodeDetails` capture
 holds a deep copy as `desired_configuration`. The NV widgets edit its `nvs` list;
 `NodeEvents` edits its event records by stable event identity. Clearing an EV
 stores absence (`None`); trailing absences are trimmed as in `node_backup()`.
+MDF controls are editors of those raw values, not a second configuration model.
+Select, Number, Slider, BitSingle and BitArray edits update the desired bytes and
+notify both raw NV tables and existing MDF forms. Refresh blocks widget signals
+so displaying a value cannot cause another edit. Masked edits merge into the
+current desired byte, preserving unrelated bits. Unknown bytes stay unknown and
+cannot be edited through partial MDF fields. Dual-byte MDF controls remain
+read-only. Visibility and overloaded labels use desired values during Edit.
 Both tabs' existing buttons control the same session. Live discovery updates do
 not replace the editable copy, and Cancel or disconnect discards it.
 
@@ -697,7 +847,22 @@ the UI. Every received PNN frame appears in Diagnostics, while the service's
 change signals filter PNNs only when both identity and observed CAN ID are unchanged. The navigator
 shows PNN identities for each layout. Node Details reads that layout's service
 state to show confirmed PARAN parameters for the selected node. Manufacturer,
-module type and the combined module identifier use parameters 1 and 3.
+module type and the combined module identifier use parameters 1 and 3. NodeView
+resolves the MDF once per live refresh. `module_name()` prefers the static
+manufacturer/type dictionary, then the compatible MDF's `moduleName`, then numeric
+type. The navigator uses PNN identity; without an MDF, details retain confirmed
+parameters 1 and 3 as their identity source.
+
+The static table contains the 94 explicit MERG entries from MMC-SERVER's
+`VLCB-server/config/mergConfig.json` (jimmythedog/MMC-SERVER, commit f4242d92),
+with the developer-confirmed rename of type 8 from CANACC4_2 to CANSOL. Type 34
+also remains CANSOL; these are distinct numeric identities. Static CANCDU (36)
+prevails over its MDF's CANACC4, and CANPAN (29) over firmware-specific CANPAN3.
+Type 252 retains the table's CANDEV name; a bundled older CBUS header also calls
+this ID VLCB. These descriptor/header differences do not override the static table.
+MDF filenames do not establish new static entries. No runtime scan builds this table.
+
+Saved-only nodes retain their existing metadata display without MDF lookup.
 Parameter 0 supplies the supported count: the normal queue reads every index
 from 1 through that count once, preserving the existing priority order before
 appending remaining indices. A parameter timeout retains confirmed live values,
@@ -720,22 +885,51 @@ and ending a connection clears that layout's live entries. The selected live
 node's Raw Node Variables table shows confirmed values, with `-` for
 unread indices when parameter 6 provides the count. Edit becomes available after
 complete node configuration discovery while the connection is active.
-The node Events tab uses the same side-by-side widget for configured nodes and
-live nodes. For live nodes, it reads `NodeState` on selection and state-update
-signals. Consumed event rows and editor working copies use stable event identities;
+Node details has separate full-width Produced Events and Consumed Events tabs.
+`NodeEvents` coordinates the existing produced table and consumed tree for both
+configured and live nodes; moving between tabs does not rebuild either view.
+The consumed tab retains the shared configuration Edit/Save/Cancel actions;
+the produced tab is read-only. For live nodes, the views read `NodeState` on
+selection and state-update signals. Consumed event rows and editor working copies use stable event identities;
 internal table indices are resolved from current discovery only. Expanded rows
 remain associated with their event even when rediscovery changes its index. The layout event
 catalogue supplies known produced events and any available descriptions. The
 display clears with the selected identity on disconnect; it keeps no separate
 discovery model.
 
+With a matching MDF, each supported EV has one inline widget containing its raw
+value and MDF controls. EVs remain leaf rows; only events expand. Raw rows are
+built immediately; inline widgets are built on first expansion and retained across
+collapse/expansion. An unchanged live refresh keeps the existing tree. A value
+snapshot detects confirmed context changes; changed context rebuilds raw rows and
+constructs controls only for previously expanded events.
+
+During Edit, first expansion reads the current desired NVs and that event's EVs,
+including raw changes made before expansion. Notifications refresh only existing
+forms; collapsed events never need construction to synchronise configuration.
+Conditional controls are retained, hidden when false, and can reappear during
+editing. Unknown conditions leave controls visible and read-only. One or two
+controls share a horizontal line with the raw value; larger sets use vertical
+forms. The threshold counts supported widgets, including currently hidden ones,
+so visibility changes do not require rebuilding layouts.
+
+    event expansion -> construct inline editors from current raw context
+    raw or MDF edit -> desired EV bytes -> refresh existing event forms
+    desired NV edit --------------------> refresh existing EV labels/visibility
+    collapsed event --------------------> no construction until expansion
+
+Raw EV text commits on focus loss through the existing tree-item path. MDF edits
+use that same path. Stable event identities locate desired records; EV row order
+supplies the one-based EV number. Unsupported definitions leave raw rows available.
+Refresh retains event expansion and event or EV selection. Outside Edit, all MDF
+controls show confirmed hardware values and remain read-only.
 
 ### Verified EV writing
 
 The editor updates the shared desired configuration described above; it does not
 call `CbusService.write_evs()` directly. The coordinator uses that transaction API
 with `(event NN, event number, EV index)` keys. Live nodes use
-raw EV rows; the configured-node MDF form remains prototype data, not a live MDF
+raw EV rows and supported MDF editors; the configured-node MDF form remains prototype data, not a live MDF
 mapping. No event indices are persisted.
 
 `EvWrite` owns the connection after the current automatic request completes,

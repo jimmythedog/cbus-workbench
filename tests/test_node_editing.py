@@ -53,6 +53,72 @@ class NodeEditingTests(unittest.TestCase):
         self.details.show_node(item)
         self.details.show_live_state(self.state)
 
+    def test_live_mdf_reads_shared_edit_copy_and_cancel_returns_to_confirmed_values(
+        self,
+    ):
+        from PySide6.QtWidgets import QComboBox, QDoubleSpinBox
+
+        from workbench.mdfs import Mdf
+
+        mdf = Mdf(
+            Path("test.json"),
+            {
+                "nodeVariables": [
+                    {
+                        "type": "NodeVariableTabs",
+                        "tabPanels": [
+                            {
+                                "displayTitle": "Timing",
+                                "items": [
+                                    {
+                                        "type": "NodeVariableNumber",
+                                        "nodeVariableIndex": 2,
+                                        "displayTitle": "Delay",
+                                        "displayScale": 0.1,
+                                        "displayOffset": 2,
+                                    },
+                                    {
+                                        "type": "NodeVariableSelect",
+                                        "nodeVariableIndex": 2,
+                                        "displayTitle": "Mode",
+                                        "bitMask": 3,
+                                        "options": [
+                                            {"label": "Zero", "value": 0},
+                                            {"label": "Three", "value": 3},
+                                        ],
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+        self.details.show_live_state(self.state, mdf)
+        view = self.details.mdf_values
+        view.navigation.setCurrentRow(1)
+        spin = view.pages.currentWidget().findChild(QDoubleSpinBox)
+        self.assertAlmostEqual(spin.value(), 2.8)
+        combo = view.pages.currentWidget().findChild(QComboBox)
+        self.assertEqual(combo.currentData(), 0)
+        self.details.edit_button.click()
+        view.navigation.setCurrentRow(0)
+        view.raw_values.item(1, 1).setText("31")
+        view.navigation.setCurrentRow(1)
+        self.assertAlmostEqual(spin.value(), 5.1)
+        self.assertEqual(combo.currentData(), 3)
+        self.assertTrue(spin.isEnabled())
+        self.assertEqual(self.details.desired_configuration["nvs"], [7, 31])
+        self.assertEqual(self.state.nv_values, {1: 7, 2: 8})
+        self.details.show_live_state(self.state, mdf)
+        self.assertAlmostEqual(spin.value(), 5.1)
+        self.details.cancel_button.click()
+        self.assertAlmostEqual(spin.value(), 2.8)
+        self.assertEqual(combo.currentData(), 0)
+        view.navigation.setCurrentRow(0)
+        self.assertEqual(view.raw_values.item(1, 1).text(), "8")
+        self.assertIsNone(self.details.desired_configuration)
+
     def event(self, address="0:1000"):
         tree = self.details.node_events.consumed_table
         return next(
@@ -93,7 +159,11 @@ class NodeEditingTests(unittest.TestCase):
         ):
             with self.subTest(edit=edit):
                 edit.click()
-                for page in (details.variables_page, details.events_page):
+                for page in (
+                    details.variables_page,
+                    details.produced_events_page,
+                    details.consumed_events_page,
+                ):
                     self.assertTrue(
                         details.tabs.isTabEnabled(details.tabs.indexOf(page))
                     )
@@ -138,7 +208,7 @@ class NodeEditingTests(unittest.TestCase):
         details = self.details
         details.show()
         details.events_edit_button.click()
-        details.tabs.setCurrentWidget(details.events_page)
+        details.tabs.setCurrentWidget(details.consumed_events_page)
         event = self.event()
         event.setExpanded(True)
         tree = details.node_events.consumed_table

@@ -1,0 +1,183 @@
+{
+  "nodeVariables": [
+    {
+      "type": "NodeVariableBitArray",
+      "nodeVariableIndex": 17,
+      "displayTitle": "Flags",
+      "bitCollection": [
+        {
+          "bitPosition": 0,
+          "overload": {
+            "nv": 16,
+            "labels": [
+              {
+                "value": 0,
+                "label": "TRIGGER_INVERTED"
+              },
+              {
+                "value": 1,
+                "label": "TRIGGER_INVERTED"
+              },
+              {
+                "value": 2,
+                "label": "TRIGGER_INVERTED"
+              },
+              {
+                "value": 3,
+                "label": "TRIGGER_INVERTED"
+              },
+              {
+                "value": 4,
+                "label": "TRIGGER_INVERTED"
+              }
+            ]
+          }
+        },
+        {
+          "bitPosition": 1,
+          "overload": {
+            "nv": 16,
+            "labels": [
+              {
+                "value": 2,
+                "label": "CUTOFF"
+              },
+              {
+                "value": 3,
+                "label": "CUTOFF"
+              },
+              {
+                "value": 4,
+                "label": "CUTOFF"
+              }
+            ]
+          }
+        },
+        {
+          "bitPosition": 2,
+          "overload": {
+            "nv": 16,
+            "labels": [
+              {
+                "value": 1,
+                "label": "STARTUP"
+              },
+              {
+                "value": 2,
+                "label": "STARTUP"
+              },
+              {
+                "value": 3,
+                "label": "STARTUP"
+              },
+              {
+                "value": 4,
+                "label": "STARTUP"
+              }
+            ]
+          }
+        },
+        {
+          "bitPosition": 3,
+          "overload": {
+            "nv": 16,
+            "labels": [
+              {
+                "value": 0,
+                "label": "DISABLE_OFF"
+              },
+              {
+                "value": 1,
+                "label": "DISABLE_OFF"
+              },
+              {
+                "value": 5,
+                "label": "DISABLE_OFF"
+              },
+              {
+                "value": 6,
+                "label": "DISABLE_OFF"
+              }
+            ]
+          }
+        },
+        {
+          "bitPosition": 4,
+          "overload": {
+            "nv": 16,
+            "labels": [
+              {
+                "value": 0,
+                "label": "TOGGLE"
+              },
+              {
+                "value": 2,
+                "label": "PULLUP"
+              },
+              {
+                "value": 3,
+                "label": "PULLUP"
+              },
+              {
+                "value": 4,
+                "label": "PULLUP"
+              }
+            ]
+          }
+        },
+        {
+          "bitPosition": 5,
+          "overload": {
+            "nv": 16,
+            "labels": [
+              {
+                "value": 0,
+                "label": "INPUT_DISABLE_SOD_RESPONSE"
+              },
+              {
+                "value": 1,
+                "label": "ACTION_INVERTED"
+              },
+              {
+                "value": 2,
+                "label": "ACTION_INVERTED"
+              },
+              {
+                "value": 3,
+                "label": "ACTION_INVERTED"
+              },
+              {
+                "value": 4,
+                "label": "ACTION_INVERTED"
+              },
+              {
+                "value": 5,
+                "label": "INPUT_DISABLE_SOD_RESPONSE"
+              },
+              {
+                "value": 6,
+                "label": "INPUT_DISABLE_SOD_RESPONSE"
+              }
+            ]
+          }
+        },
+        {
+          "bitPosition": 6,
+          "label": "EVENT_INVERTED"
+        },
+        {
+          "bitPosition": 7,
+          "overload": {
+            "nv": 16,
+            "labels": [
+              {
+                "value": 1,
+                "label": "ACTION_EXPEDITED"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -59,7 +59,7 @@ class NodeDetailsForm(QWidget):
         self.ev_count = QLabel("-")
         self.cpu_name = QLabel("-")
         self.interface = QLabel("-")
-        self.module_descriptor = QLabel("-")
+        self.module_descriptor = QLabel("None")
         self.producer = QLabel("-")
         self.consumer = QLabel("-")
         self.consumes_own_events = QLabel("-")
@@ -125,6 +125,11 @@ class NodeDetailsForm(QWidget):
     def show_node_name(self, node) -> None:
         self.node_name.setText((node.name or "-") if node else "-")
 
+    def show_module_descriptor(self, text: str = "None", tooltip: str = "") -> None:
+        """Display the navigator's lookup result without interpreting MDF identity."""
+        self.module_descriptor.setText(text)
+        self.module_descriptor.setToolTip(tooltip)
+
     def show_no_node(self) -> None:
         for label in (
             self.node_number,
@@ -147,9 +152,9 @@ class NodeDetailsForm(QWidget):
             self.ev_count,
             self.cpu_name,
             self.interface,
-            self.module_descriptor,
         ):
             label.setText("-")
+        self.show_module_descriptor()
 
     def show_live_identity(self, node, mode: str) -> None:
         self.node_number.setText(str(node.node_number))
@@ -176,9 +181,9 @@ class NodeDetailsForm(QWidget):
             self.ev_count,
             self.cpu_name,
             self.interface,
-            self.module_descriptor,
         ):
             label.setText("-")
+        self.show_module_descriptor()
 
     def show_configured_node(self, node) -> None:
         self.node_number.setText(str(node.number))
@@ -200,7 +205,7 @@ class NodeDetailsForm(QWidget):
         self.ev_count.setText("20")
         self.cpu_name.setText("P18F25K80")
         self.interface.setText("CAN")
-        self.module_descriptor.setText("CANMIO-A520-3d.json (System definitions)")
+        self.show_module_descriptor()
 
     def show_parameters(self, parameters: dict[int, int]) -> str:
         """Display confirmed PARAN values and return the formatted firmware."""

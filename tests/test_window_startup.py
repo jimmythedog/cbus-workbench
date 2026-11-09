@@ -861,6 +861,10 @@ class WindowStartupTests(unittest.TestCase):
         self.assertEqual(view.details.firmware.text(), "-")
         self.assertEqual(view.details.cpu_name.text(), "-")
         self.assertEqual(view.details.interface.text(), "-")
+        # Selection is available only after full discovery releases the navigator.
+        window.cbus_services["Default"].discovery_status_changed.emit(
+            "Discovery incomplete"
+        )
         view.node_list.setCurrentItem(view.node_list.item(1))
         self.assertEqual(view.details.node_number.text(), "259")
         self.assertEqual(view.details.event_count.text(), "9")

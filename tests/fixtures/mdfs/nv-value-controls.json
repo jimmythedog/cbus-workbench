@@ -1,0 +1,109 @@
+{
+  "nodeVariables": [
+    {
+      "type": "NodeVariableNumber",
+      "nodeVariableIndex": 10,
+      "displayTitle": "Number - NV10",
+      "displaySubTitle": "linked 12,13,14",
+      "linkedVariables": {
+        "NV": [
+          12,
+          13,
+          14
+        ]
+      }
+    },
+    {
+      "type": "NodeVariableNumber",
+      "nodeVariableIndex": 11,
+      "displayTitle": "Number - NV11",
+      "displaySubTitle": "range 2 to 12",
+      "max": 12,
+      "min": 2
+    },
+    {
+      "type": "NodeVariableNumber",
+      "nodeVariableIndex": 12,
+      "displayTitle": "Number - NV12",
+      "displaySubTitle": "offset 100",
+      "displayOffset": 100,
+      "displayUnits": "mS"
+    },
+    {
+      "type": "NodeVariableNumber",
+      "nodeVariableIndex": 13,
+      "displayTitle": "Number - NV13",
+      "displaySubTitle": "range 0 to 25500",
+      "displayScale": 100
+    },
+    {
+      "type": "NodeVariableNumber",
+      "nodeVariableIndex": 13,
+      "displayTitle": "Number - NV13",
+      "displaySubTitle": "range test",
+      "displayScale": 0.1
+    },
+    {
+      "type": "NodeVariableNumber",
+      "nodeVariableIndex": 13,
+      "displayTitle": "Number - NV13",
+      "displaySubTitle": "range test",
+      "displayScale": 0.01
+    },
+    {
+      "type": "NodeVariableNumber",
+      "nodeVariableIndex": 14,
+      "displayTitle": "Number - NV14",
+      "displaySubTitle": "3 bits test",
+      "startBit": 0,
+      "endBit": 2
+    },
+    {
+      "type": "NodeVariableNumber",
+      "nodeVariableIndex": 14,
+      "displayTitle": "Number - NV14",
+      "displaySubTitle": "high 3 bits test",
+      "displayOffset": 1,
+      "startBit": 5,
+      "endBit": 7,
+      "max": 7,
+      "min": 0
+    },
+    {
+      "type": "NodeVariableNumber",
+      "nodeVariableIndex": 15,
+      "displayTitle": "Number - NV15",
+      "displaySubTitle": "scaled high 3 bits",
+      "displayScale": 10,
+      "displayOffset": 10,
+      "startBit": 5,
+      "endBit": 7,
+      "max": 7,
+      "min": 0
+    },
+    {
+      "type": "NodeVariableSelect",
+      "nodeVariableIndex": 1,
+      "bitMask": 127,
+      "displayTitle": "Startup Actions",
+      "options": [
+        {
+          "label": "0 - Send all current taught event states",
+          "value": 0
+        },
+        {
+          "label": "1 - Do nothing",
+          "value": 1
+        },
+        {
+          "label": "2 - Set all taught states to according to switches",
+          "value": 2
+        },
+        {
+          "label": "3 - Set all taught states to OFF",
+          "value": 3
+        }
+      ]
+    }
+  ]
+}

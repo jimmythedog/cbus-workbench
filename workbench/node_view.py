@@ -1,11 +1,12 @@
 import logging
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtWidgets import QListWidget, QListWidgetItem, QSplitter
 
 from .cbus_service import NodeState
 from .logging_config import trace
+from .mdfs import MdfError, MdfRepository
 from .node_backup_files import saved_node_numbers
 from .node_details import NodeDetails
 from .node_metadata import load_metadata
@@ -35,6 +36,7 @@ class NodeView(QSplitter):
         self.node_list.setSortingEnabled(True)
 
         self.details = NodeDetails(events)
+        self.mdf_repository = MdfRepository()
         self.saved_metadata = {}
         self.state_lookup: Callable[[int], NodeState] | None = None
         self.discovering = False
@@ -83,7 +85,16 @@ class NodeView(QSplitter):
                         selected = item
                         break
         self.selection_before_discovery = None
-        self.node_list.setCurrentItem(selected)
+        # Restore selection without its usual lookup: the final pass below resolves
+        # every live node once, including the selected node's details.
+        with QSignalBlocker(self.node_list):
+            self.node_list.setCurrentItem(selected)
+        self.details.show_node(selected)
+        if status != "Disconnected" and self.state_lookup is not None:
+            for index in range(self.node_list.count()):
+                node = self.node_list.item(index).data(Qt.ItemDataRole.UserRole)
+                if isinstance(node, Pnn):
+                    self.refresh_state(node.node_number)
         trace(
             logger,
             "Node selection resumed after layout discovery",
@@ -104,7 +115,78 @@ class NodeView(QSplitter):
         if current is not None and self.state_lookup is not None:
             node = current.data(Qt.ItemDataRole.UserRole)
             if isinstance(node, Pnn):
-                self.details.show_live_state(self.state_lookup(node.node_number))
+                state = self.state_lookup(node.node_number)
+                if state is not None:
+                    self.show_live_state(state)
+
+    def show_live_state(self, state: NodeState) -> None:
+        """Display discovery values and resolve MDFs from the same live evidence."""
+        # NV/EV replies do not change the module name. Defer all descriptor work
+        # during full discovery so it cannot delay the next protocol request.
+        if self.discovering:
+            return
+        form = self.details.details_page
+        error_message = None
+        try:
+            mdf = self.mdf_repository.lookup(state.identity, state.parameters)
+        except MdfError as error:
+            # The repository logs the detailed failure; retain node/layout context here.
+            logger.error(
+                "Module descriptor lookup failed",
+                extra={
+                    "fields": {
+                        "layout": self.details.logical_layout,
+                        "node_number": state.identity.node_number,
+                        "error": str(error),
+                    }
+                },
+            )
+            mdf = None
+            error_message = str(error)
+        name = module_name(
+            state.identity.manufacturer,
+            state.identity.module_type,
+            mdf.data.get("moduleName") if mdf else None,
+        )
+        selected = False
+        for index in range(self.node_list.count()):
+            item = self.node_list.item(index)
+            if (
+                node_number(item.data(Qt.ItemDataRole.UserRole))
+                == state.identity.node_number
+            ):
+                item.setText(f"{state.identity.node_number} - {name}")
+                selected = item is self.node_list.currentItem()
+                break
+        trace(
+            logger,
+            "Resolved live module name node=%s name=%s",
+            state.identity.node_number,
+            name,
+        )
+        if not selected:
+            return
+        # Details retain PARAN's unknown marker until module type is confirmed.
+        details_name = (
+            name
+            if mdf
+            else module_name(state.parameters.get(1), state.parameters.get(3))
+        )
+        self.details.show_live_state(state, mdf, module_name=details_name)
+        if error_message is not None:
+            form.show_module_descriptor("Error", error_message)
+            return
+        if mdf is None:
+            form.show_module_descriptor()
+            return
+        source = (
+            "User"
+            if mdf.path.parent == self.mdf_repository.user_directory
+            else "System"
+        )
+        form.show_module_descriptor(
+            f"{mdf.path.name} ({source})", str(mdf.path.absolute())
+        )
 
     def refresh_state(self, node_number: int) -> None:
         """Refresh the navigator identity and selected details from service state."""
@@ -121,8 +203,7 @@ class NodeView(QSplitter):
             if isinstance(node, Pnn) and node.node_number == node_number:
                 item.setData(Qt.ItemDataRole.UserRole, identity)
                 item.setText(f"{node_number} - {name}")
-                if item is self.node_list.currentItem():
-                    self.details.show_live_state(state)
+                self.show_live_state(state)
                 return
 
     def show_identity(self, node: Pnn) -> None:
@@ -135,12 +216,16 @@ class NodeView(QSplitter):
                 item.setText(f"{node.node_number} - {name}")
                 if item is self.node_list.currentItem():
                     self.show_selected_node(item)
+                else:
+                    self.refresh_state(node.node_number)
                 return
 
         first_node = self.node_list.count() == 0
         item = NodeListItem(f"{node.node_number} - {name}")
         item.setData(Qt.ItemDataRole.UserRole, node)
         self.node_list.addItem(item)
+        if not first_node or self.discovering:
+            self.refresh_state(node.node_number)
         if first_node and not self.discovering:
             self.node_list.setCurrentItem(item)
             trace(

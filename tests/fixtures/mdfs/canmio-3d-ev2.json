@@ -1,0 +1,141 @@
+{
+  "eventVariables": [
+    {
+      "displayTitle": "Consumed Event - EV2",
+      "type": "EventVariableGroup",
+      "groupItems": [
+        {
+          "type": "EventVariableSelect",
+          "bitMask": 127,
+          "eventVariableIndex": 2,
+          "displayTitle": "Action",
+          "options": [
+            {
+              "value": 0,
+              "label": "no action"
+            },
+            {
+              "value": 1,
+              "label": "Consumed SOD"
+            },
+            {
+              "value": 2,
+              "label": "Wait 0.5s"
+            },
+            {
+              "value": 3,
+              "label": "Wait 1s"
+            },
+            {
+              "value": 4,
+              "label": "Wait 2s"
+            },
+            {
+              "value": 5,
+              "label": "Wait 5s"
+            },
+            {
+              "value": 7,
+              "label": "Stop Processing"
+            },
+            {
+              "value": 8,
+              "overload": {
+                "nv": 16,
+                "labels": [
+                  {
+                    "value": 1,
+                    "label": "${channel1} - Change"
+                  },
+                  {
+                    "value": 2,
+                    "label": "${channel1} - Change"
+                  },
+                  {
+                    "value": 3,
+                    "label": "${channel1} - Change"
+                  },
+                  {
+                    "value": 4,
+                    "label": "${channel1} - AT1"
+                  }
+                ]
+              }
+            },
+            {
+              "value": 9,
+              "overload": {
+                "nv": 16,
+                "labels": [
+                  {
+                    "value": 1,
+                    "label": "${channel1} - ON"
+                  },
+                  {
+                    "value": 2,
+                    "label": "${channel1} - ON"
+                  },
+                  {
+                    "value": 3,
+                    "label": "${channel1} - ON"
+                  },
+                  {
+                    "value": 4,
+                    "label": "${channel1} - AT2"
+                  }
+                ]
+              }
+            },
+            {
+              "value": 10,
+              "overload": {
+                "nv": 16,
+                "labels": [
+                  {
+                    "value": 1,
+                    "label": "${channel1} - OFF"
+                  },
+                  {
+                    "value": 2,
+                    "label": "${channel1} - OFF"
+                  },
+                  {
+                    "value": 3,
+                    "label": "${channel1} - OFF"
+                  },
+                  {
+                    "value": 4,
+                    "label": "${channel1} - AT3"
+                  }
+                ]
+              }
+            },
+            {
+              "value": 11,
+              "overload": {
+                "nv": 16,
+                "labels": [
+                  {
+                    "value": 1,
+                    "label": "${channel1} - FLASH"
+                  },
+                  {
+                    "value": 4,
+                    "label": "${channel1} - AT4"
+                  }
+                ]
+              }
+            }
+          ],
+          "comment": "end of EV2"
+        },
+        {
+          "displayTitle": "Simultaneous",
+          "type": "EventVariableBitSingle",
+          "eventVariableIndex": 2,
+          "bit": 7
+        }
+      ]
+    }
+  ]
+}

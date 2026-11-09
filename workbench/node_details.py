@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from .cbus_service import NodeState
 from .logging_config import trace
+from .mdfs import Mdf
 from .node import Node
 from .node_backup_files import node_backup
 from .node_backup_workflow import NodeBackupWorkflow
@@ -23,7 +24,7 @@ from .node_backups import NodeBackups
 from .node_details_form import NodeDetailsForm
 from .node_events import NodeEvents
 from .node_failure_report import NodeFailureReport
-from .node_variables import MdfNodeVariables, RawNodeVariables
+from .node_variables import PROTOTYPE_MDF, MdfNodeVariables, RawNodeVariables
 from .pnn import Pnn
 
 DEFAULT_NODE_TITLE = "Node details"
@@ -39,6 +40,7 @@ class NodeDetails(QWidget):
         self.connected = False
         self.saved_metadata = {}
         self.live_state = None
+        self.live_mdf = None
         self.logical_layout = None
         self.node = None
         self.node_list_item = None
@@ -116,6 +118,8 @@ class NodeDetails(QWidget):
         self.raw_values = RawNodeVariables()
         self.mdf_values = MdfNodeVariables()
         self.mdf_values.set_editing(False)
+        self.raw_values.value_changed.connect(self.refresh_configuration_views)
+        self.mdf_values.value_changed.connect(self.refresh_configuration_views)
 
         self.variables = QStackedWidget()
         self.variables.addWidget(self.raw_values)
@@ -201,8 +205,10 @@ class NodeDetails(QWidget):
         self.tabs.addTab(self.variables_page, "Node Variables")
 
         self.node_events = NodeEvents(events)
-        self.events_page = self.node_events
-        self.tabs.addTab(self.events_page, "Events")
+        self.produced_events_page = self.node_events.produced_page
+        self.consumed_events_page = self.node_events
+        self.tabs.addTab(self.consumed_events_page, "Consumed Events")
+        self.tabs.addTab(self.produced_events_page, "Produced Events")
 
         self.node_backups = NodeBackups()
         self.backup_workflow = NodeBackupWorkflow(
@@ -219,6 +225,7 @@ class NodeDetails(QWidget):
         self.action_area.addWidget(details_actions)
         self.action_area.addWidget(variables_actions)
         self.action_area.addWidget(events_actions)
+        self.action_area.addWidget(QWidget())  # Produced events are read-only.
 
         # Backups action buttons
         backups_actions = QWidget()
@@ -248,6 +255,13 @@ class NodeDetails(QWidget):
 
         layout.addWidget(self.tabs, 1)
         layout.addWidget(self.action_area)
+
+    def refresh_configuration_views(self):
+        if self.desired_configuration is None:
+            return
+        self.raw_values.refresh_values()
+        self.mdf_values.refresh_values()
+        self.node_events.refresh_configuration_controls()
 
     def save_editing(self):
         """Submit the whole desired configuration to the existing Restore path."""
@@ -279,6 +293,7 @@ class NodeDetails(QWidget):
         self.saving_configuration = saving
         self.variables.setEnabled(not saving)
         self.node_events.setEnabled(not saving)
+        self.produced_events_page.setEnabled(not saving)
         for button in (
             self.save_button,
             self.events_save_button,
@@ -319,9 +334,9 @@ class NodeDetails(QWidget):
                 0,
                 "",
                 False,
-                nv_values=self.live_state.nv_values.copy(),
+                nv_values=self.live_state.nv_values,
             )
-        self.node.nv_values = self.live_state.nv_values.copy()
+        self.node.nv_values = self.live_state.nv_values
         return self.node
 
     def start_name_editing(self):
@@ -353,7 +368,8 @@ class NodeDetails(QWidget):
     def set_name_editing_tabs(self, editing):
         for page in (
             self.variables_page,
-            self.events_page,
+            self.produced_events_page,
+            self.consumed_events_page,
             self.node_backups,
         ):
             self.tabs.setTabEnabled(self.tabs.indexOf(page), not editing)
@@ -423,11 +439,11 @@ class NodeDetails(QWidget):
     def stop_editing(self):
         node = self.nv_display_node()
         self.raw_values.set_editing(False)
-        if node is not None:
-            self.raw_values.show_node(node)
-
         self.mdf_values.set_editing(False)
-        if node is not None:
+        if self.live_state is not None:
+            self.show_nv_values()
+        elif node is not None:
+            self.raw_values.show_node(node)
             self.mdf_values.show_node(node)
 
         self.buttons.setCurrentIndex(0)
@@ -437,7 +453,8 @@ class NodeDetails(QWidget):
 
     def set_editing(self, editing):
         self.tabs.setTabEnabled(self.tabs.indexOf(self.details_page), not editing)
-        self.tabs.setTabEnabled(self.tabs.indexOf(self.events_page), True)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.produced_events_page), True)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.consumed_events_page), True)
         self.tabs.setTabEnabled(self.tabs.indexOf(self.node_backups), not editing)
 
     def start_events_editing(self):
@@ -478,9 +495,13 @@ class NodeDetails(QWidget):
         self.node_events.save_edit()
         self.finish_events_editing()
 
-    def show_parameters(self, parameters: dict[int, int]) -> None:
+    def show_parameters(
+        self, parameters: dict[int, int], module_name: str | None = None
+    ) -> None:
         """Display confirmed PARAN values; absent indices remain unknown."""
         firmware = self.details_page.show_parameters(parameters)
+        if module_name is not None:
+            self.module_type.setText(module_name)
         self.summary_firmware.setText(f"Firmware: {firmware}")
         if isinstance(self.node, Pnn):
             self.summary.setTitle(
@@ -490,21 +511,40 @@ class NodeDetails(QWidget):
         self.details_page.show_can_id(is_can)
         self.summary_can_id.setVisible(is_can)
 
-    def show_live_state(self, state: NodeState) -> None:
+    def show_live_state(
+        self,
+        state: NodeState,
+        mdf: Mdf | None = None,
+        *,
+        module_name: str | None = None,
+    ) -> None:
         """Refresh the selected identity from confirmed service values."""
         self.live_state = state
+        # Freeze presentation during Edit just as we freeze its working copy.
+        if self.desired_configuration is None:
+            self.live_mdf = mdf
+            try:
+                self.mdf_values.set_definition(mdf.data if mdf else None)
+            except ValueError, KeyError, TypeError:
+                logger.exception(
+                    "Unsupported MDF presentation node=%s path=%s",
+                    state.identity.node_number,
+                    mdf.path,
+                )
+                self.live_mdf = None
+            self.variables.setCurrentIndex(
+                1 if self.live_mdf and self.mdf_values.pages.count() > 1 else 0
+            )
         self.update_connection_details()
         self.update_backup_buttons()
-        self.show_parameters(state.parameters)
+        self.show_parameters(state.parameters, module_name)
         self.details_page.stored_events.setText(
             "-" if state.stored_event_count is None else str(state.stored_event_count)
         )
         self.edit_button.setEnabled(self.can_edit_configuration())
         if self.desired_configuration is None:
-            node = self.nv_display_node()
-            self.raw_values.show_live_values(state.parameters.get(6), state.nv_values)
-            self.mdf_values.show_node(node)
-        self.node_events.show_live_state(state)
+            self.show_nv_values()
+        self.node_events.show_live_state(state, mdf.data if mdf else None)
         trace(
             logger,
             "Live node values displayed",
@@ -520,6 +560,12 @@ class NodeDetails(QWidget):
                 }
             },
         )
+
+    def show_nv_values(self):
+        """Both raw tables and MDF forms read the same confirmed live dictionary."""
+        state = self.live_state
+        self.raw_values.show_live_values(state.parameters.get(6), state.nv_values)
+        self.mdf_values.show_live_values(state.parameters.get(6), state.nv_values)
 
     def show_node(self, current):
         if self.node_events.editing_values is not None:
@@ -541,6 +587,7 @@ class NodeDetails(QWidget):
                 None if live_identity or saved_node else self.node
             )
         self.live_state = None
+        self.live_mdf = None
         if (live_identity or saved_node) and self.logical_layout is not None:
             number = self.node if saved_node else self.node.node_number
             self.node_backups.show_live_node(self.logical_layout, number)
@@ -583,6 +630,7 @@ class NodeDetails(QWidget):
         self.summary_status.setText("Status: -")
 
     def _show_live_identity(self, node) -> None:
+        self.mdf_values.set_definition(None)
         self.variables.setCurrentIndex(0)
         self.raw_values.show_live_values(None, {})
         mode = "FLiM" if node.is_flim else "SLiM"
@@ -594,6 +642,7 @@ class NodeDetails(QWidget):
         self.summary_status.setText("Status: -")
 
     def _show_configured_node(self, node) -> None:
+        self.mdf_values.set_definition(PROTOTYPE_MDF)
         self.raw_values.show_node(node)
         self.mdf_values.show_node(node)
 

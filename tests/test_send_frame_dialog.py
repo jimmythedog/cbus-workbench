@@ -121,7 +121,7 @@ class SendFrameDialogTests(unittest.TestCase):
             view.show_identity(state.identity)
             service.discovery_status_changed.emit("Configuration ready")
             details = view.details
-            details.tabs.setCurrentWidget(details.events_page)
+            details.tabs.setCurrentWidget(details.consumed_events_page)
             details.events_edit_button.click()
             details.raw_values.item(0, 1).setText("9")
             results = []

@@ -1,0 +1,72 @@
+{
+  "nodeVariables": [
+    {
+      "type": "NodeVariableDual",
+      "nodeVariableIndexHigh": 40,
+      "nodeVariableIndexLow": 41,
+      "displayTitle": "Dual",
+      "displaySubTitle": "linked 7,8",
+      "displayUnits": "mS",
+      "linkedVariables": {
+        "NV": [
+          7,
+          8
+        ]
+      }
+    },
+    {
+      "type": "NodeVariableDual",
+      "nodeVariableIndexHigh": 40,
+      "nodeVariableIndexLow": 41,
+      "displayTitle": "Dual",
+      "displaySubTitle": "min & max",
+      "max": 12,
+      "min": 2
+    },
+    {
+      "type": "NodeVariableDual",
+      "nodeVariableIndexHigh": 42,
+      "nodeVariableIndexLow": 43,
+      "displayTitle": "Dual",
+      "displaySubTitle": "scaling",
+      "displayScale": 0.1,
+      "displayUnits": "mS"
+    },
+    {
+      "type": "NodeVariableDual",
+      "nodeVariableIndexHigh": 42,
+      "nodeVariableIndexLow": 43,
+      "displayTitle": "Dual",
+      "displaySubTitle": "scaling",
+      "displayScale": 0.01,
+      "displayUnits": "mS"
+    },
+    {
+      "type": "NodeVariableDual",
+      "nodeVariableIndexHigh": 42,
+      "nodeVariableIndexLow": 43,
+      "displayTitle": "Dual",
+      "displaySubTitle": "offset",
+      "displayOffset": 100,
+      "displayUnits": "mS"
+    },
+    {
+      "type": "NodeVariableDual",
+      "nodeVariableIndexHigh": 42,
+      "nodeVariableIndexLow": 43,
+      "displayTitle": "Dual",
+      "displaySubTitle": "12 bits",
+      "startBit": 0,
+      "endBit": 11
+    },
+    {
+      "type": "NodeVariableDual",
+      "nodeVariableIndexHigh": 42,
+      "nodeVariableIndexLow": 43,
+      "displayTitle": "Dual",
+      "displaySubTitle": "Hi 12 bits",
+      "startBit": 4,
+      "endBit": 15
+    }
+  ]
+}

@@ -10,11 +10,16 @@ Early development. Currently implemented:
 - Saved layouts with TCP/IP or serial GridConnect connections and optional auto-connect.
 - Node discovery, connection/discovery status and confirmed node information.
   Discovered nodes and their last-known parameters/CAN ID are remembered without backups.
-  During full discovery, node selection is disabled and details remain empty. When
+  During full discovery, node selection is disabled and details remain empty; MDF
+  lookup and module names are deferred until discovery ends. When
   discovery ends, the previous node is restored if found; otherwise the first
   discovered node is selected, including when discovery is incomplete.
 - Reading node variables (NVs), stored events and event variables (EVs), with one
   shared editing session and verified application of the complete configuration.
+- Separate full-width Produced Events and Consumed Events tabs.
+  Live EV rows show supported MDF controls alongside their raw values.
+  Supported MDF controls and raw values edit the same desired configuration;
+  outside Edit, they display confirmed hardware values and remain read-only.
 - Node and layout backups, optional descriptions, incomplete-backup warnings,
   offline viewing, comparison and node restoration with final verification.
   Node backup New, Compare and Restore actions remain disabled throughout restoration.

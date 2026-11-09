@@ -2,6 +2,7 @@
 
 import unittest
 from copy import deepcopy
+from pathlib import Path
 from unittest.mock import patch
 
 from PySide6.QtTest import QTest
@@ -1032,6 +1033,99 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertEqual(details.events_buttons.currentIndex(), 0)
         self.assertFalse(self.learn)
 
+    def test_mdf_edits_share_raw_values_cancel_and_restore_save(self):
+        from PySide6.QtWidgets import QCheckBox, QComboBox, QDoubleSpinBox
+
+        from workbench.mdfs import Mdf
+
+        select = {
+            "type": "NodeVariableSelect",
+            "nodeVariableIndex": 1,
+            "displayTitle": "Mode",
+            "bitMask": 3,
+            "options": [{"value": 0, "label": "Off"}, {"value": 3, "label": "On"}],
+        }
+        number = {
+            "type": "NodeVariableNumber",
+            "nodeVariableIndex": 2,
+            "displayTitle": "Number",
+            "startBit": 1,
+            "endBit": 3,
+            "displayScale": 0.5,
+            "displayOffset": 1,
+        }
+        slider = {**number, "type": "NodeVariableSlider", "displayTitle": "Slider"}
+        bit = {
+            "type": "NodeVariableBitArray",
+            "nodeVariableIndex": 3,
+            "displayTitle": "Flags",
+            "bitCollection": [{"bitPosition": 0, "label": "Flag"}],
+            "visibilityLogic": {"nv": 1, "equals": 4},
+        }
+        ev = {
+            "type": "EventVariableBitSingle",
+            "eventVariableIndex": 1,
+            "displayTitle": "EV flag",
+            "bit": 0,
+            "visibilityLogic": {"nv": 1, "equals": 4},
+        }
+        details = self.backup_details()
+        mdf = Mdf(
+            Path("editing.json"),
+            {
+                "nodeVariables": [select, dict(select), number, slider, bit],
+                "eventVariables": [ev],
+            },
+        )
+        details.show_live_state(self.state, mdf)
+        form = details.mdf_values.pages.widget(1)
+        combos = form.findChildren(QComboBox)
+        numbers = form.findChildren(QDoubleSpinBox)
+        flag = form.findChild(QCheckBox)
+        self.assertFalse(combos[0].isEnabled())
+        for save in (False, True):
+            details.start_editing()
+            combos[0].setCurrentIndex(0)
+            self.assertEqual(details.desired_configuration["nvs"][0], 4)
+            self.assertEqual(combos[1].currentData(), 0)
+            self.assertEqual(details.raw_values.item(0, 1).text(), "4")
+            self.assertFalse(flag.isHidden())
+            flag.click()
+            self.assertEqual(details.desired_configuration["nvs"][2], 8)
+            numbers[1].setValue(3)
+            self.assertEqual(details.desired_configuration["nvs"][1], 8)
+            self.assertEqual(numbers[0].value(), 3)
+            numbers[0].setValue(2)
+            self.assertEqual(details.desired_configuration["nvs"][1], 4)
+            self.assertEqual(numbers[1].value(), 2)
+            details.mdf_values.raw_values.item(1, 1).setText("14")
+            self.assertEqual(numbers[0].value(), 4.5)
+            self.assertEqual(details.raw_values.item(1, 1).text(), "14")
+            event = details.node_events.consumed_table.topLevelItem(0)
+            event.setExpanded(True)
+            ev_flag = details.node_events.consumed_table.itemWidget(
+                event.child(0), 1
+            ).findChild(QCheckBox)
+            self.assertFalse(ev_flag.isHidden())
+            details.raw_values.item(0, 1).setText("7")
+            self.assertTrue(ev_flag.isHidden())
+            self.assertTrue(flag.isHidden())
+            details.raw_values.item(0, 1).setText("4")
+            ev_flag.click()
+            desired = deepcopy(details.desired_configuration)
+            self.assertEqual(self.state.nv_values, {1: 7, 2: 8, 3: 9})
+            if save:
+                details.save_button.click()
+                self.assertEqual(self.service.restore.backup, desired)
+                self.run_node()
+                self.assertTrue(self.results[-1][1])
+                self.assertEqual(compare_live_node(self.state, desired), ([], False))
+            else:
+                details.cancel_editing()
+                self.assertEqual(details.raw_values.item(0, 1).text(), "7")
+                self.assertFalse(combos[0].isEnabled())
+                self.assertEqual(self.connection.sent, [])
+
     def test_combined_editor_save_from_nv_tab(self):
         self.check_editor_save(events_tab=False)
 
@@ -1071,14 +1165,18 @@ class NodeRestoreTests(unittest.TestCase):
         item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, Node(258, "Test", 2, "", True))
         details.show_node(item)
-        details.show_live_state(self.state)
+        from workbench.mdfs import Mdf
+        from workbench.node_variables import PROTOTYPE_MDF
+
+        mdf = Mdf(Path("test.json"), PROTOTYPE_MDF)
+        details.show_live_state(self.state, mdf)
         self.service.restore.changed.connect(details.show_restore_progress)
         self.service.restore.finished.connect(details.finish_restore)
         self.service.node_state_updated.connect(
-            lambda _n: details.show_live_state(self.state)
+            lambda _n: details.show_live_state(self.state, mdf)
         )
         details.edit_button.click()
-        details.mdf_values.global_settings.startup_delay.setValue(11)
+        details.raw_values.item(1, 1).setText("11")
         details.raw_values.item(2, 1).setText("10")
         self.assertEqual(details.desired_configuration["nvs"], [7, 11, 10])
         self.assertEqual(self.state.nv_values, {1: 7, 2: 8, 3: 9})
@@ -1094,7 +1192,10 @@ class NodeRestoreTests(unittest.TestCase):
             self.assertEqual(
                 [table.item(i, 1).text() for i in range(3)], ["99", "11", "10"]
             )
-        self.assertEqual(details.mdf_values.global_settings.startup_delay.value(), 11)
+        from PySide6.QtWidgets import QDoubleSpinBox
+
+        form = details.mdf_values.pages.widget(1)
+        self.assertEqual(form.findChild(QDoubleSpinBox).value(), 11)
         self.assertIsNone(details.desired_configuration)
         details.edit_button.click()
         self.assertEqual(details.nv_result.text(), "")

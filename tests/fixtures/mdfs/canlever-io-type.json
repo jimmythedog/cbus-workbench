@@ -1,0 +1,247 @@
+{
+  "type": "NodeVariableGroup",
+  "displayTitle": "IO Type & Default Events",
+  "displaySubTitle": "Clear default events before changing IO Type",
+  "groupItems": [
+    {
+      "type": "NodeVariableSelect",
+      "visibilityLogic": {
+        "JLL": {
+          "!=": [
+            {
+              "NV": 19
+            },
+            2
+          ]
+        }
+      },
+      "nodeVariableIndex": 72,
+      "displayTitle": "IO Type",
+      "bitMask": 15,
+      "options": [
+        {
+          "label": "INPUT",
+          "value": 0
+        },
+        {
+          "label": "OUTPUT",
+          "value": 1
+        },
+        {
+          "label": "SERVO",
+          "value": 2
+        },
+        {
+          "label": "BOUNCE",
+          "value": 3
+        },
+        {
+          "label": "MULTI",
+          "value": 4
+        }
+      ]
+    },
+    {
+      "type": "NodeVariableSelect",
+      "visibilityLogic": {
+        "JLL": {
+          "==": [
+            {
+              "NV": 19
+            },
+            2
+          ]
+        }
+      },
+      "nodeVariableIndex": 72,
+      "displayTitle": "IO Type",
+      "bitMask": 255,
+      "options": [
+        {
+          "label": "SERVO",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "type": "NodeVariableBitArray",
+      "comment": "INPUT type only, nv72 == 0, 16, 32, 48, 64, 80, 96, 112,, 0x00, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70",
+      "visibilityLogic": {
+        "JLL": {
+          "in": [
+            {
+              "NV": 72
+            },
+            [
+              0,
+              16,
+              32,
+              48,
+              64,
+              80,
+              96,
+              112
+            ]
+          ]
+        }
+      },
+      "nodeVariableIndex": 72,
+      "displayTitle": "Default Events",
+      "displaySubTitle": "",
+      "bitMask": 112,
+      "bitCollection": [
+        {
+          "bitPosition": 4,
+          "label": "Primary - Input Event (0xx)"
+        }
+      ]
+    },
+    {
+      "type": "NodeVariableBitArray",
+      "comment": "OUTPUT type only, nv72 == 1, 17, 33, 49, 65, 81, 97, 113,, 0x01, 0x11, 0x21, 0x31, 0x41, 0x51, 0x61, 0x71",
+      "visibilityLogic": {
+        "JLL": {
+          "in": [
+            {
+              "NV": 72
+            },
+            [
+              1,
+              17,
+              33,
+              49,
+              65,
+              81,
+              97,
+              113
+            ]
+          ]
+        }
+      },
+      "nodeVariableIndex": 72,
+      "displayTitle": "Default Events",
+      "displaySubTitle": "",
+      "bitMask": 112,
+      "bitCollection": [
+        {
+          "bitPosition": 4,
+          "label": "Primary - Change Event (0xx)"
+        }
+      ]
+    },
+    {
+      "type": "NodeVariableBitArray",
+      "comment": "SERVO type only, nv72 == 2, 18, 34, 50, 66, 82, 98, 114,, 0x02, 0x12, 0x22, 0x32, 0x42, 0x52, 0x62, 0x72",
+      "visibilityLogic": {
+        "JLL": {
+          "and": [
+            {
+              "!=": [
+                {
+                  "NV": 19
+                },
+                2
+              ]
+            },
+            {
+              "in": [
+                {
+                  "NV": 72
+                },
+                [
+                  2,
+                  18,
+                  34,
+                  50,
+                  66,
+                  82,
+                  98,
+                  114
+                ]
+              ]
+            }
+          ]
+        }
+      },
+      "nodeVariableIndex": 72,
+      "displayTitle": "Default Events",
+      "displaySubTitle": "",
+      "bitMask": 112,
+      "bitCollection": [
+        {
+          "bitPosition": 4,
+          "label": "Primary - Start Event (7xx)"
+        },
+        {
+          "bitPosition": 5,
+          "label": "Secondary - Mid Event (8xx)"
+        },
+        {
+          "bitPosition": 6,
+          "label": "Tertiary - End Event (9xx)"
+        }
+      ]
+    },
+    {
+      "type": "NodeVariableBitArray",
+      "comment": "BOUMCE type only, nv72 == 3, 19, 35, 51, 67, 83, 99, 115,, 0x03, 0x13, 0x23, 0x33, 0x43, 0x53, 0x63, 0x73",
+      "visibilityLogic": {
+        "JLL": {
+          "in": [
+            {
+              "NV": 72
+            },
+            [
+              3,
+              19,
+              35,
+              51,
+              67,
+              83,
+              99,
+              115
+            ]
+          ]
+        }
+      },
+      "nodeVariableIndex": 72,
+      "displayTitle": "Default Events",
+      "displaySubTitle": "",
+      "bitMask": 112,
+      "bitCollection": [
+        {
+          "bitPosition": 4,
+          "label": "Primary - Change Event (0xx)"
+        }
+      ]
+    },
+    {
+      "type": "NodeVariableBitArray",
+      "comment": "MULTI typeonly, nv72 == 4, 20, 36, 52, 68, 84, 100, 116,, 0x04, 0x14, 0x24, 0x34, 0x44, 0x54, 0x64, 0x74",
+      "visibilityLogic": {
+        "JLL": {
+          "in": [
+            {
+              "NV": 72
+            },
+            [
+              4,
+              20,
+              36,
+              52,
+              68,
+              84,
+              100,
+              116
+            ]
+          ]
+        }
+      },
+      "nodeVariableIndex": 72,
+      "displayTitle": "Default Events - None",
+      "displaySubTitle": "",
+      "bitMask": 112,
+      "bitCollection": []
+    }
+  ]
+}
