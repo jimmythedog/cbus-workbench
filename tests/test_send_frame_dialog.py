@@ -119,6 +119,7 @@ class SendFrameDialogTests(unittest.TestCase):
             save_backup("home", {**backup, "node": 259})
             view = self.window.layouts["Home"].node_view
             view.show_identity(state.identity)
+            service.discovery_status_changed.emit("Configuration ready")
             details = view.details
             details.tabs.setCurrentWidget(details.events_page)
             details.events_edit_button.click()

@@ -37,6 +37,8 @@ class NodeView(QSplitter):
         self.details = NodeDetails(events)
         self.saved_metadata = {}
         self.state_lookup: Callable[[int], NodeState] | None = None
+        self.discovering = False
+        self.selection_before_discovery: int | None = None
 
         self.node_list.currentItemChanged.connect(self.show_selected_node)
 
@@ -47,6 +49,55 @@ class NodeView(QSplitter):
         self.addWidget(self.node_list)
         self.addWidget(self.details)
         self.setSizes([250, 750])
+
+    def begin_discovery(self) -> None:
+        """Leave details empty while full layout discovery updates the node list."""
+        current = self.node_list.currentItem()
+        self.selection_before_discovery = (
+            node_number(current.data(Qt.ItemDataRole.UserRole)) if current else None
+        )
+        self.discovering = True
+        self.node_list.setCurrentItem(None)
+        self.node_list.setEnabled(False)
+        trace(
+            logger,
+            "Node selection suspended for layout discovery",
+            extra={"fields": {"node_number": self.selection_before_discovery}},
+        )
+
+    def finish_discovery(self, status: str) -> None:
+        """Restore selection once, including after incomplete discovery."""
+        if not self.discovering or status == "Discovering configuration…":
+            return
+        self.discovering = False
+        self.node_list.setEnabled(True)
+        selected = None
+        if status != "Disconnected":
+            for index in range(self.node_list.count()):
+                item = self.node_list.item(index)
+                node = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(node, Pnn):
+                    if selected is None:
+                        selected = item
+                    if node.node_number == self.selection_before_discovery:
+                        selected = item
+                        break
+        self.selection_before_discovery = None
+        self.node_list.setCurrentItem(selected)
+        trace(
+            logger,
+            "Node selection resumed after layout discovery",
+            extra={
+                "fields": {
+                    "status": status,
+                    "node_number": (
+                        node_number(selected.data(Qt.ItemDataRole.UserRole))
+                        if selected
+                        else None
+                    ),
+                }
+            },
+        )
 
     def show_selected_node(self, current, _previous=None) -> None:
         self.details.show_node(current)
@@ -90,7 +141,7 @@ class NodeView(QSplitter):
         item = NodeListItem(f"{node.node_number} - {name}")
         item.setData(Qt.ItemDataRole.UserRole, node)
         self.node_list.addItem(item)
-        if first_node:
+        if first_node and not self.discovering:
             self.node_list.setCurrentItem(item)
             trace(
                 logger,
@@ -119,5 +170,9 @@ class NodeView(QSplitter):
             item = NodeListItem(f"{number} (offline)")
             item.setData(Qt.ItemDataRole.UserRole, number)
             self.node_list.addItem(item)
-        if self.node_list.currentItem() is None and self.node_list.count():
+        if (
+            not self.discovering
+            and self.node_list.currentItem() is None
+            and self.node_list.count()
+        ):
             self.node_list.setCurrentRow(0)

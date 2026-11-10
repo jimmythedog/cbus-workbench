@@ -3,7 +3,8 @@
 import os
 import unittest
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QListWidgetItem
 
 from workbench.cbus_service import NodeState
 from workbench.layout_view import LayoutView
@@ -22,6 +23,68 @@ class LiveNodeEventsTests(unittest.TestCase):
         self.addCleanup(self.view.close)
         self.states = {}
         self.view.state_lookup = self.states.__getitem__
+
+    def test_full_discovery_restores_selection_and_displays_final_state(self):
+        for status in ("Configuration ready", "Discovery incomplete"):
+            with self.subTest(status=status):
+                node = Pnn(258, 13, 34, 0x03)
+                self.states[258] = NodeState(node, parameters={5: 1})
+                other = Pnn(100, 13, 34, 0x03)
+                self.states[100] = NodeState(other)
+                self.view.show_identity(other)
+                self.view.show_identity(node)
+                self.view.node_list.setCurrentRow(1)
+                self.view.begin_discovery()
+                self.assertIsNone(self.view.node_list.currentItem())
+                self.assertFalse(self.view.node_list.isEnabled())
+                tree = self.view.details.node_events.consumed_table
+                for value in (10, 20, 30):
+                    self.states[258].event_identities[1] = (258, value)
+                    self.view.show_identity(node)
+                    self.view.refresh_state(258)
+                    self.assertIsNone(self.view.details.node)
+                    self.assertEqual(tree.topLevelItemCount(), 0)
+                self.view.finish_discovery(status)
+                self.assertTrue(self.view.node_list.isEnabled())
+                self.assertEqual(self.view.details.node, node)
+                self.assertEqual(tree.topLevelItem(0).text(0), "258:30")
+
+    def test_full_discovery_defers_first_selection_and_falls_back_if_missing(self):
+        for remembered in (None, 999):
+            with self.subTest(remembered=remembered):
+                self.view.clear_identities()
+                if remembered is not None:
+                    # A saved offline node may not respond to discovery.
+                    item = QListWidgetItem("999 (offline)")
+                    item.setData(Qt.ItemDataRole.UserRole, remembered)
+                    self.view.node_list.addItem(item)
+                    self.view.node_list.setCurrentItem(item)
+                self.view.state_lookup = self.states.__getitem__
+                self.view.begin_discovery()
+                node = Pnn(258, 13, 34, 0x03)
+                self.states[258] = NodeState(node)
+                self.view.show_identity(node)
+                self.view.finish_discovery("Discovering configuration…")
+                self.assertIsNone(self.view.node_list.currentItem())
+                self.view.finish_discovery("Configuration ready")
+                self.assertEqual(self.view.details.node, node)
+
+    def test_disconnect_during_discovery_releases_list_without_live_selection(self):
+        node = Pnn(258, 13, 34, 0x03)
+        self.states[258] = NodeState(node)
+        self.view.show_identity(node)
+        self.view.begin_discovery()
+        self.view.finish_discovery("Disconnected")
+        self.view.clear_identities()
+        self.states.clear()
+        self.assertTrue(self.view.node_list.isEnabled())
+        self.assertIsNone(self.view.node_list.currentItem())
+        self.assertIsNone(self.view.details.node)
+        # Subsequent use retains normal first-node selection.
+        self.view.state_lookup = self.states.__getitem__
+        self.states[258] = NodeState(node)
+        self.view.show_identity(node)
+        self.assertEqual(self.view.details.node, node)
 
     def test_live_events_use_original_panels_and_expand_to_matching_evs(self):
         node = Pnn(258, 13, 34, 0x03)

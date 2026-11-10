@@ -10,6 +10,9 @@ Early development. Currently implemented:
 - Saved layouts with TCP/IP or serial GridConnect connections and optional auto-connect.
 - Node discovery, connection/discovery status and confirmed node information.
   Discovered nodes and their last-known parameters/CAN ID are remembered without backups.
+  During full discovery, node selection is disabled and details remain empty. When
+  discovery ends, the previous node is restored if found; otherwise the first
+  discovered node is selected, including when discovery is incomplete.
 - Reading node variables (NVs), stored events and event variables (EVs), with one
   shared editing session and verified application of the complete configuration.
 - Node and layout backups, optional descriptions, incomplete-backup warnings,

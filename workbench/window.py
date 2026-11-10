@@ -337,12 +337,14 @@ class MainWindow(QMainWindow):
         )
         self.cbus_services[name] = service
         service.discovery_status_changed.connect(self.update_discovery_status)
+        service.discovery_status_changed.connect(node_view.finish_discovery)
         self.layouts[name].discovery_states = lambda: (
             list(self.cbus_services[name].node_states.values())
             if name in self.cbus_services
             else []
         )
 
+        node_view.begin_discovery()
         self.error_reporter.run(
             f"Could not discover nodes on layout '{name}'", service.discover_nodes
         )

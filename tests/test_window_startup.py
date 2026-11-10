@@ -398,6 +398,9 @@ class WindowStartupTests(unittest.TestCase):
         connection = window.connections["Default"]
         logical_layout = window.layout_settings["Default"]["logical_layout"]
         connection.frame_received.emit(b":SB040NB601020D2203;")
+        window.cbus_services["Default"].discovery_status_changed.emit(
+            "Discovery incomplete"
+        )
         connection.frame_received.emit(b":SB040N9B010201A5;")
         connection.frame_received.emit(b":SB040N9B01020320;")
         self.assertEqual(load_metadata(logical_layout, 258)["canId"], 2)
@@ -569,6 +572,9 @@ class WindowStartupTests(unittest.TestCase):
 
         # PNNs arrive for the hidden layout too, without a new query on selection.
         window.connections["First"].frame_received.emit(b":SB040NB601020D2203;")
+        window.cbus_services["First"].discovery_status_changed.emit(
+            "Discovery incomplete"
+        )
         self.assertEqual(first_view.node_list.count(), 1)
         self.assertEqual(default_view.node_list.count(), 0)
         item = first_view.node_list.item(0)
@@ -596,6 +602,9 @@ class WindowStartupTests(unittest.TestCase):
         self.assertEqual(details.module_type.text(), "-")
 
         window.connections["Default"].frame_received.emit(b":SB040NB601030D2203;")
+        window.cbus_services["Default"].discovery_status_changed.emit(
+            "Discovery incomplete"
+        )
         default_action = next(
             action
             for action in window.layout_group.actions()
@@ -627,6 +636,9 @@ class WindowStartupTests(unittest.TestCase):
         navigator = view.node_list
 
         connection.frame_received.emit(b":SB040NB601020D2203;")
+        window.cbus_services["Default"].discovery_status_changed.emit(
+            "Discovery incomplete"
+        )
         first_item = navigator.item(0)
         connection.frame_received.emit(b":SB040NB601030D2303;")
         self.assertIs(navigator.currentItem(), first_item)
@@ -663,6 +675,9 @@ class WindowStartupTests(unittest.TestCase):
                 connection.frame_received.emit(
                     f":SB040NB601020D22{flags:02X};".encode()
                 )
+                window.cbus_services["Default"].discovery_status_changed.emit(
+                    "Discovery incomplete"
+                )
                 self.assertEqual(view.node_list.count(), 1)
                 self.assertIs(view.node_list.currentItem(), view.node_list.item(0))
                 self.assertEqual(
@@ -693,6 +708,9 @@ class WindowStartupTests(unittest.TestCase):
         connection = window.connections["Default"]
         view = window.layouts["Default"].node_view
         connection.frame_received.emit(b":SB040NB601020D2203;")
+        window.cbus_services["Default"].discovery_status_changed.emit(
+            "Discovery incomplete"
+        )
         selected = view.node_list.currentItem()
         details = view.details
 
@@ -735,6 +753,9 @@ class WindowStartupTests(unittest.TestCase):
         connection = window.connections["Default"]
         view = window.layouts["Default"].node_view
         connection.frame_received.emit(b":SB040NB601020D2203;")
+        window.cbus_services["Default"].discovery_status_changed.emit(
+            "Discovery incomplete"
+        )
         selected = view.node_list.currentItem()
         details = view.details
         table = details.raw_values
@@ -774,6 +795,9 @@ class WindowStartupTests(unittest.TestCase):
         connection = window.connections["Default"]
         view = window.layouts["Default"].node_view
         connection.frame_received.emit(b":SB040NB601020D2203;")
+        window.cbus_services["Default"].discovery_status_changed.emit(
+            "Discovery incomplete"
+        )
         connection.frame_received.emit(b":SB040NB601030D2303;")
         service = window.cbus_services["Default"]
         service.record_nv(258, 1, 7)
@@ -800,6 +824,9 @@ class WindowStartupTests(unittest.TestCase):
         connection = window.connections["Default"]
         view = window.layouts["Default"].node_view
         connection.frame_received.emit(b":SB040NB601020D2203;")
+        window.cbus_services["Default"].discovery_status_changed.emit(
+            "Discovery incomplete"
+        )
         service = window.cbus_services["Default"]
         service.record_nv(258, 1, 42)
         self.assertEqual(view.details.raw_values.item(0, 1).text(), "42")
@@ -808,6 +835,9 @@ class WindowStartupTests(unittest.TestCase):
         self.assertEqual(view.details.raw_values.rowCount(), 0)
         connection.connect()
         connection.frame_received.emit(b":SB040NB601020D2203;")
+        window.cbus_services["Default"].discovery_status_changed.emit(
+            "Discovery incomplete"
+        )
         connection.frame_received.emit(b":SB040N9B01020601;")
         self.assertEqual(view.details.raw_values.item(0, 1).text(), "-")
         window.cbus_services["Default"].record_nv(258, 1, 0)
@@ -850,6 +880,9 @@ class WindowStartupTests(unittest.TestCase):
         connection = window.connections["Default"]
         details = window.layouts["Default"].node_view.details
         connection.frame_received.emit(b":SB040NB601020D2203;")
+        window.cbus_services["Default"].discovery_status_changed.emit(
+            "Discovery incomplete"
+        )
 
         connection.frame_received.emit(b":SB040N9B01021401;")
         connection.frame_received.emit(b":SB040N9B01020264;")
@@ -873,7 +906,13 @@ class WindowStartupTests(unittest.TestCase):
         second_view = window.layouts["Default"].node_view
         pnn = b":SB040NB601020D2203;"
         first.frame_received.emit(pnn)
+        window.cbus_services["First"].discovery_status_changed.emit(
+            "Discovery incomplete"
+        )
         second.frame_received.emit(pnn)
+        window.cbus_services["Default"].discovery_status_changed.emit(
+            "Discovery incomplete"
+        )
         first.frame_received.emit(b":SB040N9B01020405;")
         first.frame_received.emit(b":SB040N9B0102090D;")
         first.frame_received.emit(b":SB040N9B01021301;")
@@ -902,6 +941,9 @@ class WindowStartupTests(unittest.TestCase):
 
         first.connect()
         first.frame_received.emit(pnn)
+        window.cbus_services["First"].discovery_status_changed.emit(
+            "Discovery incomplete"
+        )
         self.assertEqual(first_view.details.event_count.text(), "-")
         self.assertEqual(first_view.details.cpu_name.text(), "-")
         self.assertEqual(first_view.details.interface.text(), "-")
@@ -915,12 +957,16 @@ class WindowStartupTests(unittest.TestCase):
         self.assertEqual(first_service.nodes, {258: Pnn(258, 13, 34, 3)})
         navigator = window.layouts["Default"].node_view.node_list
         self.assertEqual(navigator.count(), 1)
+        self.assertFalse(navigator.isEnabled())
+        self.assertIsNone(navigator.currentItem())
         first_service.record_nv(258, 1, 42)
         self.assertEqual(first_service.node_states[258].nv_values, {1: 42})
 
         window.disconnect_layout()
         self.assertEqual(window.cbus_services, {})
         self.assertEqual(navigator.count(), 1)
+        self.assertTrue(navigator.isEnabled())
+        self.assertEqual(navigator.currentItem().text(), "258 (offline)")
         self.assertIsNone(window.layouts["Default"].node_view.state_lookup)
         connection.frame_received.emit(b":SB040NB601030D2203;")
         self.assertEqual(first_service.nodes, {258: Pnn(258, 13, 34, 3)})
@@ -935,6 +981,8 @@ class WindowStartupTests(unittest.TestCase):
         self.assertEqual(window.cbus_services["Default"].nodes, {})
         self.assertEqual(window.cbus_services["Default"].node_states, {})
         self.assertEqual(navigator.count(), 1)
+        self.assertFalse(navigator.isEnabled())
+        self.assertIsNone(navigator.currentItem())
 
     def test_failed_connection_does_not_prevent_other_startup_attempts(self):
         self.save_startup_layouts(
