@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .annotations import Annotations
 from .backup_view import backup_contents
 from .layout_backup_compare import LayoutBackupCompare
 from .layout_backup_view import LayoutBackupView
@@ -120,7 +121,6 @@ class LayoutView(QWidget):
         layout.addWidget(self.tabs)
 
         self.node_view.details.editing_changed.connect(self.on_editing_changed)
-        self.layout_events.editing_changed.connect(self.on_layout_events_editing)
         self.tabs.currentChanged.connect(self.on_tab_changed)
         self.update_backup_buttons()
 
@@ -134,9 +134,34 @@ class LayoutView(QWidget):
         self.observed_events = observations
         self.layout_events.observed_events = observations
         self.node_view.details.node_events.observed_events = observations
-        self.layout_events.edit_button.setEnabled(False)
         observations.changed.connect(self.refresh_observed_events)
         self.refresh_observed_events()
+
+    def set_annotations(self, annotations):
+        previous = getattr(self, "annotations", None)
+        if previous is annotations:
+            return
+        if previous is not None:
+            previous.changed.disconnect(self.annotations_changed)
+        self.annotations = annotations
+        self.layout_events.annotations = annotations
+        self.node_view.details.annotations = annotations
+        self.node_view.details.node_events.annotations = annotations
+        annotations.changed.connect(self.annotations_changed)
+        self.annotations_changed(-1)
+
+    def annotations_changed(self, number):
+        if number == -1:
+            self.refresh_observed_events()
+        self.node_view.refresh_annotation_names(number)
+        details = self.node_view.details
+        if (
+            details.live_state is not None
+            and number == details.annotation_number()
+            and not details.annotation_editing
+            and details.desired_configuration is None
+        ):
+            details.show_live_state(details.live_state, details.live_mdf)
 
     def refresh_observed_events(self):
         self.layout_events.refresh()
@@ -158,6 +183,11 @@ class LayoutView(QWidget):
         if self.logical_layout is not None and self.logical_layout != logical_layout:
             self.node_view.clear_identities()
         self.logical_layout = logical_layout
+        if (
+            getattr(self, "annotations", None) is None
+            or self.annotations.logical_layout != logical_layout
+        ):
+            self.set_annotations(Annotations(logical_layout))
         self.discovery_states = discovery_states
         self.node_view.details.logical_layout = logical_layout
         self.node_view.show_saved_nodes(logical_layout)
@@ -180,17 +210,13 @@ class LayoutView(QWidget):
         self.tabs.setTabEnabled(self.tabs.indexOf(self.layout_events), not editing)
         self.tabs.setTabEnabled(self.tabs.indexOf(self.backups_page), not editing)
 
-    def on_layout_events_editing(self, editing):
-        self.tabs.setTabEnabled(self.tabs.indexOf(self.node_view), not editing)
-        self.tabs.setTabEnabled(self.tabs.indexOf(self.backups_page), not editing)
-
     def update_backup_buttons(self):
         selected = bool(self.layout_backups.selectedItems())
 
         self.backup_buttons["New"].setEnabled(self.connected)
         self.backup_buttons["View"].setEnabled(selected)
         self.backup_buttons["Compare"].setEnabled(self.connected and selected)
-        self.backup_buttons["Restore"].setEnabled(self.connected and selected)
+        self.backup_buttons["Restore"].setEnabled(selected)
         self.backup_buttons["Delete"].setEnabled(False)
 
     def set_connected(self, connected):
@@ -331,8 +357,6 @@ class LayoutView(QWidget):
         path = selected[0].data(0, Qt.ItemDataRole.UserRole) if selected else None
         if isinstance(path, Path):
             service = self.node_view.details.cbus_service
-            if service is None or service.connection.state != "Connected":
-                return
             try:
                 selection = LayoutRestoreSelection(self, service, path)
                 try:
@@ -340,11 +364,19 @@ class LayoutView(QWidget):
                     accepted = selection.dialog.exec() == QDialog.DialogCode.Accepted
                     chosen = selection.dialog.selected_nodes()
                     selection.dispose()
-                    if accepted and chosen:
+                    if accepted and (
+                        chosen or selection.dialog.annotations_checkbox.isChecked()
+                    ):
                         LayoutRestoreWorkflow(
                             self,
                             service,
                             {number: selection.backups[number] for number in chosen},
+                            annotations=self.annotations
+                            if selection.dialog.annotations_checkbox.isChecked()
+                            else None,
+                            layout_annotations=selection.manifest.get("annotations"),
+                            restore_configuration=selection.dialog.configuration_checkbox.isChecked(),
+                            configuration_nodes=selection.dialog.selected_configuration_nodes(),
                         ).run()
                 finally:
                     selection.dispose()

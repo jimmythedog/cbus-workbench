@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QCheckBox, QMessageBox
 from test_nv_write import Connection
 
 from workbench.cbus_service import CbusService, DiscoveryProgress, NodeState
@@ -193,6 +193,72 @@ class NodeRestoreTests(unittest.TestCase):
             else:
                 self.fail(f"Unexpected frame {frame}")
         self.fail("Restore did not produce a result")
+
+    def live_view(self):
+        from workbench.node_view import NodeView
+
+        view = NodeView({})
+        self.addCleanup(view.close)
+        view.state_lookup = self.service.node_states.get
+        view.details.connected = True
+        view.details.cbus_service = self.service
+        view.show_identity(self.state.identity)
+        self.service.discovery_status_changed.connect(view.discovery_status_changed)
+        self.service.node_state_updated.connect(view.refresh_state)
+        self.service.restore.changed.connect(view.details.show_restore_progress)
+        self.service.restore.finished.connect(view.details.finish_restore)
+        return view
+
+    def test_restore_suspends_selected_details_until_final_discovery(self):
+        view = self.live_view()
+        tree = view.details.node_events.consumed_table
+        self.service.restore.begin(258, self.backup)
+        self.run_node(stop_when=lambda: view.node_list.currentItem() is None)
+        self.assertFalse(view.node_list.isEnabled())
+        self.assertIs(view.details.live_state, self.state)
+        self.assertIn("Restoring", view.details.restore_result.text())
+        self.assertEqual(tree.topLevelItem(0).text(0), "0:1000")
+        self.run_node()
+        self.app.processEvents()
+        self.assertTrue(self.results[-1][1], self.results)
+        self.assertTrue(view.node_list.isEnabled())
+        self.assertIsNotNone(view.node_list.currentItem())
+        self.assertEqual(tree.topLevelItem(0).child(1).text(1), "13")
+        self.assertIn("fully verified", view.details.restore_result.text())
+
+    def test_disconnect_during_restore_releases_suspension_and_clears_live_details(
+        self,
+    ):
+        view = self.live_view()
+        self.service.restore.begin(258, self.backup)
+        self.run_node(stop_when=lambda: view.node_list.currentItem() is None)
+        self.service.close()
+        self.connection.state = "Disconnected"
+        self.assertTrue(view.node_list.isEnabled())
+        self.assertIsNone(view.node_list.currentItem())
+        self.assertIsNone(view.details.node)
+        self.assertIsNone(view.details.live_state)
+        self.assertFalse(self.results[-1][1])
+
+    def test_save_keeps_working_copy_and_progress_during_discovery(self):
+        view = self.live_view()
+        details = view.details
+        details.start_editing()
+        details.raw_values.item(0, 1).setText("10")
+        desired = deepcopy(details.desired_configuration)
+        details.save_editing()
+        self.run_node(stop_when=lambda: view.node_list.currentItem() is None)
+        self.assertEqual(details.desired_configuration, desired)
+        self.assertTrue(details.saving_configuration)
+        self.assertFalse(details.cancel_button.isEnabled())
+        self.assertIn("Saving", details.nv_result.text())
+        self.run_node()
+        self.app.processEvents()
+        self.assertTrue(self.results[-1][1], self.results)
+        self.assertIsNone(details.desired_configuration)
+        self.assertTrue(view.node_list.isEnabled())
+        self.assertIn("saved and fully verified", details.nv_result.text())
+        self.assertEqual(details.raw_values.item(0, 1).text(), "10")
 
     def test_complete_restore_skips_matching_nvs_then_matches_events_after_slot_change(
         self,
@@ -1261,23 +1327,115 @@ class NodeRestoreTests(unittest.TestCase):
     def test_ui_restore_skips_compare_and_layout_warning_cancel_sends_nothing(self):
         self.backup["partOfLayoutBackup"] = True
         details = self.backup_details()
+        messages = []
+
+        def decline(dialog):
+            messages.append(dialog.text())
+            return QMessageBox.StandardButton.No
+
         with (
             patch("workbench.node_backup_workflow.BackupCompare.exec") as compare,
             patch(
-                "workbench.node_backup_workflow.QMessageBox.question",
-                return_value=QMessageBox.StandardButton.No,
-            ) as question,
+                "workbench.node_backup_workflow.QMessageBox.exec",
+                decline,
+            ),
         ):
             details.restore_backup()
         compare.assert_not_called()
-        self.assertIn("part of a layout backup", question.call_args.args[2])
+        self.assertIn("part of a layout backup", messages[0])
         self.assertEqual(self.connection.sent, [])
+
+    def test_ui_annotation_choice_does_not_change_hardware_restore(self):
+        import tempfile
+
+        from workbench.annotations import Annotations, load_annotations
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch(
+                "workbench.annotations.application_directories",
+                return_value={"Data": Path(directory)},
+            ),
+        ):
+            self.backup["annotations"] = {"name": "Backup name"}
+            details = self.backup_details()
+            details.annotations = annotations = Annotations("test")
+            details.node_events.annotations = annotations
+            self.service.restore.changed.connect(details.show_restore_progress)
+            self.service.restore.finished.connect(details.finish_restore)
+            annotations.save({"name": "Existing"}, 258)
+            for checked in (False, True):
+
+                def confirm(dialog, checked=checked):
+                    self.assertTrue(dialog.checkBox().isChecked())
+                    dialog.checkBox().setChecked(checked)
+                    return QMessageBox.StandardButton.Yes
+
+                with patch("workbench.node_backup_workflow.QMessageBox.exec", confirm):
+                    details.restore_backup()
+                self.assertFalse(details.node_name.isEnabled())
+                self.assertEqual(
+                    load_annotations("test", 258)["name"],
+                    "Backup name" if checked else "Existing",
+                )
+                self.run_node()
+                self.assertTrue(self.results[-1][1], self.results)
+                self.assertTrue(details.node_name.isEnabled())
+                self.results.clear()
+
+    def test_annotation_only_restore_skips_incomplete_hardware_and_checks_operation_choices(
+        self,
+    ):
+        import tempfile
+
+        from workbench.annotations import Annotations, load_annotations
+
+        self.backup["annotations"] = {"name": "Local backup name"}
+        self.state.nv_progress = DiscoveryProgress.INCOMPLETE
+        details = self.backup_details()
+
+        def choose_annotations(dialog):
+            configuration = next(
+                box
+                for box in dialog.findChildren(QCheckBox)
+                if box.text() == "Restore configuration"
+            )
+            annotations = dialog.checkBox()
+            restore = dialog.button(QMessageBox.StandardButton.Yes)
+            self.assertEqual(restore.text(), "Restore")
+            self.assertTrue(configuration.isChecked())
+            self.assertTrue(annotations.isChecked())
+            self.assertTrue(restore.isEnabled())
+            annotations.setChecked(False)
+            self.assertTrue(restore.isEnabled())
+            configuration.setChecked(False)
+            self.assertFalse(restore.isEnabled())
+            annotations.setChecked(True)
+            self.assertTrue(restore.isEnabled())
+            return QMessageBox.StandardButton.Yes
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch(
+                "workbench.annotations.application_directories",
+                return_value={"Data": Path(directory)},
+            ),
+            patch(
+                "workbench.node_backup_workflow.QMessageBox.exec", choose_annotations
+            ),
+        ):
+            details.annotations = Annotations("test")
+            details.restore_backup()
+            self.assertEqual(load_annotations("test", 258), self.backup["annotations"])
+        self.assertEqual(self.connection.sent, [])
+        self.assertEqual(self.results, [])
+        self.assertEqual(self.state.nv_values, {1: 7, 2: 8, 3: 9})
 
     def test_ui_explicit_compare_opens_comparison_without_restoring(self):
         details = self.backup_details()
         with (
             patch("workbench.node_backup_workflow.BackupCompare.exec") as compare,
-            patch("workbench.node_backup_workflow.QMessageBox.question") as question,
+            patch("workbench.node_backup_workflow.QMessageBox.exec") as question,
         ):
             details.backup_buttons["Compare"].click()
         compare.assert_called_once()
@@ -1309,7 +1467,7 @@ class NodeRestoreTests(unittest.TestCase):
         with (
             patch("workbench.node_backup_workflow.BackupCompare.exec") as compare,
             patch(
-                "workbench.node_backup_workflow.QMessageBox.question",
+                "workbench.node_backup_workflow.QMessageBox.exec",
                 return_value=QMessageBox.StandardButton.Yes,
             ),
         ):
@@ -1363,20 +1521,26 @@ class NodeRestoreTests(unittest.TestCase):
     ):
         self.backup["complete"] = False
         details = self.backup_details()
+        messages = []
+
+        def decline(dialog):
+            messages.append(dialog.text())
+            return QMessageBox.StandardButton.No
+
         with (
             patch("workbench.node_backup_workflow.BackupCompare.exec"),
             patch(
-                "workbench.node_backup_workflow.QMessageBox.question",
-                return_value=QMessageBox.StandardButton.No,
-            ) as question,
+                "workbench.node_backup_workflow.QMessageBox.exec",
+                decline,
+            ),
         ):
             details.restore_backup()
-        self.assertIn("configuration that was not captured", question.call_args.args[2])
+        self.assertIn("configuration that was not captured", messages[0])
         self.assertEqual(self.connection.sent, [])
         with (
             patch("workbench.node_backup_workflow.BackupCompare.exec"),
             patch(
-                "workbench.node_backup_workflow.QMessageBox.question",
+                "workbench.node_backup_workflow.QMessageBox.exec",
                 return_value=QMessageBox.StandardButton.Yes,
             ),
         ):
@@ -1454,7 +1618,7 @@ class NodeRestoreTests(unittest.TestCase):
         details.cancel_editing()
         self.reject_ev = True
         with patch(
-            "workbench.node_backup_workflow.QMessageBox.question",
+            "workbench.node_backup_workflow.QMessageBox.exec",
             return_value=QMessageBox.StandardButton.Yes,
         ):
             details.restore_backup()

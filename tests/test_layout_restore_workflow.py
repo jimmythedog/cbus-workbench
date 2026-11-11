@@ -140,7 +140,7 @@ class LayoutRestoreWorkflowTests(unittest.TestCase):
         dialog.reject()
         return QDialog.DialogCode.Rejected
 
-    def run_workflow(self):
+    def run_workflow(self, **options):
         def confirm(*_args):
             self.assertEqual(self.reports, [])
             self.assertEqual(self.commands, [])
@@ -165,7 +165,9 @@ class LayoutRestoreWorkflowTests(unittest.TestCase):
             ),
             patch("workbench.layout_restore_workflow.QMessageBox.question", confirm),
         ):
-            LayoutRestoreWorkflow(self.view, self.service, self.desired).run()
+            LayoutRestoreWorkflow(
+                self.view, self.service, self.desired, **options
+            ).run()
 
     def test_selected_subset_requires_confirmation_and_leaves_unselected_hardware_unchanged(
         self,
@@ -188,6 +190,155 @@ class LayoutRestoreWorkflowTests(unittest.TestCase):
         self.assertEqual(len(self.reports), 1)
         self.assertTrue(self.retry_states[-1][0])
         self.assertNotIn("Node 2", {row[0] for row in self.reports[-1]})
+
+    def test_layout_annotations_follow_confirmation_and_selected_node_ownership(self):
+        import tempfile
+        from pathlib import Path
+
+        from workbench.annotations import Annotations, load_annotations
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch(
+                "workbench.annotations.application_directories",
+                return_value={"Data": Path(directory)},
+            ),
+        ):
+            annotations = Annotations("test")
+            annotations.save({"name": "Unselected"}, 2)
+            for number in self.desired:
+                self.desired[number]["annotations"] = {"name": f"Saved {number}"}
+            # Node 3 is selected for its annotations but fails hardware NV-count eligibility.
+            self.service.node_states[3].parameters[6] = 2
+            options = {
+                "annotations": annotations,
+                "configuration_nodes": {1},
+                "layout_annotations": {"events": {"0:1": "Layout name"}},
+            }
+            self.confirm = False
+            self.run_workflow(**options)
+            self.assertEqual(load_annotations("test"), {})
+            self.assertEqual(load_annotations("test", 1), {})
+            self.confirm = True
+            self.run_workflow(**options)
+            self.assertEqual(load_annotations("test"), options["layout_annotations"])
+            self.assertEqual(load_annotations("test", 1), {"name": "Saved 1"})
+            self.assertEqual(load_annotations("test", 3), {"name": "Saved 3"})
+            self.assertEqual(load_annotations("test", 2), {"name": "Unselected"})
+            self.assertEqual(self.commands, [(1, 4)])
+            self.assertEqual(self.hardware, {1: 4, 2: 7, 3: 7})
+            self.assertNotIn("Node 3", {row[0] for row in self.reports[-1]})
+
+    def test_annotation_only_selection_restores_only_chosen_names_online_and_offline(
+        self,
+    ):
+        import tempfile
+        from pathlib import Path
+
+        import yaml
+        from PySide6.QtWidgets import QTreeWidgetItem
+
+        from workbench.annotations import Annotations, load_annotations
+        from workbench.layout_restore_dialog import LayoutRestoreDialog
+
+        def select_annotations(dialog):
+            if service is not None:
+                self.assertEqual(self.connection.sent[-1], b":SBFC0N73000103;")
+                self.assertIn("Checking", dialog.node_checkboxes[1].text())
+            dialog.configuration_checkbox.setChecked(False)
+            if service is not None:
+                # The default configuration choice already sent one presence read.
+                # Unchecking stops unsent checks; its in-flight read must drain.
+                self.connection.frame_received.emit(b":SB040N9B00010302;")
+            for number, checkbox in dialog.node_checkboxes.items():
+                checkbox.setChecked(number in chosen)
+            self.assertTrue(dialog.annotations_checkbox.isChecked())
+            self.assertTrue(dialog.restore_button.isEnabled())
+            return QDialog.DialogCode.Accepted
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch(
+                "workbench.annotations.application_directories",
+                return_value={"Data": Path(directory)},
+            ),
+        ):
+            self.view.annotations = Annotations("test")
+            layout_names = {"events": {"0:1": "Restored event"}}
+            manifest = Path(directory) / "backups" / "saved.yaml"
+            manifest.parent.mkdir()
+            manifest.write_text(
+                yaml.safe_dump(
+                    {
+                        "format_version": 1,
+                        "complete": True,
+                        "nodeNumbers": list(self.desired),
+                        "annotations": layout_names,
+                    }
+                )
+            )
+            for number, backup in self.desired.items():
+                self.view.annotations.save({"name": f"Current {number}"}, number)
+                path = (
+                    Path(directory) / "nodes" / str(number) / "backups" / manifest.name
+                )
+                path.parent.mkdir(parents=True)
+                path.write_text(
+                    yaml.safe_dump(
+                        {
+                            **backup,
+                            "partOfLayoutBackup": True,
+                            "annotations": {"name": f"Backup {number}"},
+                        }
+                    )
+                )
+            item = QTreeWidgetItem(self.view.layout_backups, ["saved"])
+            item.setData(0, Qt.ItemDataRole.UserRole, manifest)
+            self.view.layout_backups.setCurrentItem(item)
+            cases = (
+                (self.service, {1}, QMessageBox.StandardButton.No),
+                (self.service, {1}, QMessageBox.StandardButton.Yes),
+                (None, {1}, QMessageBox.StandardButton.Yes),
+                (None, set(), QMessageBox.StandardButton.Yes),
+            )
+            for service, chosen, answer in cases:
+                self.view.node_view.details.cbus_service = service
+                for number in self.desired:
+                    self.view.annotations.save({"name": f"Current {number}"}, number)
+                self.view.annotations.save({})
+                with (
+                    patch.object(LayoutRestoreDialog, "exec", select_annotations),
+                    patch(
+                        "workbench.layout_restore_workflow.QMessageBox.question",
+                        return_value=answer,
+                    ),
+                    patch.object(
+                        LayoutBackupCompare,
+                        "exec",
+                        lambda dialog: self.show_comparison(dialog),
+                    ),
+                ):
+                    self.view.restore_backup()
+                self.assertEqual(
+                    load_annotations("test"),
+                    layout_names if answer == QMessageBox.StandardButton.Yes else {},
+                )
+                for number in self.desired:
+                    restored = (
+                        number in chosen and answer == QMessageBox.StandardButton.Yes
+                    )
+                    self.assertEqual(
+                        load_annotations("test", number),
+                        {
+                            "name": f"Backup {number}"
+                            if restored
+                            else f"Current {number}"
+                        },
+                    )
+            self.assertEqual(self.connection.sent, [b":SBFC0N73000103;"] * 2)
+            self.assertEqual(self.hardware, {1: 7, 2: 7, 3: 7})
+            self.assertEqual(self.commands, [])
+            self.assertEqual(self.reports, [])
 
     def test_safe_failure_continues_and_final_comparison_shows_remaining_difference(
         self,
@@ -230,6 +381,12 @@ class LayoutRestoreWorkflowTests(unittest.TestCase):
     def test_retry_uses_real_engine_and_fresh_reads_to_write_only_remaining_changes(
         self,
     ):
+        view = self.view.node_view
+        view.state_lookup = self.service.node_states.get
+        view.details.connected = True
+        view.show_identity(self.service.node_states[1].identity)
+        self.service.discovery_status_changed.connect(view.discovery_status_changed)
+        self.service.node_state_updated.connect(view.refresh_state)
         self.use_real_engine = True
         self.retry_once = True
         state = self.service.node_states[1]
@@ -246,6 +403,8 @@ class LayoutRestoreWorkflowTests(unittest.TestCase):
         def respond(frame):
             nonlocal reject_once
             send(frame)
+            self.assertIsNone(view.node_list.currentItem())
+            self.assertFalse(view.node_list.isEnabled())
             data = bytes.fromhex(frame.decode().split("N")[1][:-1])
             opcode = data[0]
             if opcode == 0x73:
@@ -282,6 +441,10 @@ class LayoutRestoreWorkflowTests(unittest.TestCase):
         self.before_retry = before_retry
         with patch.object(self.connection, "send", respond):
             self.run_workflow()
+        self.app.processEvents()
+        self.assertIsNotNone(view.node_list.currentItem())
+        self.assertTrue(view.node_list.isEnabled())
+        self.assertEqual(view.details.raw_values.item(0, 1).text(), "4")
         self.assertEqual(writes, [(1, 4), (2, 5), (2, 5)])
         self.assertEqual(hardware, {1: 4, 2: 5})
         self.assertEqual(self.desired, original)

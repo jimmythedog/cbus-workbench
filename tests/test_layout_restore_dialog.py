@@ -23,6 +23,7 @@ class LayoutRestoreDialogTests(unittest.TestCase):
         presence = {1: "Online", 2: "Offline", 3: "Checking", 4: "Incompatible"}
         dialog = LayoutRestoreDialog(presence, presence=presence)
         self.addCleanup(dialog.deleteLater)
+        dialog.annotations_checkbox.setChecked(False)
         for number, status in presence.items():
             row = dialog.node_checkboxes[number]
             self.assertIn(status, row.text())
@@ -39,15 +40,90 @@ class LayoutRestoreDialogTests(unittest.TestCase):
         self.assertEqual(dialog.selected_nodes(), {1})
         self.assertTrue(restore.isEnabled())
 
+    def test_annotations_allow_restore_without_selecting_nodes(self):
+        dialog = LayoutRestoreDialog(
+            [1, 2],
+            presence={1: "Online", 2: "Offline"},
+            has_annotations=True,
+            annotation_nodes={1},
+        )
+        self.addCleanup(dialog.deleteLater)
+        self.assertEqual(dialog.restore_button.text(), "Restore")
+        dialog.node_checkboxes[1].setChecked(False)
+        self.assertEqual(dialog.selected_nodes(), set())
+        self.assertTrue(dialog.restore_button.isEnabled())
+        dialog.annotations_checkbox.setChecked(False)
+        self.assertFalse(dialog.restore_button.isEnabled())
+        dialog.node_checkboxes[1].setChecked(True)
+        self.assertTrue(dialog.restore_button.isEnabled())
+        dialog.annotations_checkbox.setChecked(True)
+        self.assertTrue(dialog.restore_button.isEnabled())
+        dialog.show_presence(1, "Offline")
+        self.assertEqual(dialog.selected_nodes(), {1})
+        self.assertEqual(dialog.selected_configuration_nodes(), set())
+        self.assertTrue(dialog.restore_button.isEnabled())
+        dialog.annotations_checkbox.setChecked(False)
+        self.assertFalse(dialog.restore_button.isEnabled())
+
     def test_no_online_nodes_cannot_restore(self):
         dialog = LayoutRestoreDialog([1, 2], presence={1: "Offline", 2: "Checking"})
         self.addCleanup(dialog.deleteLater)
+        dialog.annotations_checkbox.setChecked(False)
         self.assertEqual(dialog.selected_nodes(), set())
         self.assertFalse(
             dialog.findChild(QDialogButtonBox)
             .button(QDialogButtonBox.StandardButton.Ok)
             .isEnabled()
         )
+
+    def test_operation_choices_allow_offline_node_annotations_and_disable_neither(self):
+        dialog = LayoutRestoreDialog(
+            [1, 2],
+            presence={1: "Offline", 2: "Incompatible"},
+            has_annotations=True,
+            configuration_available=False,
+            annotation_nodes={1},
+        )
+        self.addCleanup(dialog.deleteLater)
+        self.assertTrue(dialog.configuration_checkbox.isChecked())
+        self.assertTrue(dialog.annotations_checkbox.isChecked())
+        self.assertTrue(dialog.restore_button.isEnabled())
+        self.assertEqual(dialog.selected_configuration_nodes(), set())
+        dialog.configuration_checkbox.setChecked(False)
+        self.assertTrue(dialog.restore_button.isEnabled())
+        self.assertTrue(dialog.node_checkboxes[1].isEnabled())
+        self.assertFalse(dialog.node_checkboxes[2].isEnabled())
+        dialog.node_checkboxes[1].setChecked(True)
+        dialog.node_checkboxes[2].setChecked(False)
+        dialog.show_presence(2, "Offline")
+        self.assertEqual(dialog.selected_nodes(), {1})
+        dialog.annotations_checkbox.setChecked(False)
+        self.assertFalse(dialog.restore_button.isEnabled())
+
+    def test_both_options_select_annotations_but_only_eligible_hardware(self):
+        dialog = LayoutRestoreDialog(
+            [258, 259, 260],
+            presence={258: "Checking…", 259: "Checking…", 260: "Checking…"},
+            has_annotations=True,
+            annotation_nodes={258, 259, 260},
+        )
+        self.addCleanup(dialog.deleteLater)
+        dialog.node_checkboxes[260].setChecked(False)
+        dialog.show_presence(258, "Online")
+        dialog.show_presence(259, "Online", ["NV count mismatch"])
+        dialog.show_presence(260, "Online")
+        self.assertEqual(dialog.node_checkboxes[258].text(), "Node 258 — Online")
+        self.assertTrue(dialog.node_checkboxes[258].isEnabled())
+        self.assertEqual(dialog.selected_nodes(), {258, 259})
+        self.assertEqual(dialog.selected_configuration_nodes(), {258})
+        dialog.annotations_checkbox.setChecked(False)
+        self.assertFalse(dialog.node_checkboxes[259].isEnabled())
+        self.assertEqual(dialog.selected_nodes(), {258})
+        dialog.annotations_checkbox.setChecked(True)
+        self.assertEqual(dialog.selected_nodes(), {258, 259})
+        dialog.configuration_checkbox.setChecked(False)
+        self.assertEqual(dialog.selected_configuration_nodes(), set())
+        self.assertEqual(dialog.selected_nodes(), {258, 259})
 
     def test_multiple_compatibility_reasons_are_available_without_horizontal_scrolling(
         self,

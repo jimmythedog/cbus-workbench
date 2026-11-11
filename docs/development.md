@@ -6,7 +6,7 @@ the [user guide](user-guide.md); installation and running instructions start in 
 
 ## Observed network events
 
-Observed events are separate from the prototype annotation catalogue and from
+Observed events are separate from persisted annotations and from
 consumed-event configuration. `MainWindow` owns one `ObservedEvents` collection
 per logical layout and binds each connection/view to it. This prevents different
 layouts from mixing traffic or storage; connections intentionally sharing a logical
@@ -29,7 +29,7 @@ and timestamps are not tracked.
 Disconnect removes the service's receiver, leaving the collection intact;
 reconnect uses that collection. Switching a connection's logical layout binds its
 views to the destination collection.
-There is no node-owned produced-event store, annotation lookup or backup change.
+Both event panes resolve names from the layout annotations; there is no node-owned produced-event name.
 
 The decoder accepts accessory ON/OFF events, their response variants and variants
 with one to three data bytes; requests and malformed frames are ignored. Data
@@ -46,6 +46,53 @@ The Produced Events pane filters the canonical identity NN, so short events appe
 only for NN zero, never under a frame sender inferred as their physical owner.
 Even a long NN is an identity filter, not verified physical-producer discovery.
 No extra protocol requests or module-specific interpretation are involved.
+
+## Local annotations
+
+`annotations.yaml` sits beside `observed-events.yaml` in the logical layout
+and contains `events`, a mapping from `NN:EN` to a name. Each node's
+`nodes/<NN>/annotations.yaml` holds optional `name`, `tokens` and
+`consumedEvents`. The latter uses the same identity keys but belongs to the
+consuming node. Short identities use NN zero, following the existing catalogue
+contract above. Observations and metadata never write annotation files.
+`MainWindow` shares an `Annotations` notifier between views of one logical layout;
+the files remain the source of truth. Atomic replacement precedes notifications.
+
+```text
+Edit -> UI draft -> Cancel -> reload saved names
+                 -> Save -> validate -> temporary YAML -> replace -> notify views
+                                   write failure -> retain file and draft, report
+Node Restore confirmation -> optional local annotation save (once)
+                          -> existing NV/EV restore -> hardware comparison / Retry
+local save failure -> separate annotation error; NV/EV restoration stays independent
+```
+
+MDF text follows the [Module Descriptor File Format, issue 0.15, §§12–13](https://github.com/david284/ModuleDescriptor/blob/main/documents/Module%20Descriptor%20File%20Format.pdf).
+`tokens` maps the token name to decimal-number string keys and user replacement
+strings, e.g. `tokens: {palette: {'1': 'Signal red'}}`. One normalisation function
+handles both references and persisted keys: `${palette 1}` equals `${palette1}`;
+`channel` is case-insensitive, other names preserve case (the agreed rule where
+the specification is silent). Defaults stay in the MDF. Precedence is user
+override, `tokens.<name>.defaultNames`, legacy `channelNames` for channels, then
+`<name><number>`. Blank overrides are removed. Referenced tokens and MDF defaults
+supply editable identifiers; legacy channel counts also remain supported.
+Substitution traverses text in a presentation copy once, leaving original definitions
+and literal user text intact. This keeps NV and EV labels consistent. Offline
+lookup uses saved parameters solely to offer read-only NV forms for token editing,
+never to permit hardware writes. The NV/EV builders receive original definitions
+alongside the substituted presentation, so existing labels retain their exact
+source token identities. Double-clicking a token-bearing label (or right-clicking
+a displayed selection name) opens a contextual `QDialog` with `QLineEdit` fields
+and Save/Cancel. Repeated tokens share a single field; surrounding label text is
+fixed. Non-numbered structural placeholders are excluded. Saving merges only the
+label's overrides, then uses existing annotation notifications to refresh all
+occurrences. The node name remains a read-only label in Node Details; double-clicking it opens its own small Save/Cancel dialog using the same annotation persistence.
+
+New backups add a separate `annotations` mapping, including an empty mapping so
+restoration can explicitly clear saved names. Layout manifests carry layout names;
+associated node files carry node annotations. Legacy backups lacking the key never
+restore annotations. The restore checkbox is applied once after confirmation,
+outside the existing hardware engine; comparison and Retry remain NV/EV-only.
 
 ## Running from source
 
@@ -150,8 +197,8 @@ same confirmed values or working edit copy as other controls. Dual remains
 read-only during Raw Values editing. The focused fixture is an unchanged extract
 of the Dual controls in v0.23.2 `MMCTEST-0001-1a.json`.
 Unsupported Dual properties are logged and ignored, including `linkedVariables`,
-subtitles and comments. Annotations and `${channel1}` substitution remain outside
-this slice; no Dual writing or restore behaviour is added.
+subtitles and comments. Text tokens use the annotation substitution described
+above; no Dual writing or restore behaviour is added.
 
 
 ### Runtime MDF lookup
@@ -379,27 +426,36 @@ the result inconclusive while confirmed differences remain visible. A node seen 
 only one side is also inconclusive: neither a manifest nor the current connection
 proves absence elsewhere on the logical layout. Delete remains disabled.
 
-Layout Restore loads the manifest and associated node files, then queues one
-read-only RQNPN(3) per member through CbusService. The `presence` request kind
-shares the sender, PARAN decoder and timeout but does not change discovery progress
-or trigger NV/event discovery. Eligibility uses the response plus existing discovered
-capabilities, never invented hardware metadata. NodeRestore and its pre-write checks
-are unchanged. Selection hands the original selected dictionaries to the layout
-workflow, which requires explicit confirmation before restoration. LayoutBackupCompare
-is shown only after the batch to report the resulting configuration.
+Layout Restore loads the manifest and associated node files, then automatically
+queues read-only RQNPN(3) checks while configuration is selected and connected.
+The `presence` request kind shares the sender, PARAN decoder and timeout but does
+not change discovery progress or trigger NV/event discovery. Eligibility uses the
+response plus existing discovered capabilities, never invented hardware metadata.
+NodeRestore and its pre-write checks are unchanged.
 
-    manifest members -> Checking -> shared FIFO RQNPN(3)
-                                      |             |
-                                  PARAN(3)        timeout
-                                      |             |
-                              capability checks   Offline
-                                      |
-                              Online / disabled reason
+The dialog keeps selection distinct from hardware eligibility. A row can be selected
+for backed-up annotations even if hardware checks fail. Selection passes both the
+selected backup dictionaries and the positively eligible hardware subset to the
+workflow. Local names are saved once for the selected nodes; only the hardware subset
+enters discovery, comparison and Retry. Annotation-only choices return without these
+hardware operations. Offline restoration has no service or hardware identities.
 
-Closing detaches the observer and removes unsent presence requests; an in-flight
-read drains normally so the wire is not reused prematurely. Disconnecting also
-disables previously eligible rows. The selected view's service is used explicitly;
-a responding node without a discovered identity is disabled, not guessed.
+    selected backups -> annotations.save() -> local names (also offline)
+                     -> selected AND hardware-eligible -> existing restore / Retry
+
+    configuration checked -> Checking -> shared FIFO RQNPN(3)
+                                              |             |
+                                          PARAN(3)        timeout
+                                              |             |
+                                      capability checks   Offline
+                                              |
+                                      Online / mismatch reason
+
+Unchecking configuration or closing removes unsent presence requests; an in-flight
+read drains normally. Rechecking configuration starts a fresh scan. Disconnect
+invalidates hardware eligibility while preserving annotation selection. Checkbox
+availability never establishes permission to write; only positive hardware eligibility
+allows a node into the hardware workflow, whose existing checks revalidate it.
 
 After confirmation, the coordinator uses a straightforward loop and local Qt event
 loops to wait for existing service completion signals. This keeps network processing
@@ -446,9 +502,9 @@ NodeRestore. Final reads rebuild the comparison; there is no automatic retry or
 retry-specific write orchestration. Ordinary layout backup comparison is unchanged.
 
 Incomplete records use `complete: false` and positional YAML `null` for
-unconfirmed known values. Descriptions are omitted when blank. Live snapshots do
-not include local annotations; discovery completeness cannot establish that all
-physical nodes were found.
+unconfirmed known values. Descriptions are omitted when blank. Backup creation
+adds local annotations separately from the captured hardware configuration;
+discovery completeness cannot establish that all physical nodes were found.
 
 Filesystem failures propagate to the existing UI exception reporter.
 
@@ -686,7 +742,18 @@ unique on the network. Discovery is visible in the status bar, Diagnostics and l
 The service emits `discovery_status_changed`; the window reads the selected
 connection's service, independently of its logical layout. Two single-shot Qt
 timers provide a QNN response boundary and defer status aggregation until reply
-handlers finish queuing dependent work; neither timer polls.
+handlers finish queuing dependent work; neither timer polls. Discovery starts are
+announced synchronously before intermediate state updates or requests. Each
+`NodeView` follows this same status for Connect, Save and node/layout restore,
+reusing its discovery guard to defer MDF presentation. List selection is cleared
+with Qt signals blocked, preserving visible details, editor copies and progress.
+On ready/incomplete, selection returns and confirmed state is refreshed; disconnect
+clears the live display instead. Editing and discovery both lock the navigator.
+
+    service busy -> suspend selection/MDF updates (retain details and progress)
+                 -> chained requests and verification
+                 -> deferred ready/incomplete -> restore selection + refresh
+                 -> disconnect -> clear live details
 
     QNN -> 2-second window (restart for each newly observed node)
         -> parameter / NV / event / EV requests and reply-triggered phases
@@ -932,7 +999,10 @@ Node details has separate full-width Produced Events and Consumed Events tabs.
 `NodeEvents` coordinates the existing produced table and consumed tree for both
 configured and live nodes; moving between tabs does not rebuild either view.
 The consumed tab retains the shared configuration Edit/Save/Cancel actions;
-the produced tab is read-only. For live nodes, the views read `NodeState` on
+produced descriptions use the same contextual editor as the layout event list,
+with their shared layout annotations. Consumed descriptions select the node's
+annotation scope. Local saves notify both produced views without CBUS traffic.
+For live nodes, the views read `NodeState` on
 selection and state-update signals. Consumed event rows and editor working copies use stable event identities;
 internal table indices are resolved from current discovery only. Expanded rows
 remain associated with their event even when rediscovery changes its index. The layout event

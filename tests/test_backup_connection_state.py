@@ -58,9 +58,7 @@ class BackupConnectionTests(unittest.TestCase):
             )
             self.assertTrue(buttons["View"].isEnabled())
             self.assertEqual(buttons["Compare"].isEnabled(), connected)
-            self.assertEqual(
-                buttons["Restore"].isEnabled(), connected and owner is self.view
-            )
+            self.assertEqual(buttons["Restore"].isEnabled(), owner is self.view)
             self.assertFalse(buttons["Delete"].isEnabled())
 
     def test_offline_view_and_reconnection(self):

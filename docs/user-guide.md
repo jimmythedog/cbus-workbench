@@ -66,12 +66,50 @@ The layout **Events** tab lists distinct ON/OFF event identities received while
 connected. Events are shown as `nodeNumber:eventNumber`; short events use node
 number zero. New identities are saved immediately and appear again after restarting
 Workbench. Repeated sightings do not add rows or rewrite the saved catalogue.
-The **Description** column is reserved for future annotations and remains empty.
+Double-click an event's **Description** cell in this view or in **Node → Produced
+Events** to open the same small **Save**/**Cancel** editor. Both views edit one
+layout-level event name; saving from either immediately updates the other.
+Editing works while disconnected. Names are saved separately from the observed
+identities, so removing an observation does not delete its name.
 
 A node's **Produced Events** tab filters the same list by node number, including
 when viewing a saved offline node. Connections using the same logical layout share
 observations; different logical layouts keep separate lists. Disconnecting and
 reconnecting preserves the catalogue.
+
+## Editing node annotations
+
+Double-click the read-only **Name** label on **Node Details** to open a small
+node-name editor. Choose **Save** to update the label and navigator immediately,
+or **Cancel** to discard the draft. This also works for offline nodes. Node Details
+has no separate annotation action buttons or MDF token list.
+
+To edit a token name, double-click its existing MDF label in **Node Variables**
+or an expanded **Consumed Events** form. Group headings and NV page titles also
+support double-click; right-click a displayed selection name to edit its tokens.
+A small dialog shows the complete label as fixed context and one text field per
+user-editable token in that label. Only those token values can change. Choose
+**Save** to persist them and refresh every occurrence, or **Cancel** to discard
+the draft. Surrounding label text and automatic structural placeholders are not
+editable. A blank value removes the override and uses the MDF default shown in
+the field. Only overrides are stored; changing an MDF can change its defaults.
+
+Saved-only nodes use their last confirmed parameters to locate the MDF and show
+read-only NV forms for offline label editing. Without a matching MDF, overrides
+remain saved but have no labels from which to edit them. Offline EV labels require
+an existing presentation; reconnect to inspect EV forms that are not available.
+Token editing is unavailable during NV/EV configuration editing or hardware writes.
+
+On **Consumed Events**, double-click an event's **Description** cell to open a
+small editor with **Save** and **Cancel**. Saving immediately updates that cell;
+blank text clears the annotation. This works offline and never writes to hardware.
+The annotation belongs to this consuming node: two nodes can name the same event differently.
+They are separate from the layout's produced/observed event name. Offline entries
+come from saved names and the latest node backup when available.
+
+All annotation editing works offline, sends no CBUS traffic, and survives
+restart, rediscovery and reconnect. NV/EV **Edit** and **Save** still require a
+connected node and apply hardware configuration separately.
 
 ## Understanding discovery status
 
@@ -223,7 +261,9 @@ editing requires complete discovery, including confirmation of every EV position
 ## Creating backups
 
 Backups save currently discovered configuration; they do not start a fresh discovery
-or change hardware. They contain confirmed data rather than local annotations.
+or change hardware. New node backups also include the node's annotations in a
+separate section. Layout backups include layout event names and the annotations
+of their included nodes. Annotations do not affect discovery completeness.
 
 ### Node backup
 
@@ -249,6 +289,8 @@ stored beneath it as follows:
 
 - Node backups: `layouts/<logical-layout>/nodes/<node-number>/backups/<timestamp>.yaml`
 - Layout manifests: `layouts/<logical-layout>/backups/<timestamp>.yaml`
+- Layout event names: `layouts/<logical-layout>/annotations.yaml`
+- Node names, MDF overrides and consumed-event names: `layouts/<logical-layout>/nodes/<node-number>/annotations.yaml`
 
 A layout's associated node files use the same timestamp filename and appear in the
 ordinary node backup lists. For file-format details, see the
@@ -280,9 +322,9 @@ confirmed parameters and CAN ID are saved per logical layout and loaded while
 disconnected; incomplete discovery preserves earlier values. These are last-known
 values, not proof that a node is currently reachable. Nodes absent from later
 discovery remain listed. Reconnecting replaces saved-only entries as nodes are discovered.
-MDF selections are not saved. Saved-only nodes show `None` for Module descriptor,
-even when remembered parameters are displayed. Remembered details do not establish
-MDF compatibility or make a node eligible for configuration.
+MDF selections are not saved. The **Module descriptor** label reports live lookup;
+saved-only nodes can use their remembered parameters to locate MDF token defaults.
+Remembered details do not make a node eligible for hardware configuration.
 
 Choose **Compare** while connected to compare a node backup with current discovered
 values. Events are matched by node number and event number. Unknown values make
@@ -299,25 +341,33 @@ Unknown values and nodes present on only one side make the result inconclusive,
 rather than proving a configuration difference.
 
 **New** and **Compare** require a connected layout; a new node backup also requires
-a selected live node. Node **Restore** requires a connected, discovered target.
-Layout **Restore** and all backup **Delete** actions remain disabled.
+a selected live node. Hardware restoration requires a connected, discovered target.
+Node and layout backups containing annotations can restore those annotations while offline.
+All backup **Delete** actions remain disabled.
 
 ## Restoring a node backup
 
-Restoration writes to the physical node. Prefer a complete backup for the same
-node number and confirm that it belongs to the connected module and firmware:
-backup files do not record manufacturer or firmware identity. Wait for complete
-discovery. Do not use another configuration application during restoration.
+Choose **Restore configuration**, **Restore annotations**, or both. Both checkboxes
+start checked; **Restore** is disabled when neither is selected. Configuration
+restoration writes to the physical node, requires a connected, completely discovered
+target, and should use a backup for the same node and firmware. Do not use another
+configuration application during hardware restoration.
 
-To review differences first, use **Compare** explicitly. **Restore** opens the
-restoration confirmation directly.
+To review configuration differences first, use **Compare** explicitly.
 
-1. Select the live node, open **Backups**, select a saved YAML backup and choose
-   **Restore**. Standalone and layout-owned node backups are supported.
-2. Read the confirmation and choose **Yes** to write, or **No** to cancel.
-   Layout-owned backups warn that restoring one node independently may leave it
-   inconsistent with other nodes. Incomplete backups warn that replacement may
-   remove configuration that was not captured; continue only if you accept this.
+1. Select a live or remembered offline node, open **Backups**, select a saved YAML
+   backup and choose **Restore**. Standalone and layout-owned backups are supported.
+2. Choose what to restore. For annotations only, uncheck **Restore configuration**;
+   this also works offline and sends no CBUS discovery requests, writes or verification.
+3. Choose **Restore** to confirm, or **No** to cancel. When configuration is selected,
+   layout-owned backups warn about restoring a single node independently. Incomplete
+   backups warn that replacement may remove uncaptured configuration.
+
+**Restore annotations** applies the node name, consumed-event names and MDF token
+overrides saved in the backup. Uncheck it to keep current annotations. Older backups
+without annotations leave current names untouched. Local annotation writes are
+independent of hardware results, comparison and Retry. A local write failure is
+reported separately and retains the previous annotations.
 
 Workbench processes numeric backup NVs in ascending NV-number order, writing only
 values that differ from confirmed live values. Unknown backup NVs are skipped.
@@ -369,15 +419,34 @@ remaining differences and unknown values. **Retry**, when available, reads hardw
 afresh and applies only outstanding differences. Follow any safety blocker or
 learn-mode warning before reconnecting and comparing again.
 
-For a saved layout backup, **Restore** opens an eligibility selection. All backed-up nodes start as **Checking…**. Responding eligible nodes
-become **Online** and checked; offline nodes and nodes with supported compatibility
-mismatches remain disabled. A single mismatch appears beside the node; multiple
-issues appear in its tooltip. **Select All / Select None** affects eligible nodes
-only. Closing the dialog stops unsent checks. Disconnecting disables all rows.
+For a saved layout backup, **Restore** opens the node and operation selection.
+**Restore configuration** and **Restore annotations** both start checked. Uncheck
+either to restore only the other; **Restore** is disabled when neither is selected.
 
-**Restore selected** asks for explicit confirmation before any hardware writes.
-Incomplete backups require acknowledgement that uncaptured configuration may be removed. Backups do not identify manufacturer or firmware;
-confirm that they belong to the connected modules.
+With **Restore configuration** checked, the existing read-only eligibility scan runs
+automatically on opening the dialog and when configuration is checked again.
+Responding eligible nodes become **Online** and selectable. Offline nodes and
+supported compatibility mismatches cannot receive configuration. A single mismatch
+appears beside the node; multiple issues appear in its tooltip.
+
+Nodes with backed-up annotations remain selectable when **Restore annotations** is
+checked, including offline or incompatible nodes. With both options checked,
+configuration is restored only to selected nodes that passed eligibility; annotations
+are restored to selected nodes with backed-up annotations. Unselected nodes remain
+untouched, and ineligible nodes never enter hardware comparison or Retry.
+
+Unchecking **Restore configuration** stops remaining eligibility checks and skips
+hardware discovery, writes and verification. Only nodes with backed-up annotations
+can then be selected, including while offline. **Select All / Select None** affects
+selectable rows. Layout-level event names can be restored with no nodes selected.
+Annotation-only restoration finishes without a hardware comparison or Retry report.
+
+Choose **Restore** for explicit confirmation. Incomplete hardware backups require
+acknowledgement that uncaptured configuration may be removed. Confirm that backups
+belong to the connected modules: they do not identify manufacturer or firmware.
+Closing the selection stops unsent eligibility checks; disconnecting prevents further
+configuration restoration while keeping local annotations available.
+The following hardware workflow applies only when configuration is selected.
 
 Nodes are restored sequentially. Each target is checked again and read afresh before
 restoration. Independent node failures do not stop other selected nodes, but existing

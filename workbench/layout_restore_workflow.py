@@ -12,12 +12,37 @@ logger = logging.getLogger("workbench.ui")
 
 
 class LayoutRestoreWorkflow:
-    def __init__(self, parent, service, snapshots):
+    def __init__(
+        self,
+        parent,
+        service,
+        snapshots,
+        *,
+        annotations=None,
+        layout_annotations=None,
+        restore_configuration=True,
+        configuration_nodes=None,
+    ):
         self.parent = parent
+        self.annotations = annotations
+        self.layout_annotations = layout_annotations
         self.service = service
+        self.restore_configuration = restore_configuration
         # These original desired dictionaries are never replaced with readback data.
-        self.snapshots = dict(sorted(snapshots.items()))
-        self.identities = {number: self.identity(number) for number in self.snapshots}
+        self.annotation_snapshots = dict(sorted(snapshots.items()))
+        # Only positively eligible, selected nodes enter hardware comparison and
+        # Retry. Annotation-only targets must never become hardware work later.
+        self.snapshots = {
+            number: snapshot
+            for number, snapshot in self.annotation_snapshots.items()
+            if restore_configuration
+            and (configuration_nodes is None or number in configuration_nodes)
+        }
+        self.identities = (
+            {number: self.identity(number) for number in self.snapshots}
+            if restore_configuration
+            else {}
+        )
         self.results = dict.fromkeys(self.snapshots, "Not attempted")
         self.actual = {}
         self.offline = set()
@@ -148,7 +173,11 @@ class LayoutRestoreWorkflow:
             "There is no rollback. Do not use another configuration tool during restoration. "
             "Backups do not identify manufacturer or firmware: confirm they belong to these modules."
         )
-        if any(not snapshot["complete"] for snapshot in self.snapshots.values()):
+        if not self.restore_configuration or not self.snapshots:
+            message = "Restore layout event names and annotations for the selected nodes from this backup?"
+        if self.restore_configuration and any(
+            not snapshot["complete"] for snapshot in self.snapshots.values()
+        ):
             message += (
                 "\n\nIncomplete backups are included. Replacement may remove uncaptured "
                 "configuration. Unknown values will not be written as zero; full equivalence "
@@ -201,13 +230,41 @@ class LayoutRestoreWorkflow:
         trace(
             logger,
             message,
-            extra={"fields": {"layout": self.service.connection.layout_name, **fields}},
+            extra={"fields": {"layout": self.parent.logical_layout, **fields}},
         )
 
     def run(self):
-        if not self.snapshots or not self.confirm():
+        if self.annotations is None and (
+            not self.restore_configuration or not self.snapshots
+        ):
             return
-        self.log("Layout restore confirmed", selected_nodes=list(self.snapshots))
+        if not self.confirm():
+            return
+        self.log(
+            "Layout restore confirmed",
+            selected_nodes=list(self.annotation_snapshots),
+            configuration_nodes=list(self.snapshots),
+            configuration=self.restore_configuration,
+            annotations=self.annotations is not None,
+        )
+        if self.annotations is not None:
+            # Apply local names once. NV/EV reconciliation and Retry stay unchanged.
+            try:
+                if self.layout_annotations is not None:
+                    self.annotations.save(self.layout_annotations)
+                for number, snapshot in self.annotation_snapshots.items():
+                    if "annotations" in snapshot:
+                        self.annotations.save(snapshot["annotations"], number)
+            except (OSError, ValueError, TypeError) as error:
+                logger.exception("Layout annotation restoration failed")
+                QMessageBox.warning(
+                    self.parent,
+                    "Annotations not fully restored",
+                    f"Some local annotations could not be saved: {error}\n\nHardware configuration restoration is separate.",
+                )
+        # Local names are applied once, outside hardware comparison and Retry.
+        if not self.restore_configuration or not self.snapshots:
+            return
         self.restore_selected()
         while True:
             report = self.comparison()

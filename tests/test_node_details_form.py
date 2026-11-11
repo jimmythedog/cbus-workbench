@@ -2,9 +2,19 @@
 
 import os
 import unittest
+from unittest.mock import patch
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QLabel, QListWidgetItem, QScrollArea
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QDialogButtonBox,
+    QLabel,
+    QLineEdit,
+    QListWidgetItem,
+    QScrollArea,
+)
 
 from workbench.cbus_service import CbusService, NodeState
 from workbench.layout_view import LayoutView
@@ -337,51 +347,28 @@ class NodeDetailsFormTests(unittest.TestCase):
             with self.subTest(node=node):
                 self.select(node)
                 self.app.processEvents()
-                name_bottom = details.node_name_stack.mapTo(
-                    details.details_page, details.node_name_stack.rect().bottomLeft()
+                name_bottom = details.node_name.mapTo(
+                    details.details_page, details.node_name.rect().bottomLeft()
                 ).y()
                 number_top = details.node_number.mapTo(
                     details.details_page, details.node_number.rect().topLeft()
                 ).y()
                 self.assertLess(number_top - name_bottom, 20)
 
-        details.start_name_editing()
-        self.app.processEvents()
-        editor_bottom = details.node_name_editor.mapTo(
-            details.details_page, details.node_name_editor.rect().bottomLeft()
-        ).y()
-        number_top = details.node_number.mapTo(
-            details.details_page, details.node_number.rect().topLeft()
-        ).y()
-        self.assertLess(number_top - editor_bottom, 20)
-        details.cancel_name_editing()
-        self.app.processEvents()
-
-        button_corner = details.details_edit_button.mapTo(
-            details, details.details_edit_button.rect().bottomRight()
-        )
-        self.assertLess(details.width() - button_corner.x(), 50)
-        self.assertLess(details.height() - button_corner.y(), 50)
-
-    def test_configured_name_editing_updates_header_and_restores_tabs(self):
+    def test_configured_name_label_dialog_updates_header_and_navigator(self):
         node = Node(42, "Test module", 12, "1a", False)
         item = self.select(node)
         details = self.details
-        self.assertEqual(details.node_number.text(), "42")
-        self.assertEqual(details.summary.title(), "Node 42 — Test module")
 
-        details.start_name_editing()
-        self.assertIs(details.node_name_stack.currentWidget(), details.node_name_editor)
-        for page in (
-            details.variables_page,
-            details.produced_events_page,
-            details.consumed_events_page,
-            details.node_backups,
-        ):
-            self.assertFalse(details.tabs.isTabEnabled(details.tabs.indexOf(page)))
+        def respond(dialog):
+            dialog.findChild(QLineEdit).setText("  Garden  ")
+            dialog.findChild(QDialogButtonBox).button(
+                QDialogButtonBox.StandardButton.Save
+            ).click()
+            return dialog.result()
 
-        details.node_name_editor.setText("  Garden  ")
-        details.save_name_editing()
+        with patch.object(QDialog, "exec", respond):
+            QTest.mouseDClick(details.node_name, Qt.MouseButton.LeftButton)
         self.assertEqual(node.name, "Garden")
         self.assertEqual(details.node_name.text(), "Garden")
         self.assertEqual(details.summary.title(), "Node 42 — Test module — Garden")

@@ -41,7 +41,7 @@ class LayoutRestoreSelectionTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
-        manifest = root / "backups" / "saved.yaml"
+        self.manifest = manifest = root / "backups" / "saved.yaml"
         manifest.parent.mkdir()
         manifest.write_text(
             yaml.safe_dump(
@@ -95,6 +95,7 @@ class LayoutRestoreSelectionTests(unittest.TestCase):
             )
         )
         with patch.object(response_timeout, "RESPONSE_TIMEOUT_MS", 100):
+            self.assertEqual(self.connection.sent, [])
             self.selection.start()
             self.assertEqual(len(self.connection.sent), 1)
             self.reply(1)
@@ -114,6 +115,35 @@ class LayoutRestoreSelectionTests(unittest.TestCase):
             self.connection.sent,
             [f":SBFC0N73000{number}03;".encode() for number in (1, 2, 3)],
         )
+
+    def test_configuration_toggle_stops_unsent_checks_and_restarts_eligibility(self):
+        path = (
+            self.manifest.parent.parent / "nodes" / "2" / "backups" / self.manifest.name
+        )
+        backup = yaml.safe_load(path.read_text())
+        path.write_text(
+            yaml.safe_dump({**backup, "annotations": {"name": "Offline name"}})
+        )
+        self.selection.dialog.close()
+        self.selection.deleteLater()
+        self.selection = LayoutRestoreSelection(
+            self.parent, self.service, self.manifest
+        )
+        self.selection.start()
+        self.assertEqual(self.connection.sent, [b":SBFC0N73000103;"])
+        self.selection.dialog.configuration_checkbox.setChecked(False)
+        self.assertTrue(self.selection.dialog.node_checkboxes[2].isEnabled())
+        self.assertFalse(self.selection.dialog.node_checkboxes[1].isEnabled())
+        self.selection.dialog.node_checkboxes[2].setChecked(True)
+        self.reply(1)  # Drain the already transmitted read; no further checks follow.
+        self.assertEqual(self.connection.sent, [b":SBFC0N73000103;"])
+        self.assertEqual(self.selection.dialog.selected_nodes(), {2})
+        self.assertEqual(self.selection.dialog.selected_configuration_nodes(), set())
+        self.selection.dialog.configuration_checkbox.setChecked(True)
+        self.assertEqual(self.connection.sent[-1], b":SBFC0N73000103;")
+        self.reply(1)
+        self.assertIn("Online", self.selection.dialog.node_checkboxes[1].text())
+        self.assertEqual(self.selection.dialog.selected_configuration_nodes(), {1})
 
     def assert_stopped(self, number=1):
         sent = list(self.connection.sent)

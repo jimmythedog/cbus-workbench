@@ -1,5 +1,6 @@
 import logging
 from copy import deepcopy
+from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -15,17 +16,21 @@ from PySide6.QtWidgets import (
 )
 
 from .cbus_service import NodeState
+from .event_description_edit import NodeEventNameEditor
 from .logging_config import trace
+from .mdf_tokens import substitute_tokens
 from .mdfs import Mdf
 from .node import Node
-from .node_backup_files import node_backup
+from .node_backup_files import load_node_backup, node_backup
 from .node_backup_workflow import NodeBackupWorkflow
 from .node_backups import NodeBackups
 from .node_details_form import NodeDetailsForm
 from .node_events import NodeEvents
 from .node_failure_report import NodeFailureReport
+from .node_name_edit import NodeNameEditor
 from .node_variables import PROTOTYPE_MDF, MdfNodeVariables, RawNodeVariables
 from .pnn import Pnn
+from .token_label_edit import TokenLabelEditor
 
 DEFAULT_NODE_TITLE = "Node details"
 logger = logging.getLogger("workbench.ui")
@@ -42,6 +47,8 @@ class NodeDetails(QWidget):
         self.live_state = None
         self.live_mdf = None
         self.logical_layout = None
+        self.annotations = None
+        self.annotation_editing = False
         self.node = None
         self.node_list_item = None
         self.editing_descriptions = None
@@ -73,11 +80,11 @@ class NodeDetails(QWidget):
         layout.addWidget(self.summary)
 
         self.details_page = NodeDetailsForm()
+        self.token_label_editor = TokenLabelEditor(self)
         # Keep existing label access paths for callers and name-editing code.
         self.node_number = self.details_page.node_number
         self.node_name = self.details_page.node_name
-        self.node_name_editor = self.details_page.node_name_editor
-        self.node_name_stack = self.details_page.node_name_stack
+        self.node_name_edit = NodeNameEditor(self)
         self.can_id = self.details_page.can_id
         self.module_type = self.details_page.module_type
         self.firmware = self.details_page.firmware
@@ -96,25 +103,6 @@ class NodeDetails(QWidget):
         self.tabs = QTabWidget()
         self.tabs.addTab(self.details_page, "Node Details")
 
-        self.details_buttons = QStackedLayout()
-        self.details_edit_button = QPushButton("Edit")
-        self.details_edit_button.setEnabled(False)
-        self.details_edit_button.clicked.connect(self.start_name_editing)
-        view_buttons = QWidget()
-        view_buttons_layout = QHBoxLayout(view_buttons)
-        view_buttons_layout.addStretch()
-        view_buttons_layout.addWidget(self.details_edit_button)
-        self.details_save_button = QPushButton("Save")
-        self.details_save_button.clicked.connect(self.save_name_editing)
-        self.details_cancel_button = QPushButton("Cancel")
-        self.details_cancel_button.clicked.connect(self.cancel_name_editing)
-        edit_buttons = QWidget()
-        edit_buttons_layout = QHBoxLayout(edit_buttons)
-        edit_buttons_layout.addStretch()
-        edit_buttons_layout.addWidget(self.details_save_button)
-        edit_buttons_layout.addWidget(self.details_cancel_button)
-        self.details_buttons.addWidget(view_buttons)
-        self.details_buttons.addWidget(edit_buttons)
         self.raw_values = RawNodeVariables()
         self.mdf_values = MdfNodeVariables()
         self.mdf_values.set_editing(False)
@@ -205,6 +193,7 @@ class NodeDetails(QWidget):
         self.tabs.addTab(self.variables_page, "Node Variables")
 
         self.node_events = NodeEvents(events)
+        self.event_name_edit = NodeEventNameEditor(self)
         self.produced_events_page = self.node_events.produced_page
         self.consumed_events_page = self.node_events
         self.tabs.addTab(self.consumed_events_page, "Consumed Events")
@@ -219,13 +208,12 @@ class NodeDetails(QWidget):
 
         # Pages must match the tab order: currentChanged passes its index to this stack.
         self.action_area = QStackedWidget()
-        details_actions = QWidget()
-        details_actions_layout = QHBoxLayout(details_actions)
-        details_actions_layout.addLayout(self.details_buttons)
-        self.action_area.addWidget(details_actions)
+        self.action_area.addWidget(QWidget())  # Node name is edited from its label.
         self.action_area.addWidget(variables_actions)
         self.action_area.addWidget(events_actions)
-        self.action_area.addWidget(QWidget())  # Produced events are read-only.
+        self.action_area.addWidget(
+            QWidget()
+        )  # Produced descriptions are edited from their cells.
 
         # Backups action buttons
         backups_actions = QWidget()
@@ -311,6 +299,7 @@ class NodeDetails(QWidget):
         service = self.cbus_service
         return bool(
             self.connected
+            and not self.annotation_editing
             and service is not None
             and state is not None
             and state.identity.node_number
@@ -339,42 +328,50 @@ class NodeDetails(QWidget):
         self.node.nv_values = self.live_state.nv_values
         return self.node
 
-    def start_name_editing(self):
-        if self.node is None:
+    def can_edit_annotations(self):
+        return (
+            self.node is not None
+            and self.desired_configuration is None
+            and not (self.cbus_service is not None and self.cbus_service.writes_busy())
+        )
+
+    def annotation_number(self):
+        if isinstance(self.node, int):
+            return self.node
+        return self.node.node_number if isinstance(self.node, Pnn) else self.node.number
+
+    def refresh_annotations(self):
+        if not self.annotations or self.node is None or self.annotation_editing:
             return
-        self.node_name_editor.setText(self.node.name)
-        self.node_name_stack.setCurrentWidget(self.node_name_editor)
-        self.set_name_editing_tabs(True)
-        self.details_buttons.setCurrentIndex(1)
-        self.editing_changed.emit(True)
-
-    def save_name_editing(self):
-        if self.node is None:
-            return
-        self.node.name = self.node_name_editor.text().strip()
-        self.refresh_node_name()
-        self.finish_name_editing()
-
-    def cancel_name_editing(self):
-        self.refresh_node_name()
-        self.finish_name_editing()
-
-    def finish_name_editing(self):
-        self.node_name_stack.setCurrentWidget(self.node_name)
-        self.set_name_editing_tabs(False)
-        self.details_buttons.setCurrentIndex(0)
-        self.editing_changed.emit(False)
-
-    def set_name_editing_tabs(self, editing):
-        for page in (
-            self.variables_page,
-            self.produced_events_page,
-            self.consumed_events_page,
-            self.node_backups,
-        ):
-            self.tabs.setTabEnabled(self.tabs.indexOf(page), not editing)
+        data = self.annotations.load(self.annotation_number())
+        name = data.get("name", "")
+        self.node_name.setText(name or "-")
+        title = (
+            f"Node {self.annotation_number()} (offline)"
+            if isinstance(self.node, int)
+            else f"Node {self.annotation_number()} — {self.module_type.text()}"
+        )
+        if name:
+            title += f" — {name}"
+        self.summary.setTitle(title)
+        if self.live_state is None and self.live_mdf and isinstance(self.node, int):
+            definition = substitute_tokens(self.live_mdf.data, data.get("tokens", {}))
+            self.mdf_values.set_definition(
+                definition,
+                source=self.live_mdf.data,
+                token_editor=self.token_label_editor,
+            )
+            # Unknown hardware bytes stay blank/read-only; the labels are local.
+            self.mdf_values.show_live_values(None, {})
+            self.variables.setCurrentIndex(
+                1 if self.mdf_values.pages.count() > 1 else 0
+            )
+        self.node_events.refresh_annotations(self.annotation_number())
 
     def refresh_node_name(self):
+        if self.annotations:
+            self.refresh_annotations()
+            return
         self.details_page.show_node_name(self.node)
         if self.node is None:
             return
@@ -524,7 +521,23 @@ class NodeDetails(QWidget):
         if self.desired_configuration is None:
             self.live_mdf = mdf
             try:
-                self.mdf_values.set_definition(mdf.data if mdf else None)
+                definition = (
+                    substitute_tokens(
+                        mdf.data,
+                        self.annotations.load(state.identity.node_number).get(
+                            "tokens", {}
+                        ),
+                    )
+                    if mdf and self.annotations
+                    else mdf.data
+                    if mdf
+                    else None
+                )
+                self.mdf_values.set_definition(
+                    definition,
+                    source=mdf.data if mdf else None,
+                    token_editor=self.token_label_editor if self.annotations else None,
+                )
             except ValueError, KeyError, TypeError:
                 logger.exception(
                     "Unsupported MDF presentation node=%s path=%s",
@@ -544,7 +557,17 @@ class NodeDetails(QWidget):
         self.edit_button.setEnabled(self.can_edit_configuration())
         if self.desired_configuration is None:
             self.show_nv_values()
-        self.node_events.show_live_state(state, mdf.data if mdf else None)
+        self.node_events.token_editor = (
+            self.token_label_editor if self.annotations else None
+        )
+        self.node_events.source_mdf = mdf.data if mdf else None
+        self.node_events.show_live_state(
+            state,
+            definition
+            if self.desired_configuration is None
+            else self.node_events.live_mdf,
+        )
+        self.refresh_annotations()
         trace(
             logger,
             "Live node values displayed",
@@ -572,13 +595,15 @@ class NodeDetails(QWidget):
             self.cancel_events_editing()
         if self.desired_configuration is not None:
             self.cancel_editing()
+        if self.annotation_editing:
+            self.node_name_edit.cancel()
+            self.event_name_edit.cancel()
         self.show_configuration_result("")
         selected_page = self.tabs.currentWidget()
         previous_live_node = (
             self.node.node_number if isinstance(self.node, Pnn) else None
         )
         self.node_list_item = current
-        self.details_buttons.setCurrentIndex(0)
         self.node = current.data(Qt.ItemDataRole.UserRole) if current else None
         live_identity = isinstance(self.node, Pnn)
         saved_node = isinstance(self.node, int)
@@ -591,6 +616,15 @@ class NodeDetails(QWidget):
         if (live_identity or saved_node) and self.logical_layout is not None:
             number = self.node if saved_node else self.node.node_number
             self.node_backups.show_live_node(self.logical_layout, number)
+            if saved_node and self.node_backups.topLevelItemCount():
+                latest = self.node_backups.topLevelItem(0).data(
+                    0, Qt.ItemDataRole.UserRole
+                )
+                backup = load_node_backup(latest)
+                self.node_events.offline_identities = {
+                    f"{event['nodeNumber']}:{event['eventNumber']}"
+                    for event in backup["events"]
+                }
         else:
             self.node_backups.show_node(
                 None if live_identity or saved_node else self.node
@@ -599,7 +633,10 @@ class NodeDetails(QWidget):
 
         enabled = current is not None and not saved_node
         self.edit_button.setEnabled(False)
-        self.details_edit_button.setEnabled(enabled and not live_identity)
+        self.node_name.setEnabled(
+            self.can_edit_annotations()
+            and (self.annotations is not None or not live_identity and not saved_node)
+        )
         self.events_edit_button.setEnabled(enabled and not live_identity)
         self.tabs.setTabEnabled(self.tabs.indexOf(self.variables_page), True)
         self.tabs.setTabEnabled(self.tabs.indexOf(self.node_backups), True)
@@ -619,6 +656,7 @@ class NodeDetails(QWidget):
         else:
             self._show_configured_node(self.node)
         self.update_connection_details()
+        self.refresh_annotations()
 
     def _show_no_node(self) -> None:
         self.variables.setCurrentIndex(0)
@@ -729,13 +767,24 @@ class NodeDetails(QWidget):
         # Live-state refreshes must keep its actions disabled for that whole time.
         restoring = self.cbus_service is not None and self.cbus_service.restore.active
         available = self.connected and not restoring
+        if self.annotations is not None:
+            self.node_name.setEnabled(self.can_edit_annotations())
 
         live_node = self.node is not None and not isinstance(self.node, int)
         self.backup_buttons["New"].setEnabled(available and live_node)
         self.backup_buttons["View"].setEnabled(selected)
         self.backup_buttons["Compare"].setEnabled(available and selected)
+        local_restore = False
+        if selected and self.annotations is not None:
+            backup = self.node_backups.selectedItems()[0].data(
+                0, Qt.ItemDataRole.UserRole
+            )
+            if isinstance(backup, Path):
+                backup = load_node_backup(backup)
+            local_restore = "annotations" in backup
         self.backup_buttons["Restore"].setEnabled(
-            available
+            (local_restore and not self.connected and not restoring)
+            or available
             and selected
             and isinstance(self.node, Pnn)
             and self.live_state is not None
@@ -764,7 +813,11 @@ class NodeDetails(QWidget):
             self.backup_workflow.create(self.node)
 
     def restore_backup(self):
-        if isinstance(self.node, Pnn):
+        if self.annotations is not None and (
+            not self.connected or isinstance(self.node, int)
+        ):
+            self.backup_workflow.restore_offline_annotations(self.node)
+        elif isinstance(self.node, Pnn):
             if (
                 self.connected
                 and self.live_state is not None

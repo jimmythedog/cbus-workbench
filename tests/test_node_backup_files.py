@@ -175,6 +175,7 @@ class NodeBackupFilesTests(unittest.TestCase):
             yaml.safe_load(path.read_text()),
             {
                 "format_version": 1,
+                "annotations": {},
                 "complete": False,
                 "partOfLayoutBackup": False,
                 "node": 42,

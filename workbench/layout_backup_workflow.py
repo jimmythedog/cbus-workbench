@@ -7,6 +7,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QInputDialog, QMessageBox, QWidget
 
+from .annotations import load_annotations
 from .cbus_service import NodeState
 from .logging_config import trace
 from .node_backup_files import node_backup, save_backup
@@ -19,6 +20,8 @@ def create_layout_backup(
 ) -> Path | None:
     """Capture before confirmation so the saved data matches the warning."""
     nodes = [node_backup(state) for state in states]
+    for node in nodes:
+        node["annotations"] = load_annotations(logical_layout, node["node"])
     incomplete = [str(node["node"]) for node in nodes if not node["complete"]]
     complete = bool(nodes) and not incomplete
     trace(
@@ -72,6 +75,7 @@ def create_layout_backup(
         "format_version": 1,
         "complete": complete,
         "nodeNumbers": [node["node"] for node in nodes],
+        "annotations": load_annotations(logical_layout),
     }
     if description.strip():
         manifest["description"] = description.strip()

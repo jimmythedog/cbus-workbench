@@ -6,6 +6,7 @@ from pathlib import Path
 
 import yaml
 
+from .annotations import validate_annotations
 from .cbus_service import DiscoveryProgress, NodeState
 from .logging_config import trace
 from .paths import application_directories
@@ -203,6 +204,8 @@ def validate_backup(backup: dict) -> None:
         and isinstance(backup.get("events"), list)
     ):
         raise ValueError("Invalid node YAML backup")
+    if "annotations" in backup:
+        validate_annotations(backup["annotations"], node=True)
     identities = set()
     for event in backup["events"]:
         if not (
@@ -227,7 +230,9 @@ def saved_node_numbers(logical_layout: str) -> list[int]:
         if path.is_dir()
         and path.name.isdecimal()
         and (
-            (path / "metadata.yaml").is_file() or any((path / "backups").glob("*.yaml"))
+            (path / "metadata.yaml").is_file()
+            or (path / "annotations.yaml").is_file()
+            or any((path / "backups").glob("*.yaml"))
         )
     )
     trace(

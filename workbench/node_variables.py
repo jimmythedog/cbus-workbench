@@ -395,9 +395,19 @@ class MdfSettings(QScrollArea):
 
     value_edited = Signal(int, int)
 
-    def __init__(self, definitions, panel_title, panel_number, *, parent_conditions=()):
+    def __init__(
+        self,
+        definitions,
+        panel_title,
+        panel_number,
+        *,
+        parent_conditions=(),
+        source_definitions=None,
+        token_editor=None,
+    ):
         super().__init__()
         self.rows = []
+        self.token_editor = token_editor
         self.editing = False
         self.values = None
         self.labels = {}
@@ -410,7 +420,11 @@ class MdfSettings(QScrollArea):
         self.group_rows = []
         self.bit_arrays = []
         self.add_items(
-            definitions, f"{panel_title} ({panel_number})", layout, parent_conditions
+            definitions,
+            f"{panel_title} ({panel_number})",
+            layout,
+            parent_conditions,
+            source_definitions,
         )
         self.bind_controls()
 
@@ -488,11 +502,23 @@ class MdfSettings(QScrollArea):
             if label is not None:
                 label.setVisible(visible)
 
-    def add_items(self, definitions, location, layout, parent_conditions=()):
+    def add_items(
+        self,
+        definitions,
+        location,
+        layout,
+        parent_conditions=(),
+        source_definitions=None,
+    ):
         """Append controls and nested group boxes in MDF order."""
         if not isinstance(definitions, list):
             raise TypeError("MDF panel/group items must be a list")
         for item_number, definition in enumerate(definitions, 1):
+            source = (
+                source_definitions[item_number - 1]
+                if source_definitions is not None
+                else definition
+            )
             item_location = f"{location}/item {item_number}"
             if (
                 not isinstance(definition, dict)
@@ -540,6 +566,8 @@ class MdfSettings(QScrollArea):
                 raise TypeError("MDF displayTitle must be text")
             if kind == "NodeVariableGroup":
                 group = QGroupBox(title)
+                if self.token_editor:
+                    self.token_editor.bind(group, source["displayTitle"])
                 group_layout = mdf_form_layout(group)
                 layout.addRow(group)
                 first_child = len(self.rows)
@@ -548,6 +576,7 @@ class MdfSettings(QScrollArea):
                     item_location + "/groupItems",
                     group_layout,
                     conditions,
+                    source.get("groupItems"),
                 )
                 children = [control for _, control, _ in self.rows[first_child:]]
                 if children:
@@ -555,14 +584,23 @@ class MdfSettings(QScrollArea):
                 else:
                     layout.removeRow(group)
             elif kind == "NodeVariableBitArray":
-                self.add_bit_array(definition, item_location, layout, conditions)
+                self.add_bit_array(
+                    definition, item_location, layout, conditions, source
+                )
             else:
                 control = self.make_control(definition)
                 control.setEnabled(False)
-                layout.addRow(title + ":", control)
+                label = QLabel(title + ":")
+                if self.token_editor:
+                    self.token_editor.bind(label, source["displayTitle"])
+                    if isinstance(control, QComboBox):
+                        self.token_editor.bind_choices(
+                            control, source.get("options", [])
+                        )
+                layout.addRow(label, control)
                 self.rows.append((definition, control, conditions))
 
-    def add_bit_array(self, definition, location, layout, conditions):
+    def add_bit_array(self, definition, location, layout, conditions, source):
         """MMC v0.23.2 uses ordered, zero-based bitPosition entries on one NV."""
         index = definition["nodeVariableIndex"]
         if type(index) is not int or not 1 <= index <= 255:
@@ -598,6 +636,10 @@ class MdfSettings(QScrollArea):
                 )
             validate_bit_label(bit)
             control = QCheckBox(resolve_bit_label(bit, {})[0])
+            if self.token_editor:
+                self.token_editor.bind(
+                    control, source["bitCollection"][number - 1].get("label")
+                )
             control.setEnabled(False)
             layout.addRow(QLabel(""), control)
             self.rows.append(
@@ -845,6 +887,8 @@ class MdfNodeVariables(QSplitter):
         self.navigation.addItem("Raw Values")
         self.pages.addWidget(self.raw_values)
         self.definition = None
+        self.token_editor = None
+        self.navigation.itemDoubleClicked.connect(self.edit_page_tokens)
         self.live_mode = False
         self.live_count = None
         self.navigation.currentRowChanged.connect(self.pages.setCurrentIndex)
@@ -857,10 +901,16 @@ class MdfNodeVariables(QSplitter):
     def createHandle(self):
         return PlainSplitterHandle(self.orientation(), self)
 
-    def set_definition(self, definition):
+    def edit_page_tokens(self, item):
+        template = item.data(Qt.ItemDataRole.UserRole)
+        if self.token_editor and template:
+            self.token_editor.edit(template, item.text())
+
+    def set_definition(self, definition, *, source=None, token_editor=None):
         """Replace presentation only; unsupported definitions remain explicit errors."""
-        if definition == self.definition:
+        if definition == self.definition and token_editor is self.token_editor:
             return
+        self.token_editor = token_editor
         self.definition = None
         self.navigation.setCurrentRow(0)
         while self.pages.count() > 1:
@@ -873,18 +923,34 @@ class MdfNodeVariables(QSplitter):
         # Construct off-stack so a rejected MDF cannot leave partial navigation.
         forms = []
         try:
-            for title, items in settings_panels(definition["nodeVariables"]):
-                form = MdfSettings(items, title, len(forms) + 1)
+            source_panels = list(
+                settings_panels((source or definition)["nodeVariables"])
+            )
+            for panel_index, (title, items) in enumerate(
+                settings_panels(definition["nodeVariables"])
+            ):
+                source_title, source_items = source_panels[panel_index]
+                form = MdfSettings(
+                    items,
+                    title,
+                    len(forms) + 1,
+                    source_definitions=source_items,
+                    token_editor=token_editor,
+                )
                 if form.rows:
-                    forms.append((title, form))
+                    forms.append((title, source_title, form))
                 else:
                     form.deleteLater()
         except ValueError, KeyError, TypeError:
-            for _, form in forms:
+            for _, _, form in forms:
                 form.deleteLater()
             raise
-        for title, form in forms:
+        for title, source_title, form in forms:
             self.navigation.addItem(title)
+            if token_editor:
+                token_editor.bind_page(
+                    self.navigation.item(self.navigation.count() - 1), source_title
+                )
             self.pages.addWidget(form)
             form.value_edited.connect(self.update_value)
         self.definition = definition

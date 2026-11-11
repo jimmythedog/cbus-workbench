@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
 )
 
+from .annotations import Annotations
 from .app_settings import (
     layout_settings_for_storage,
     layout_settings_for_ui,
@@ -21,7 +22,7 @@ from .app_settings import (
     save_settings,
 )
 from .application_directories_dialog import ApplicationDirectoriesDialog
-from .cbus_service import CbusService
+from .cbus_service import CbusService, DiscoveryStatus
 from .diagnostics import Diagnostics
 from .layout_settings import LayoutSettingsDialog
 from .layout_view import LayoutView
@@ -62,6 +63,7 @@ class MainWindow(QMainWindow):
         self.layout_stack = QStackedWidget()
         self.layouts = {}
         self.observed_events = {}
+        self.annotations = {}
         self.layout_settings = {}
         self.connections: dict[str, TcpConnection | SerialConnection] = {}
         self.cbus_services: dict[str, CbusService] = {}
@@ -320,6 +322,9 @@ class MainWindow(QMainWindow):
             if logical_layout not in self.observed_events:
                 self.observed_events[logical_layout] = ObservedEvents(logical_layout)
             self.layouts[name].set_observed_events(self.observed_events[logical_layout])
+            if logical_layout not in self.annotations:
+                self.annotations[logical_layout] = Annotations(logical_layout)
+            self.layouts[name].set_annotations(self.annotations[logical_layout])
 
         self.error_reporter.run(f"Could not load observed events for '{name}'", bind)
 
@@ -357,14 +362,13 @@ class MainWindow(QMainWindow):
         )
         self.cbus_services[name] = service
         service.discovery_status_changed.connect(self.update_discovery_status)
-        service.discovery_status_changed.connect(node_view.finish_discovery)
+        service.discovery_status_changed.connect(node_view.discovery_status_changed)
         self.layouts[name].discovery_states = lambda: (
             list(self.cbus_services[name].node_states.values())
             if name in self.cbus_services
             else []
         )
 
-        node_view.begin_discovery()
         self.error_reporter.run(
             f"Could not discover nodes on layout '{name}'", service.discover_nodes
         )
@@ -553,9 +557,9 @@ class MainWindow(QMainWindow):
         action = self.layout_group.checkedAction()
         service = self.cbus_services.get(action.data()) if action else None
         labels = {
-            "Discovering configuration…": "Discovering…",
-            "Configuration ready": "Ready",
-            "Discovery incomplete": "Incomplete",
+            DiscoveryStatus.DISCOVERING: "Discovering…",
+            DiscoveryStatus.READY: "Ready",
+            DiscoveryStatus.INCOMPLETE: "Incomplete",
         }
         text = labels.get(service.discovery_status, "") if service else ""
         connected = (

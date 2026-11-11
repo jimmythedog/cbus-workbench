@@ -152,6 +152,7 @@ class LayoutBackupTests(unittest.TestCase):
                     "format_version": 1,
                     "complete": True,
                     "nodeNumbers": [42, 99],
+                    "annotations": {},
                 },
             )
             for state in (self.state, other):
@@ -163,6 +164,7 @@ class LayoutBackupTests(unittest.TestCase):
                     / path.name
                 )
                 expected = node_backup(state)
+                expected["annotations"] = {}
                 expected["partOfLayoutBackup"] = True
                 self.assertEqual(yaml.safe_load(node_path.read_text()), expected)
         self.view.show_live_layout("Other", list)

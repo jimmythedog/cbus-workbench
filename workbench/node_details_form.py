@@ -6,10 +6,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QLabel,
     QLayout,
-    QLineEdit,
     QScrollArea,
-    QSizePolicy,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -38,14 +35,7 @@ class NodeDetailsForm(QWidget):
 
         self.node_number = QLabel("-")
         self.node_name = QLabel("-")
-        self.node_name_editor = QLineEdit()
-        self.node_name_stack = QStackedWidget()
-        # The stack must not absorb the form's spare vertical space.
-        name_policy = self.node_name_stack.sizePolicy()
-        name_policy.setVerticalPolicy(QSizePolicy.Policy.Maximum)
-        self.node_name_stack.setSizePolicy(name_policy)
-        self.node_name_stack.addWidget(self.node_name)
-        self.node_name_stack.addWidget(self.node_name_editor)
+        self.node_name.setTextFormat(Qt.TextFormat.PlainText)
         self.can_id = QLabel("-")
         self.module_type = QLabel("-")
         self.firmware = QLabel("-")
@@ -67,7 +57,7 @@ class NodeDetailsForm(QWidget):
         self.stored_events = QLabel("-")
 
         # Identity
-        form.addRow("Name:", self.node_name_stack)
+        form.addRow("Name:", self.node_name)
         form.addRow("Node number:", self.node_number)
         form.addRow("Status:", self.status)
 

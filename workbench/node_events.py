@@ -44,7 +44,7 @@ class NoHoverDelegate(QStyledItemDelegate):
 
 class RawEvDelegate(NoHoverDelegate):
     def createEditor(self, parent, option, index):
-        if index.column() == 0:
+        if index.column() == 0 or not index.parent().isValid():
             return None
 
         if index.parent().isValid():
@@ -82,9 +82,12 @@ class NodeEvents(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.events = events if events is not None else {}
+        self.annotations = None
         self.node = None
         self.live_state = None
         self.live_mdf = None
+        self.source_mdf = None
+        self.token_editor = None
         self.editing_descriptions = None
         self.editing_values = None
         self.desired_configuration = None
@@ -123,6 +126,7 @@ class NodeEvents(QWidget):
     def show_node(self, node):
         self.ev_presentation = None
         self.pending_ev_controls.clear()
+        self.offline_identities = set()
         self.live_state = None
         self.produced_table.setRowCount(0)
         expanded_events = set()
@@ -144,7 +148,6 @@ class NodeEvents(QWidget):
         for event, description in node.consumed_events.items():
             parent = QTreeWidgetItem(self.consumed_table, [event, description])
             parent.setExpanded(event in expanded_events)
-            parent.setFlags(parent.flags() | Qt.ItemFlag.ItemIsEditable)
 
             if not node.has_mdf:
                 for number, value in node.ev_values.get(event, {}).items():
@@ -195,8 +198,14 @@ class NodeEvents(QWidget):
                 if identity.node_number == node_number
             ]
             self.produced_table.setRowCount(len(produced))
+            names = (
+                self.annotations.load().get("events", {}) if self.annotations else {}
+            )
             for row, identity in enumerate(produced):
                 self.produced_table.setItem(row, 0, QTableWidgetItem(identity.label()))
+                self.produced_table.setItem(
+                    row, 1, QTableWidgetItem(names.get(identity.label(), ""))
+                )
             return
         produced = [
             (f"{node_number}:{number}", details.get("description", ""))
@@ -306,6 +315,33 @@ class NodeEvents(QWidget):
                 if current is not None:
                     self.consumed_table.setCurrentItem(current)
         self.set_editing(False)
+        self.refresh_annotations(state.identity.node_number)
+
+    def refresh_annotations(self, number):
+        if not self.annotations:
+            return
+        names = self.annotations.load(number).get("consumedEvents", {})
+        # Saved names are useful offline even without a current hardware table.
+        if self.live_state is None:
+            self.consumed_table.clear()
+            for identity in sorted(
+                set(names) | getattr(self, "offline_identities", set())
+            ):
+                item = QTreeWidgetItem(
+                    self.consumed_table, [identity, names.get(identity, "")]
+                )
+                item.setData(
+                    0, Qt.ItemDataRole.UserRole, tuple(map(int, identity.split(":")))
+                )
+        else:
+            for row in range(self.consumed_table.topLevelItemCount()):
+                item = self.consumed_table.topLevelItem(row)
+                item.setText(1, names.get(item.text(0), ""))
+
+        for row in range(self.consumed_table.topLevelItemCount()):
+            self.consumed_table.topLevelItem(row).setToolTip(
+                1, "Double-click to edit this node's event description"
+            )
 
     def show_event_controls(self, event):
         """Construct the existing MDF layout once, on first expansion."""
@@ -331,6 +367,12 @@ class NodeEvents(QWidget):
             nv_values,
             values,
             self.node.node_number,
+            source_definitions=list(
+                ev_definitions(self.source_mdf.get("eventVariables", []))
+            )
+            if self.source_mdf
+            else None,
+            token_editor=self.token_editor,
         )
         # Expansion may happen after Edit exposes unread raw EV rows.
         for row in rows.values():

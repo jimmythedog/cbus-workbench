@@ -105,11 +105,25 @@ def ev_definitions(items, conditions=()):
 
 
 def add_ev_controls(
-    tree, event, ev_rows, definitions, nv_values, ev_values, node_number
+    tree,
+    event,
+    ev_rows,
+    definitions,
+    nv_values,
+    ev_values,
+    node_number,
+    *,
+    source_definitions=None,
+    token_editor=None,
 ):
     """Construct forms on expansion; retain them so editing can change visibility."""
     forms = {}
-    for index, definition, conditions in definitions:
+    for position, (index, definition, conditions) in enumerate(definitions):
+        source = (
+            source_definitions[position][1]
+            if source_definitions is not None
+            else definition
+        )
         if index not in ev_rows:
             continue
         settings = None
@@ -136,7 +150,12 @@ def add_ev_controls(
                 normalized["options"] = options
                 normalized["labelOptions"] = definition["options"]
             settings = MdfSettings(
-                [normalized], "EV", index, parent_conditions=conditions
+                [normalized],
+                "EV",
+                index,
+                parent_conditions=conditions,
+                source_definitions=[source],
+                token_editor=token_editor,
             )
             contents = settings.takeWidget()
             # Keep full form labels inside the value column, beside their controls.

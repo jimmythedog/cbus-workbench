@@ -42,7 +42,7 @@ class LiveNodeEventsTests(unittest.TestCase):
                     self.states[258].event_identities[1] = (258, value)
                     self.view.show_identity(node)
                     self.view.refresh_state(258)
-                    self.assertIsNone(self.view.details.node)
+                    self.assertEqual(self.view.details.node, node)
                     self.assertEqual(tree.topLevelItemCount(), 0)
                 self.view.finish_discovery(status)
                 self.assertTrue(self.view.node_list.isEnabled())
@@ -85,6 +85,26 @@ class LiveNodeEventsTests(unittest.TestCase):
         self.states[258] = NodeState(node)
         self.view.show_identity(node)
         self.assertEqual(self.view.details.node, node)
+
+    def test_consecutive_discovery_statuses_preserve_selection_and_editing_lock(self):
+        node = Pnn(258, 13, 34, 0x03)
+        self.states[258] = NodeState(node)
+        self.view.show_identity(node)
+        self.view.details.editing_changed.emit(True)
+        for _ in range(2):
+            self.view.discovery_status_changed("Discovering configuration…")
+            self.view.discovery_status_changed("Discovering configuration…")
+            self.view.details.editing_changed.emit(False)
+            self.assertFalse(self.view.node_list.isEnabled())
+            self.view.details.editing_changed.emit(True)
+            self.view.discovery_status_changed("Configuration ready")
+            self.assertFalse(self.view.node_list.isEnabled())
+            self.assertEqual(self.view.details.node, node)
+            self.assertEqual(
+                self.view.node_list.currentItem().data(Qt.ItemDataRole.UserRole), node
+            )
+        self.view.details.editing_changed.emit(False)
+        self.assertTrue(self.view.node_list.isEnabled())
 
     def test_live_event_tabs_use_full_width_and_preserve_event_state(self):
         node = Pnn(258, 13, 34, 0x03)

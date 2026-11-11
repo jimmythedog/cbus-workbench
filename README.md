@@ -10,8 +10,9 @@ Early development. Currently implemented:
 - Saved layouts with TCP/IP or serial GridConnect connections and optional auto-connect.
 - Node discovery, connection/discovery status and confirmed node information.
   Discovered nodes and their last-known parameters/CAN ID are remembered without backups.
-  During full discovery, node selection is disabled and details remain empty; MDF
-  lookup and module names are deferred until discovery ends. When
+  During hardware discovery (including Save and restore readbacks), node selection
+  is disabled and the displayed details remain unchanged; MDF processing is deferred
+  until discovery ends. When
   discovery ends, the previous node is restored if found; otherwise the first
   discovered node is selected, including when discovery is incomplete.
 - Reading node variables (NVs), stored events and event variables (EVs), with one
@@ -30,7 +31,10 @@ Early development. Currently implemented:
 
 Layout Restore confirms and restores selected online nodes sequentially, then shows
 remaining differences, unknown values and offline nodes. Retry reads hardware afresh
-and applies outstanding differences when safe. Backup deletion is not available yet.
+and applies outstanding differences when safe. Node and Layout Restore offer separate
+configuration and annotation choices, both checked by default. Annotation-only restore
+works offline without hardware checks; Layout Restore applies node annotations only
+to selected nodes and layout event names even with no nodes selected. Backup deletion is not available yet.
 See [Requirements](REQUIREMENTS.md) for intended capabilities, including planned work.
 
 ## Installation and running

@@ -1028,10 +1028,18 @@ class WindowStartupTests(unittest.TestCase):
         self.assertTrue(navigator.isEnabled())
         self.assertEqual(navigator.currentItem().text(), "258 (offline)")
         self.assertIsNone(window.layouts["Default"].node_view.state_lookup)
+        self.assertIsInstance(window.layouts["Default"].node_view.details.node, int)
+        self.assertIsNone(window.layouts["Default"].node_view.details.live_state)
         connection.frame_received.emit(b":SB040NB601030D2203;")
         self.assertEqual(first_service.nodes, {258: Pnn(258, 13, 34, 3)})
         self.assertEqual(navigator.count(), 1)
 
+        def check_discovery_started(frame):
+            if frame == b":SBFC0N0D;":
+                self.assertFalse(navigator.isEnabled())
+                self.assertIsNone(navigator.currentItem())
+
+        connection.frame_sent.connect(check_discovery_started)
         window.connect_layout()
         self.assertEqual(
             connection.sent,

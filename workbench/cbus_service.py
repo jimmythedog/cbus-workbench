@@ -3,7 +3,7 @@
 import logging
 from collections import deque
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, StrEnum
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -27,6 +27,15 @@ from .wrack import decode_wrack
 logger = logging.getLogger("workbench.cbus")
 PARAMETER_READ_ORDER = (2, 4, 5, 6, 7, 8, 10, 20, 19, 9, 1, 3)
 RequestIndex = int | tuple[int, int]
+
+
+class DiscoveryStatus(StrEnum):
+    """Aggregate discovery lifecycle; values retain the UI and signal messages."""
+
+    DISCONNECTED = "Disconnected"
+    DISCOVERING = "Discovering configuration…"
+    READY = "Configuration ready"
+    INCOMPLETE = "Discovery incomplete"
 
 
 class DiscoveryProgress(Enum):
@@ -84,7 +93,7 @@ class CbusService(QObject):
         self._request_timer = QTimer(self)
         self._request_timer.setSingleShot(True)
         self._request_timer.timeout.connect(self._request_timed_out)
-        self.discovery_status = "Disconnected"
+        self.discovery_status = DiscoveryStatus.DISCONNECTED
         self._closed = False
         self._qnn_failed = False
         # QNN has no final acknowledgement. Wait for a quiet response window,
@@ -111,7 +120,7 @@ class CbusService(QObject):
         self._closed = True
         self._discovery_window.stop()
         self._status_update.stop()
-        self._set_discovery_status("Disconnected")
+        self._set_discovery_status(DiscoveryStatus.DISCONNECTED)
         self.connection.frame_received.disconnect(self._receive_frame)
         self.restore.disconnect()
         self.nv_write.disconnect()
@@ -128,7 +137,7 @@ class CbusService(QObject):
             extra={"fields": {"layout": self.connection.layout_name}},
         )
 
-    def _set_discovery_status(self, status: str) -> None:
+    def _set_discovery_status(self, status: DiscoveryStatus) -> None:
         if self.discovery_status != status:
             trace(
                 logger,
@@ -158,7 +167,7 @@ class CbusService(QObject):
             or self.ev_write.active
             or self.ev_write.refreshing
         ):
-            status = "Discovering configuration…"
+            status = DiscoveryStatus.DISCOVERING
         else:
             complete = (DiscoveryProgress.COMPLETE, DiscoveryProgress.SKIPPED)
             ready = (
@@ -175,12 +184,12 @@ class CbusService(QObject):
                     )
                 )
             )
-            status = "Configuration ready" if ready else "Discovery incomplete"
+            status = DiscoveryStatus.READY if ready else DiscoveryStatus.INCOMPLETE
         self._set_discovery_status(status)
 
     def discover_nodes(self) -> None:
         """Queue one QNN request; PNN responses arrive independently by signal."""
-        self._set_discovery_status("Discovering configuration…")
+        self._set_discovery_status(DiscoveryStatus.DISCOVERING)
         self._discovery_window.start(response_timeout.RESPONSE_TIMEOUT_MS)
         # The guide specifies major priority bits 0b10 and minor priority
         # bits 0b11 for a starting query. GridConnect left-justifies CAN bits.
@@ -265,6 +274,7 @@ class CbusService(QObject):
         if self.nv_write.active or self.ev_write.active:
             raise ValueError("Wait for hardware writes and learn-mode cleanup")
         state = self.node_states[node_number]
+        self._set_discovery_status(DiscoveryStatus.DISCOVERING)
         self._request_queue = deque(
             r for r in self._request_queue if r[1] != node_number
         )
@@ -551,6 +561,7 @@ class CbusService(QObject):
 
     def _restart_event_discovery(self, node_number: int) -> None:
         """Discard pre-Save event slots: firmware may have rebuilt the table."""
+        self._set_discovery_status(DiscoveryStatus.DISCOVERING)
         self._request_queue = deque(
             request
             for request in self._request_queue
@@ -681,7 +692,7 @@ class CbusService(QObject):
         )
         if is_new:
             self._discovery_window.start(response_timeout.RESPONSE_TIMEOUT_MS)
-            self._set_discovery_status("Discovering configuration…")
+            self._set_discovery_status(DiscoveryStatus.DISCOVERING)
             self.node_discovered.emit(pnn)
             self.node_state_updated.emit(pnn.node_number)
             if pnn.node_number != 0:
@@ -801,6 +812,7 @@ class CbusService(QObject):
     def _start_nv_discovery(
         self, node_number: int, count: int, *, first: int = 1
     ) -> None:
+        self._set_discovery_status(DiscoveryStatus.DISCOVERING)
         self._nv_started[node_number] = count
         if self.nv_write.refreshing and self.nv_write.node_number == node_number:
             # Even an empty range has a new completion transition. This also
@@ -942,6 +954,7 @@ class CbusService(QObject):
     def _start_ev_discovery(self, node_number: int) -> None:
         if node_number in self._ev_started:
             return
+        self._set_discovery_status(DiscoveryStatus.DISCOVERING)
         state = self.node_states[node_number]
         count = state.parameters.get(5)
         if state.stored_event_count == 0 or count == 0:
@@ -1081,6 +1094,10 @@ class CbusService(QObject):
         self._send_next_request()
 
     def _send_next_request(self) -> None:
+        # Starts are synchronous so UI work cannot delay the first reply's next
+        # request. Completion stays deferred until chained operations have queued.
+        if not self._closed and (self._request_queue or self.writes_busy()):
+            self._set_discovery_status(DiscoveryStatus.DISCOVERING)
         self._status_update.start(0)
         if self._outstanding_request is not None:
             return

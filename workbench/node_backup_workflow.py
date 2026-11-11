@@ -6,8 +6,16 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QInputDialog, QMainWindow, QMessageBox, QWidget
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QDialogButtonBox,
+    QInputDialog,
+    QMainWindow,
+    QMessageBox,
+    QWidget,
+)
 
+from .annotations import load_annotations, save_annotations
 from .backup_compare import BackupCompare
 from .backup_view import BackupView, backup_contents
 from .cbus_service import NodeState
@@ -92,6 +100,9 @@ class NodeBackupWorkflow:
 
     def create_live(self, state: NodeState, logical_layout: str) -> None:
         backup = node_backup(state)
+        backup["annotations"] = load_annotations(
+            logical_layout, state.identity.node_number
+        )
         if not backup["complete"]:
             dialog = QMessageBox(self.parent)
             dialog.setWindowTitle("Incomplete node discovery")
@@ -147,9 +158,8 @@ class NodeBackupWorkflow:
             backup = self._selected_backup(node)
             if backup is None:
                 return
-            service.restore.check(number, backup)
-            target = service.node_states[number]
-            identity = (target.identity, target.can_id)
+            target = service.node_states.get(number)
+            identity = (target.identity, target.can_id) if target else None
             message = (
                 f"Restore this backup to live node {number}?\n\n"
                 "Backup NVs are compared in ascending order and written only when different. "
@@ -173,13 +183,7 @@ class NodeBackupWorkflow:
                     "\n\nThis backup is part of a layout backup. Restoring this "
                     "node independently may leave it inconsistent with other nodes."
                 )
-            answer = QMessageBox.question(
-                self.parent,
-                "Restore node backup",
-                message,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
+            answer, configuration, annotations = self.confirm_restore(message, backup)
             if answer != QMessageBox.StandardButton.Yes:
                 trace(
                     logger,
@@ -187,15 +191,21 @@ class NodeBackupWorkflow:
                     extra={"fields": {"node_number": number}},
                 )
                 return
-            # The confirmation dialog processes network events. Revalidate connection
-            # and target rather than trusting the state checked before it opened.
-            if identity != (target.identity, target.can_id):
-                raise ValueError(
-                    "Target identity changed while confirming restoration."
+            if configuration:
+                # Validate only hardware restoration. Annotation-only restore must
+                # also work with incomplete discovery or an unavailable target.
+                service.restore.check(number, backup)
+                target = service.node_states[number]
+                if identity != (target.identity, target.can_id):
+                    raise ValueError(
+                        "Target identity changed while confirming restoration."
+                    )
+            if annotations and "annotations" in backup:
+                self.restore_annotations(number, backup)
+            if configuration:
+                service.restore.begin(
+                    number, backup, allow_incomplete=not backup["complete"]
                 )
-            service.restore.begin(
-                number, backup, allow_incomplete=not backup["complete"]
-            )
         except ValueError as error:
             trace(
                 logger,
@@ -203,6 +213,101 @@ class NodeBackupWorkflow:
                 extra={"fields": {"node_number": number, "reason": str(error)}},
             )
             QMessageBox.warning(self.parent, "Cannot restore node backup", str(error))
+
+    def confirm_restore(self, message, backup, *, configuration_available=True):
+        dialog = QMessageBox(self.parent)
+        dialog.setWindowTitle("Restore node backup")
+        dialog.setText(message)
+        configuration = QCheckBox("Restore configuration", dialog)
+        configuration.setChecked(True)
+        annotations = QCheckBox("Restore annotations", dialog)
+        annotations.setChecked(True)
+        if "annotations" not in backup:
+            annotations.setToolTip(
+                "This backup contains no annotations; current annotations will be kept."
+            )
+        dialog.setCheckBox(annotations)
+        dialog.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        restore = dialog.button(QMessageBox.StandardButton.Yes)
+        restore.setText("Restore")
+        layout = dialog.layout()
+        # Keep both choices above the existing confirmation buttons.
+        buttons = dialog.findChild(QDialogButtonBox)
+        row, column, row_span, column_span = layout.getItemPosition(
+            layout.indexOf(buttons)
+        )
+        layout.removeWidget(buttons)
+        layout.addWidget(configuration, row, 0, 1, layout.columnCount())
+        layout.addWidget(buttons, row + 1, column, row_span, column_span)
+
+        def update_button():
+            restore.setEnabled(
+                (configuration.isChecked() or annotations.isChecked())
+                and (configuration_available or not configuration.isChecked())
+            )
+
+        configuration.toggled.connect(update_button)
+        annotations.toggled.connect(update_button)
+        update_button()
+        dialog.setDefaultButton(QMessageBox.StandardButton.No)
+        answer = dialog.exec()
+        trace(
+            logger,
+            "Node backup restore choices",
+            extra={
+                "fields": {
+                    "node_number": backup["node"],
+                    "accepted": answer == QMessageBox.StandardButton.Yes,
+                    "configuration": configuration.isChecked(),
+                    "annotations": annotations.isChecked(),
+                }
+            },
+        )
+        return answer, configuration.isChecked(), annotations.isChecked()
+
+    def restore_annotations(self, number, backup):
+        try:
+            annotations = self.parent.annotations
+            if annotations is not None:
+                annotations.save(backup["annotations"], number)
+            else:
+                save_annotations(
+                    self.parent.logical_layout, backup["annotations"], number
+                )
+        except (OSError, ValueError, TypeError) as error:
+            logger.exception(
+                "Annotation restore failed layout=%s node=%s",
+                self.parent.logical_layout,
+                number,
+            )
+            QMessageBox.warning(
+                self.parent,
+                "Annotations not restored",
+                f"Local annotations could not be saved: {error}\n\nHardware configuration restoration is separate.",
+            )
+            return False
+        self.parent.refresh_annotations()
+        return True
+
+    def restore_offline_annotations(self, node):
+        backup = self._selected_backup(node)
+        if backup is None:
+            return
+        number = node if isinstance(node, int) else node.node_number
+        answer, configuration, annotations = self.confirm_restore(
+            f"Restore backup for node {number}? Uncheck Restore configuration to restore local annotations offline. Configuration requires a connected, discovered node.",
+            backup,
+            configuration_available=False,
+        )
+        if (
+            answer == QMessageBox.StandardButton.Yes
+            and not configuration
+            and annotations
+            and "annotations" in backup
+        ):
+            self.restore_annotations(number, backup)
 
     def restore(self, node):
         if isinstance(node, Pnn):

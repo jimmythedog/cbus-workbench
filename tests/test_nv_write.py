@@ -103,7 +103,12 @@ class NvWriteTests(unittest.TestCase):
             self.assertTrue(self.results[-1][1])
             self.assertIn("Saving changes…", self.results[-1][2])
             self.reply("9701020180")
-            QTest.qWait(30)  # NV2 never responds during the full reread.
+            # NV2 never responds. Wait for the observable completion, allowing
+            # Qt to dispatch both timeout callbacks under full-suite load.
+            for _ in range(50):
+                if refresh_results:
+                    break
+                QTest.qWait(10)
         self.assertEqual(self.state.nv_values, {1: 128, 2: 8})
         self.assertEqual(self.state.nv_progress, DiscoveryProgress.INCOMPLETE)
         self.assertIn("Changes saved, but", refresh_results[-1][1])
