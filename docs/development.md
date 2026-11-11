@@ -4,6 +4,49 @@ This document records established development decisions and, as the application 
 the [user guide](user-guide.md); installation and running instructions start in the
 [README](../README.md#installation-and-running).
 
+## Observed network events
+
+Observed events are separate from the prototype annotation catalogue and from
+consumed-event configuration. `MainWindow` owns one `ObservedEvents` collection
+per logical layout and binds each connection/view to it. This prevents different
+layouts from mixing traffic or storage; connections intentionally sharing a logical
+layout also share observed identities.
+All updates run through Qt's existing GUI-thread connection/service path.
+
+```text
+connection.frame_received -> CbusService -> event_received(identity)
+    -> layout collection: new identity -> write temporary YAML -> replace file
+                          known identity -> no disk write or view refresh
+    -> add new identity -> changed -> layout and node views
+    save failure -> existing ErrorReporter (traceback + dialog); next sighting retries
+```
+
+`Data/layouts/<logical-layout>/observed-events.yaml` stores only
+`nodeNumber` and `eventNumber`. Older records containing `type` load using their
+NN/EN fields; the next new-identity save omits `type` from all records. All
+configured layouts load their identities at startup. The collection stores identities only; ON/OFF state, occurrence counts
+and timestamps are not tracked.
+Disconnect removes the service's receiver, leaving the collection intact;
+reconnect uses that collection. Switching a connection's logical layout binds its
+views to the destination collection.
+There is no node-owned produced-event store, annotation lookup or backup change.
+
+The decoder accepts accessory ON/OFF events, their response variants and variants
+with one to three data bytes; requests and malformed frames are ignored. Data
+bytes are not part of identity. Identity is `(NN, EN)`, displayed as `NN:EN`.
+Long events preserve NN; short events use `(0, DN)`, independent of the
+ASON/ASOF sender NN. This follows the
+[CBUS Developer's Guide 6b](https://www.merg.org.uk/merg_wiki/lib/exe/fetch.php?media=public%3Acbuspublic%3Adeveloper_6b.pdf)
+short-event addressing rule. Section 5 assigns ordinary FLiM NNs from 1–65535
+and reserves NN zero for SLiM consumers and configuration software. No separate
+long-NN-zero identity is retained: if such a frame is received, it shares `(0, EN)`
+with a short event of that number. This is a limitation of the simplified alpha
+catalogue rather than a reason to infer ownership or add another identity field.
+The Produced Events pane filters the canonical identity NN, so short events appear
+only for NN zero, never under a frame sender inferred as their physical owner.
+Even a long NN is an identity filter, not verified physical-producer discovery.
+No extra protocol requests or module-specific interpretation are involved.
+
 ## Running from source
 
 These instructions are for developers. End-user releases are intended to be packaged as OS-specific installers that bundle Python and application dependencies; users should not need to install Python or uv.

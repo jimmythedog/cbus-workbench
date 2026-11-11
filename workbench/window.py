@@ -27,6 +27,7 @@ from .layout_settings import LayoutSettingsDialog
 from .layout_view import LayoutView
 from .logging_config import TRACE, trace
 from .node_metadata import save_metadata
+from .observed_events import ObservedEvents
 from .pnn import Pnn
 from .send_frame_dialog import SendFrameDialog
 from .serial_connection import SerialConnection
@@ -60,6 +61,7 @@ class MainWindow(QMainWindow):
 
         self.layout_stack = QStackedWidget()
         self.layouts = {}
+        self.observed_events = {}
         self.layout_settings = {}
         self.connections: dict[str, TcpConnection | SerialConnection] = {}
         self.cbus_services: dict[str, CbusService] = {}
@@ -78,6 +80,7 @@ class MainWindow(QMainWindow):
         for name in self.layout_settings:
             view = LayoutView(empty=True)
             self.layouts[name] = view
+            self.bind_observed_events(name)
             self.layout_stack.addWidget(view)
 
         self.setCentralWidget(self.layout_stack)
@@ -310,9 +313,26 @@ class MainWindow(QMainWindow):
             extra={"fields": {"layout": name}},
         )
 
+    def bind_observed_events(self, name: str) -> None:
+        logical_layout = self.layout_settings[name]["logical_layout"]
+
+        def bind():
+            if logical_layout not in self.observed_events:
+                self.observed_events[logical_layout] = ObservedEvents(logical_layout)
+            self.layouts[name].set_observed_events(self.observed_events[logical_layout])
+
+        self.error_reporter.run(f"Could not load observed events for '{name}'", bind)
+
     def start_cbus_service(self, name: str) -> None:
         connection = self.connections[name]
         service = CbusService(connection, self.layout_settings[name]["can_id"])
+        observations = self.layouts[name].observed_events
+        service.event_received.connect(
+            lambda identity: self.error_reporter.run(
+                f"Could not save observed event on layout '{name}'",
+                lambda: observations.observe(identity),
+            )
+        )
         service.node_discovered.connect(
             lambda node, layout=name: self.record_node_identity(layout, node)
         )
@@ -616,6 +636,7 @@ class MainWindow(QMainWindow):
         trace(
             layout_logger, "Entering select_layout", extra={"fields": {"layout": name}}
         )
+        self.bind_observed_events(name)
         self.layout_stack.setCurrentWidget(self.layouts[name])
         self.layouts[name].show_summary(name, self.layout_settings[name])
         self.layouts[name].show_live_layout(
@@ -870,6 +891,7 @@ class MainWindow(QMainWindow):
         del self.layout_settings[old_name]
         self.layout_settings[name] = settings
         self.layouts[name].show_summary(name, settings)
+        self.bind_observed_events(name)
         self.layouts[name].show_live_layout(
             settings["logical_layout"],
             lambda: (

@@ -613,6 +613,7 @@ class NodeDetails(QWidget):
             self._show_no_node()
             if saved_node:
                 self.summary.setTitle(f"Node {self.node} (offline)")
+                self.node_events.show_produced_events(self.node)
         elif live_identity:
             self._show_live_identity(self.node)
         else:

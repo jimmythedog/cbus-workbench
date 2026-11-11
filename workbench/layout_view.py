@@ -28,7 +28,7 @@ from .layout_restore_dialog import LayoutRestoreDialog
 from .layout_restore_selection import LayoutRestoreSelection
 from .layout_restore_workflow import LayoutRestoreWorkflow
 from .node_snapshot import create_node_snapshot, restore_node_snapshot
-from .node_view import NodeView
+from .node_view import NodeView, node_number
 
 
 class LayoutSummaryLabel(QLabel):
@@ -123,6 +123,26 @@ class LayoutView(QWidget):
         self.layout_events.editing_changed.connect(self.on_layout_events_editing)
         self.tabs.currentChanged.connect(self.on_tab_changed)
         self.update_backup_buttons()
+
+    def set_observed_events(self, observations):
+        """Bind both live event panes to the same layout collection."""
+        previous = getattr(self, "observed_events", None)
+        if previous is observations:
+            return
+        if previous is not None:
+            previous.changed.disconnect(self.refresh_observed_events)
+        self.observed_events = observations
+        self.layout_events.observed_events = observations
+        self.node_view.details.node_events.observed_events = observations
+        self.layout_events.edit_button.setEnabled(False)
+        observations.changed.connect(self.refresh_observed_events)
+        self.refresh_observed_events()
+
+    def refresh_observed_events(self):
+        self.layout_events.refresh()
+        details = self.node_view.details
+        if details.node is not None:
+            details.node_events.show_produced_events(node_number(details.node))
 
     def show_summary(self, name, settings):
         """Show configured values independently of the connection's current status."""

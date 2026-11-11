@@ -11,6 +11,7 @@ and running instructions.
 - [Connecting and discovering nodes](#connecting-and-discovering-nodes)
 - [Understanding discovery status](#understanding-discovery-status)
 - [Viewing node information](#viewing-node-information)
+- [Observed events](#observed-events)
 - [Editing node variables (NVs)](#editing-node-variables-nvs)
 - [Editing events and event variables (EVs)](#editing-events-and-event-variables-evs)
 - [Creating backups](#creating-backups)
@@ -58,6 +59,19 @@ Choose **Layout → Disconnect** to close the connection.
 Reconnecting starts fresh discovery. A node that does not reply may be missing
 from the list. If a read fails or times out, confirmed values remain visible and
 Workbench continues with other nodes. Reconnect to try discovery again.
+
+## Observed events
+
+The layout **Events** tab lists distinct ON/OFF event identities received while
+connected. Events are shown as `nodeNumber:eventNumber`; short events use node
+number zero. New identities are saved immediately and appear again after restarting
+Workbench. Repeated sightings do not add rows or rewrite the saved catalogue.
+The **Description** column is reserved for future annotations and remains empty.
+
+A node's **Produced Events** tab filters the same list by node number, including
+when viewing a saved offline node. Connections using the same logical layout share
+observations; different logical layouts keep separate lists. Disconnecting and
+reconnecting preserves the catalogue.
 
 ## Understanding discovery status
 

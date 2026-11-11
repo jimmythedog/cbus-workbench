@@ -77,6 +77,11 @@ class LayoutEvents(QWidget):
 
     def refresh(self):
         self.table.clear()
+        observations = getattr(self, "observed_events", None)
+        if observations is not None:
+            for identity in sorted(observations.events):
+                QTreeWidgetItem(self.table, [identity.label(), ""])
+            return
 
         for node_number, node_events in self.events.items():
             for event_number, details in node_events.items():

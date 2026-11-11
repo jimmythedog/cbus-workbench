@@ -187,6 +187,17 @@ class NodeEvents(QWidget):
         self.set_editing(False)
 
     def show_produced_events(self, node_number: int) -> None:
+        observations = getattr(self, "observed_events", None)
+        if observations is not None:
+            produced = [
+                identity
+                for identity in sorted(observations.events)
+                if identity.node_number == node_number
+            ]
+            self.produced_table.setRowCount(len(produced))
+            for row, identity in enumerate(produced):
+                self.produced_table.setItem(row, 0, QTableWidgetItem(identity.label()))
+            return
         produced = [
             (f"{node_number}:{number}", details.get("description", ""))
             for number, details in self.events.get(node_number, {}).items()

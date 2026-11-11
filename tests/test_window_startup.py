@@ -13,9 +13,9 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from workbench.app_settings import load_settings, save_settings
-from workbench.cbus_service import DiscoveryProgress
+from workbench.cbus_service import DiscoveryProgress, NodeState
 from workbench.layout_settings import LayoutSettingsDialog
-from workbench.node_metadata import load_metadata
+from workbench.node_metadata import load_metadata, save_metadata
 from workbench.pnn import Pnn
 from workbench.window import MainWindow
 
@@ -101,11 +101,67 @@ class WindowStartupTests(unittest.TestCase):
         data_paths.start()
         self.addCleanup(data_paths.stop)
 
+        observed_paths = patch(
+            "workbench.observed_events.application_directories",
+            return_value={"Data": Path(temporary.name) / "data"},
+        )
+        observed_paths.start()
+        self.addCleanup(observed_paths.stop)
+
     def open_window(self):
         with patch("workbench.app_settings.settings_path", return_value=self.path):
             window = MainWindow()
         self.addCleanup(window.close)
         return window
+
+    def test_observed_events_route_by_layout_and_load_before_connecting(self):
+        settings = sample_settings()
+        for layout in settings["layouts"].values():
+            layout["connection"]["host"] = "localhost"
+        save_settings(settings, self.path)
+        with patch("workbench.window.TcpConnection", RecordingTcpConnection):
+            window = self.open_window()
+            for action in window.layout_group.actions():
+                action.trigger()
+                window.connect_layout()
+            window.connections["Home"].frame_received.emit(b":SB040N900102002D;")
+            window.connections["Test Layout"].frame_received.emit(b":SB040N900103002E;")
+            for name, label in (("Home", "258:45"), ("Test Layout", "259:46")):
+                tree = window.layouts[name].layout_events.table
+                self.assertEqual(tree.topLevelItemCount(), 1)
+                self.assertEqual(tree.topLevelItem(0).text(0), label)
+            # Persist a known node so its offline Produced Events pane can be selected.
+            save_metadata("home", NodeState(Pnn(258, 1, 1, 0)))
+            window.close()
+            restarted = self.open_window()
+            self.assertFalse(restarted.cbus_services)
+            home = restarted.layouts["Home"]
+            self.assertEqual(home.layout_events.table.topLevelItem(0).text(0), "258:45")
+            self.assertEqual(
+                home.node_view.details.node_events.produced_table.item(0, 0).text(),
+                "258:45",
+            )
+            self.assertEqual(home.layout_events.table.topLevelItem(0).text(1), "")
+            # Connections that intentionally share a logical layout see the same list.
+            restarted.close()
+            settings["layouts"]["Test Layout"]["logical_layout"] = "home"
+            save_settings(settings, self.path)
+            shared = self.open_window()
+            self.assertIs(
+                shared.layouts["Home"].observed_events,
+                shared.layouts["Test Layout"].observed_events,
+            )
+            for action in shared.layout_group.actions():
+                action.trigger()
+                shared.connect_layout()
+                shared.connections[action.data()].frame_received.emit(
+                    b":SB040N900102002D;"
+                )
+            for view in shared.layouts.values():
+                self.assertEqual(view.layout_events.table.topLevelItemCount(), 1)
+                self.assertEqual(
+                    view.layout_events.table.topLevelItem(0).text(0), "258:45"
+                )
 
     def test_discovery_status_tracks_selected_connection_and_reconnect(self):
         settings = sample_settings()

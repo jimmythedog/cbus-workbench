@@ -16,6 +16,7 @@ from .neval import decode_neval
 from .numev import decode_numev
 from .nv_write import NvWrite
 from .nvans import decode_nvans
+from .observed_events import decode_event
 from .parameter_names import vlcb_compatible
 from .paran import decode_paran
 from .pnn import Pnn, decode_pnn
@@ -64,6 +65,7 @@ class CbusService(QObject):
     parameter_updated = Signal(int, int, int)  # Node number, index, value.
     # Observers read the current state by node number, including progress changes.
     node_state_updated = Signal(int)
+    event_received = Signal(object)
 
     def __init__(self, connection: TcpConnection | SerialConnection, can_id: int):
         """Use a unique PC CAN ID (100–127) assigned for this network."""
@@ -575,6 +577,10 @@ class CbusService(QObject):
         self._queue_event_count(node_number)
 
     def _receive_frame(self, frame: bytes) -> None:
+        event = decode_event(frame)
+        if event is not None:
+            self.event_received.emit(event)
+            return
         try:
             wrack = decode_wrack(frame)
             if wrack is not None:
