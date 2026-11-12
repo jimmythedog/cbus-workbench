@@ -226,7 +226,10 @@ Unconfirmed fields show `-`; VLCB compatibility shows Yes, No or `-`.
 **Module descriptor** shows the compatible MDF selected from confirmed live node
 identity, firmware and any processor restriction, for example
 `CANMIO-A520-3d.json (System)` or `CANMIO-A520-3d.json (User)`. Hover over it to see
-the full file path. Compatible user MDFs take precedence over system MDFs.
+the full file path. Firmware letters match case-insensitively: node firmware
+`2V` matches `CANACC8-A503-2v.json`. Compatible user MDFs take precedence over
+system MDFs. Multiple equally applicable MDFs produce an error, including files
+whose firmware versions differ only in letter case.
 `None` means no compatible MDF can be established; `Error` means lookup failed
 or a matching file is invalid. Error details are recorded in the application log;
 an invalid user override does not silently fall back to a system file.

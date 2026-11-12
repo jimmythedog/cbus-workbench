@@ -40,9 +40,20 @@ class MdfTests(unittest.TestCase):
                 self.assertEqual(result.path, path)
                 self.assertEqual(result.data, json.loads(path.read_text()))
 
+    def test_firmware_letters_match_in_either_case(self):
+        for filename_minor, node_minor in (("v", "V"), ("V", "v")):
+            with self.subTest(filename_minor=filename_minor, node_minor=node_minor):
+                path = self.system / f"CANACC8-A503-2{filename_minor}.json"
+                shutil.copy(FIXTURES / ACE, path)
+                result = self.repository.lookup(
+                    Pnn(42, 0xA5, 0x03, 0), {2: ord(node_minor), 7: 2}
+                )
+                self.assertEqual(result.path, path)
+                path.unlink()
+
     def test_user_overrides_same_identity_even_with_different_display_name(self):
         shutil.copy(FIXTURES / ACE, self.system)
-        custom = self.user / "CUSTOM-A504-2g.json"
+        custom = self.user / "CUSTOM-A504-2G.json"
         data = json.loads((FIXTURES / ACE).read_text())
         data["moduleName"] = "Custom controls"
         custom.write_text(json.dumps(data))
@@ -67,7 +78,6 @@ class MdfTests(unittest.TestCase):
             (Pnn(42, 0xFA, 0x04, 0), self.parameters),
             (Pnn(42, 0xA5, 0x05, 0), self.parameters),
             (self.identity, {**self.parameters, 7: 3}),
-            (self.identity, {**self.parameters, 2: ord("G")}),
             (self.identity, {**self.parameters, 1: 0xFA}),
         ):
             with self.subTest(identity=identity, parameters=parameters):
@@ -155,7 +165,7 @@ for current in (repository, repository, MdfRepository(Path(sys.argv[1]), Path(sy
                 self.assertIn(str(override), str(error.exception))
 
     def test_processor_specific_descriptor_requires_matching_confirmed_processor(self):
-        specific = self.system / "CANACE3-A504-2g--P23.json"
+        specific = self.system / "CANACE3-A504-2G--P23.json"
         shutil.copy(FIXTURES / ACE, specific)
         self.assertIsNone(self.repository.lookup(self.identity, self.parameters))
         self.assertIsNone(
@@ -184,13 +194,13 @@ for current in (repository, repository, MdfRepository(Path(sys.argv[1]), Path(sy
     def test_ambiguous_user_descriptors_report_error_without_arbitrary_choice(self):
         shutil.copy(FIXTURES / ACE, self.system)
         shutil.copy(FIXTURES / ACE, self.user)
-        shutil.copy(FIXTURES / ACE, self.user / "OTHER-A504-2g.json")
+        shutil.copy(FIXTURES / ACE, self.user / "OTHER-A504-2G.json")
         with self.assertRaises(MdfError):
             self.repository.lookup(self.identity, self.parameters)
 
     def test_incompatible_processor_specific_user_mdf_does_not_override_system(self):
         system_path = self.system / "CANACE3-A504-2g--P21.json"
-        user_path = self.user / "CANACE3-A504-2g--P23.json"
+        user_path = self.user / "CANACE3-A504-2G--P23.json"
         shutil.copy(FIXTURES / ACE, system_path)
         shutil.copy(FIXTURES / ACE, user_path)
         result = self.repository.lookup(self.identity, {**self.parameters, 9: 21})

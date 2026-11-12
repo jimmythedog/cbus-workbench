@@ -282,7 +282,9 @@ view; an active Edit keeps its existing definitions and desired working copy.
 MMC filenames encode identity as `<name>-<manufacturer/type hex>-<major><minor>.json`,
 optionally ending in `--P<decimal processor>.json`. Names are not identity keys.
 Matching requires the confirmed manufacturer/type and exact major/minor firmware,
-including minor-letter case; there is no nearest-version fallback. Following
+comparing firmware characters case-insensitively with `casefold()`; there is no
+nearest-version fallback. For example, node firmware `2V` matches
+`CANACC8-A503-2v.json`. Following
 MMC-SERVER v0.23.2, parameter 20 (beta version) does not affect selection and need
 not be present. Missing major/minor firmware replies and conflicting PNN/PARAN
 identity return `None`. Processor-restricted files additionally require the

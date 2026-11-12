@@ -49,7 +49,7 @@ class MdfRepository:
     def lookup(self, identity: Pnn | None, parameters: dict[int, int]) -> Mdf | None:
         """Select from confirmed PNN/PARAN data, never display labels or saved guesses.
 
-        Firmware must match exactly, including letter case. Like MMC-SERVER,
+        Firmware must match with case-insensitive letters. Like MMC-SERVER,
         selection uses major/minor firmware, without checking beta parameter 20.
         """
         global _missing_system_directory_warned
@@ -106,7 +106,7 @@ class MdfRepository:
                 continue
             if (
                 match["module"].upper() != module
-                or match["major"] + match["minor"] != version
+                or (match["major"] + match["minor"]).casefold() != version.casefold()
             ):
                 continue
             restriction = match["processor"]
