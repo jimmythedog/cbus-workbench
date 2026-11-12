@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from workbench.cbus_service import DiscoveryProgress, NodeState
 from workbench.node_backup_files import node_backup, save_backup
 from workbench.pnn import Pnn
+from workbench.send_event_dialog import SendEventDialog, send_existing
 from workbench.send_frame_dialog import SendFrameDialog
 from workbench.window import MainWindow
 
@@ -63,6 +64,194 @@ class SendFrameDialogTests(unittest.TestCase):
         self.peer = self.server.nextPendingConnection()
         self.wait_for(lambda: self.peer.bytesAvailable() >= len(b":SBFC0N0D;"))
         self.assertEqual(bytes(self.peer.readAll()), b":SBFC0N0D;")
+
+    def test_event_dialog_sends_exact_long_short_frames_and_stays_open(self):
+        self.connect_home()
+        service = self.window.cbus_services["Home"]
+        dialog = SendEventDialog(service, self.window)
+        dialog.show()
+        self.app.processEvents()
+        self.assertGreaterEqual(dialog.width(), 450)
+        initial = dialog.size()
+        growth = dialog.fontMetrics().height()
+        dialog.resize(initial.width() + growth, initial.height() + growth)
+        self.app.processEvents()
+        self.assertGreater(dialog.width(), initial.width())
+        self.assertGreater(dialog.height(), initial.height())
+        self.assertFalse(dialog.on_button.isEnabled())
+        service.nodes[513] = Pnn(513, 13, 34, 0)
+        service.nodes[258] = Pnn(258, 13, 34, 0)
+        dialog.short_radio.click()
+        self.assertEqual(dialog.node_number.value(), 0)
+        self.assertEqual(dialog.node_number.text(), "0")
+        self.assertFalse(dialog.node_number.isEnabled())
+        dialog.long_radio.click()
+        self.assertTrue(dialog.node_number.isEnabled())
+        self.assertEqual(dialog.node_number.value(), 513)
+        dialog.node_number.setValue(258)
+        dialog.event_number.setValue(65535)
+        for event_type, on_frame, off_frame in (
+            ("Long", b":SBFC0N900102FFFF;", b":SBFC0N910102FFFF;"),
+            ("Short", b":SBFC0N980000FFFF;", b":SBFC0N990000FFFF;"),
+        ):
+            radio = dialog.long_radio if event_type == "Long" else dialog.short_radio
+            radio.click()
+            for button, expected in (
+                (dialog.on_button, on_frame),
+                (dialog.off_button, off_frame),
+            ):
+                button.click()
+                self.wait_for(
+                    lambda expected=expected: (
+                        self.peer.bytesAvailable() >= len(expected)
+                    )
+                )
+                self.assertEqual(bytes(self.peer.readAll()), expected)
+                self.assertTrue(dialog.isVisible())
+                self.assertEqual(
+                    dialog.status.text(),
+                    "ON frame sent" if button is dialog.on_button else "OFF frame sent",
+                )
+                diagnostics = self.window.diagnostics_dock.widget().table
+                row = diagnostics.rowCount() - 1
+                self.assertEqual(diagnostics.item(row, 1).text(), "TX")
+                self.assertIn(expected.decode("ascii"), diagnostics.item(row, 3).text())
+        self.window.disconnect_layout()
+        self.assertFalse(dialog.on_button.isEnabled())
+        self.assertFalse(dialog.off_button.isEnabled())
+        for event_type, nn in (("Long", 258), ("Short", 0)):
+            with (
+                self.subTest(event_type=event_type),
+                self.assertRaises(ConnectionError),
+            ):
+                service.send_event(event_type, nn, 1, True)
+        dialog.close()
+
+    def test_event_actions_use_selected_layout_without_fallback(self):
+        self.assertFalse(self.window.send_event_action.isEnabled())
+        self.connect_home()
+        self.assertTrue(self.window.send_event_action.isEnabled())
+        opened = []
+        with patch.object(
+            SendEventDialog, "exec", lambda dialog: opened.append(dialog.service)
+        ):
+            self.window.show_send_event_dialog()
+            other = next(
+                a
+                for a in self.window.layout_group.actions()
+                if a.data() == "Test Layout"
+            )
+            other.setChecked(True)
+            self.window.select_layout(other)
+            self.assertFalse(self.window.send_event_action.isEnabled())
+            self.window.show_send_event_dialog()
+        self.assertEqual(opened, [self.window.cbus_services["Home"]])
+        self.assertEqual(self.peer.bytesAvailable(), 0)
+
+    def test_event_uses_selected_connection_when_two_layouts_are_connected(self):
+        self.connect_home()
+        other_server = QTcpServer()
+        self.assertTrue(other_server.listen(QHostAddress.SpecialAddress.LocalHost, 0))
+        other_peer = None
+        try:
+            self.window.layout_settings["Test Layout"].update(
+                host="127.0.0.1",
+                port=other_server.serverPort(),
+                can_id=100,
+            )
+            other = next(
+                a
+                for a in self.window.layout_group.actions()
+                if a.data() == "Test Layout"
+            )
+            other.setChecked(True)
+            self.window.select_layout(other)
+            self.window.connect_layout()
+            self.wait_for(lambda: self.window.connection_status.text() == "Connected")
+            self.wait_for(other_server.hasPendingConnections)
+            other_peer = other_server.nextPendingConnection()
+            self.wait_for(lambda: other_peer.bytesAvailable() > 0)
+            self.assertEqual(bytes(other_peer.readAll()), b":SBC80N0D;")
+
+            def send_from_dialog(dialog):
+                dialog.node_number.setValue(65535)
+                dialog.event_number.setValue(0)
+                dialog.on_button.click()
+                dialog.short_radio.click()
+                dialog.event_number.setValue(30001)
+                dialog.off_button.click()
+
+            with patch.object(SendEventDialog, "exec", send_from_dialog):
+                self.window.show_send_event_dialog()
+            expected = b":SBC80N90FFFF0000;:SBC80N9900007531;"
+            self.wait_for(lambda: other_peer.bytesAvailable() >= len(expected))
+            self.assertEqual(bytes(other_peer.readAll()), expected)
+            self.assertEqual(self.peer.bytesAvailable(), 0)
+        finally:
+            self.window.disconnect_layout()
+            if other_peer is not None:
+                other_peer.close()
+            other_server.close()
+
+    def test_existing_events_send_on_off_immediately_without_opening_dialog(self):
+        self.connect_home()
+        service = self.window.cbus_services["Home"]
+        with patch.object(
+            SendEventDialog,
+            "exec",
+            side_effect=AssertionError("Event context actions must not open a dialog"),
+        ):
+            for identity, on, expected in (
+                ((258, 0), True, b":SBFC0N9001020000;"),
+                ((258, 0), False, b":SBFC0N9101020000;"),
+                ((0, 30001), True, b":SBFC0N9800007531;"),
+                ((0, 30001), False, b":SBFC0N9900007531;"),
+            ):
+                with self.subTest(identity=identity, on=on):
+                    send_existing(self.window, service, identity, on)
+                    self.wait_for(
+                        lambda expected=expected: (
+                            self.peer.bytesAvailable() >= len(expected)
+                        )
+                    )
+                    self.assertEqual(bytes(self.peer.readAll()), expected)
+
+    def test_event_validation_rejects_invalid_type_or_numbers(self):
+        self.connect_home()
+        service = self.window.cbus_services["Home"]
+        for args in (
+            ("Other", 1, 1, True),
+            ("Long", 0, 1, True),
+            ("Short", 1, 1, True),
+            ("Short", 0, -1, True),
+            ("Short", 0, 65536, False),
+            ("Long", 65536, 1, True),
+            ("Long", 1, -1, True),
+            ("Short", 1, 65536, False),
+        ):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                service.send_event(*args)
+        self.assertEqual(self.peer.bytesAvailable(), 0)
+
+    def test_event_transmission_error_is_reported_without_closing(self):
+        self.connect_home()
+        dialog = SendEventDialog(
+            self.window.cbus_services["Home"], self.window, (258, 1)
+        )
+        dialog.show()
+        with (
+            patch.object(
+                self.window.connections["Home"],
+                "send",
+                side_effect=OSError("Write failed"),
+            ),
+            patch.object(QMessageBox, "warning") as warning,
+        ):
+            dialog.on_button.click()
+        self.assertEqual(warning.call_args.args[2], "Write failed")
+        self.assertEqual(dialog.status.text(), "")
+        self.assertTrue(dialog.isVisible())
+        dialog.close()
 
     def test_requested_disconnect_waits_for_ev_learn_exit(self):
         self.connect_home()

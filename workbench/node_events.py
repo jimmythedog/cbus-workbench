@@ -24,6 +24,7 @@ from .cbus_service import NodeState
 from .event_mdf import EvContainer, EvValueValidator, add_ev_controls, ev_definitions
 from .logging_config import trace
 from .pnn import Pnn
+from .send_event_dialog import event_menu
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,24 @@ class NodeEvents(QWidget):
         consumed_layout.addWidget(self.consumed_table)
 
         layout.addWidget(consumed)
+        self.cbus_service = None
+        for table in (self.produced_table, self.consumed_table):
+            table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            table.customContextMenuRequested.connect(
+                lambda position, table=table: self.show_event_menu(table, position)
+            )
+
+    def show_event_menu(self, table, position):
+        item = table.itemAt(position)
+        if item is None:
+            return
+        if table is self.consumed_table:
+            if item.parent() is not None:
+                return
+            identity = item.data(0, Qt.ItemDataRole.UserRole)
+        else:
+            identity = tuple(map(int, table.item(item.row(), 0).text().split(":")))
+        event_menu(table, position, self.cbus_service, identity)
 
     def show_node(self, node):
         self.ev_presentation = None

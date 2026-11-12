@@ -28,6 +28,13 @@ Early development. Currently implemented:
   values, with optional Retry after fresh discovery when the connection is safe.
   Uncertain writes or learn-mode state require reconnecting before another attempt.
 - Messages / Diagnostics, raw GridConnect frame sending and persistent logs.
+- Send ON/OFF from an event's context menu, or use Layout → Send Event…
+  for repeated long/short event testing on the selected layout. Short events
+  display a disabled node number of 0 and send ASON/ASOF with NN zero,
+  using the selected layout's configured CAN ID and connection.
+  Long events default to the first discovered node; event numbers are 0–65535.
+  Sending requires a connection and does not confirm that a node acted on the
+  event. Outgoing frames appear in Diagnostics.
 
 Layout Restore confirms and restores selected online nodes sequentially, then shows
 remaining differences, unknown values and offline nodes. Retry reads hardware afresh

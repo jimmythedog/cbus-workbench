@@ -30,6 +30,7 @@ from .logging_config import TRACE, trace
 from .node_metadata import save_metadata
 from .observed_events import ObservedEvents
 from .pnn import Pnn
+from .send_event_dialog import SendEventDialog
 from .send_frame_dialog import SendFrameDialog
 from .serial_connection import SerialConnection
 from .tcp_connection import TcpConnection
@@ -165,6 +166,9 @@ class MainWindow(QMainWindow):
         self.disconnect_action.triggered.connect(self.disconnect_layout)
         self.layout_menu.addAction(self.disconnect_action)
 
+        self.send_event_action = QAction("Send Event…", self)
+        self.send_event_action.triggered.connect(self.show_send_event_dialog)
+        self.layout_menu.addAction(self.send_event_action)
         self.send_frame_action = QAction("Send GridConnect Frame…", self)
         self.send_frame_action.triggered.connect(self.show_send_frame_dialog)
         self.layout_menu.addAction(self.send_frame_action)
@@ -346,6 +350,8 @@ class MainWindow(QMainWindow):
         )
         node_view = self.layouts[name].node_view
         node_view.details.cbus_service = service
+        node_view.details.node_events.cbus_service = service
+        self.layouts[name].layout_events.cbus_service = service
         service.restore.changed.connect(node_view.details.show_restore_progress)
         service.restore.finished.connect(node_view.details.finish_restore)
         node_view.details.logical_layout = self.layout_settings[name]["logical_layout"]
@@ -403,6 +409,8 @@ class MainWindow(QMainWindow):
         view.node_view.details.connected = False
         view.node_view.details.update_connection_details()
         view.node_view.details.cbus_service = None
+        view.node_view.details.node_events.cbus_service = None
+        view.layout_events.cbus_service = None
         view.node_view.clear_identities()
         logical_layout = self.layout_settings[name]["logical_layout"]
         view.node_view.details.logical_layout = logical_layout
@@ -511,6 +519,14 @@ class MainWindow(QMainWindow):
             else:
                 connection.disconnect()
 
+    def show_send_event_dialog(self) -> None:
+        action = self.layout_group.checkedAction()
+        service = self.cbus_services.get(action.data()) if action else None
+        if service is not None and service.connection.state == "Connected":
+            dialog = SendEventDialog(service, self)
+            dialog.exec()
+            dialog.deleteLater()
+
     def show_send_frame_dialog(self) -> None:
         action = self.layout_group.checkedAction()
         if action is None:
@@ -577,6 +593,7 @@ class MainWindow(QMainWindow):
             self.connect_action.setEnabled(False)
             self.disconnect_action.setEnabled(False)
             self.send_frame_action.setEnabled(False)
+            self.send_event_action.setEnabled(False)
             self.connection_status.setText("Disconnected")
             return
 
@@ -585,6 +602,7 @@ class MainWindow(QMainWindow):
         self.connect_action.setEnabled(state in ("Disconnected", "Error"))
         self.disconnect_action.setEnabled(state in ("Connected", "Connecting"))
         self.send_frame_action.setEnabled(state == "Connected")
+        self.send_event_action.setEnabled(state == "Connected")
         self.connection_status.setText(state)
 
     def update_layout_actions(self):

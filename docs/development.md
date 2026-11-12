@@ -31,6 +31,13 @@ reconnect uses that collection. Switching a connection's logical layout binds it
 views to the destination collection.
 Both event panes resolve names from the layout annotations; there is no node-owned produced-event name.
 
+Event sending uses the selected layout's `CbusService.send_event()` for both
+context actions and the Send Event dialog. The transport's existing TX signal
+records outgoing frames in Diagnostics. Short identities keep NN zero in the UI;
+ASON/ASOF frames also use NN zero. Their CAN header uses that layout's configured
+CAN ID, independently of the event node number. Long events default to the first
+discovered node when the dialog opens or switches to the long type.
+
 The decoder accepts accessory ON/OFF events, their response variants and variants
 with one to three data bytes; requests and malformed frames are ignored. Data
 bytes are not part of identity. Identity is `(NN, EN)`, displayed as `NN:EN`.

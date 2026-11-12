@@ -187,6 +187,47 @@ class CbusService(QObject):
             status = DiscoveryStatus.READY if ready else DiscoveryStatus.INCOMPLETE
         self._set_discovery_status(status)
 
+    def send_event(
+        self, event_type: str, node_number: int, event_number: int, on: bool
+    ) -> None:
+        """Send an event identity using this layout's connection and CAN ID.
+
+        Short events use NN zero on ASON/ASOF frames. The CAN header still
+        uses this layout's configured CAN ID, independently of the event NN.
+        """
+        fields = {
+            "layout": self.connection.layout_name,
+            "event_type": event_type,
+            "node_number": node_number,
+            "event_number": event_number,
+            "on": on,
+        }
+        trace(logger, "Send event requested", extra={"fields": fields})
+        try:
+            if event_type not in ("Long", "Short") or type(on) is not bool:
+                raise ValueError("Choose Long or Short and ON or OFF")
+            minimum = 0 if event_type == "Short" else 1
+            if type(node_number) is not int or not minimum <= node_number <= 65535:
+                raise ValueError(
+                    f"Event node number must be between {minimum} and 65535"
+                )
+            if event_type == "Short" and node_number != 0:
+                raise ValueError("Short event identity must use node number 0")
+            if type(event_number) is not int or not 0 <= event_number <= 65535:
+                raise ValueError("Event number must be between 0 and 65535")
+            if self._closed or self.connection.state != "Connected":
+                raise ConnectionError("Cannot send event: layout is not connected")
+            opcode = (0x90 if event_type == "Long" else 0x98) + (not on)
+            header = (0x580 | self.can_id) << 5
+            frame = f":S{header:04X}N{opcode:02X}{node_number:04X}{event_number:04X};".encode(
+                "ascii"
+            )
+            self.connection.send(frame)
+        except ValueError, OSError:
+            logger.exception("Could not send event", extra={"fields": fields})
+            raise
+        trace(logger, "Event frame queued", extra={"fields": fields})
+
     def discover_nodes(self) -> None:
         """Queue one QNN request; PNN responses arrive independently by signal."""
         self._set_discovery_status(DiscoveryStatus.DISCOVERING)

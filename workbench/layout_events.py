@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 from .event_description_edit import EventDescriptionDialog
+from .send_event_dialog import event_menu
 
 
 class LayoutEvents(QWidget):
@@ -19,8 +20,11 @@ class LayoutEvents(QWidget):
         self.nodes = nodes
         self.events = events
         self.annotations = None
+        self.cbus_service = None
 
         self.table = QTreeWidget()
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.show_event_menu)
         self.table.setEditTriggers(QTreeWidget.EditTrigger.NoEditTriggers)
         self.table.itemDoubleClicked.connect(self.edit_description)
         self.table.setHeaderLabels(["Event", "Description"])
@@ -84,3 +88,12 @@ class LayoutEvents(QWidget):
         dialog = EventDescriptionDialog(self, self.annotations, f"{nn}:{en}")
         dialog.exec()
         dialog.deleteLater()
+
+    def show_event_menu(self, position):
+        item = self.table.itemAt(position)
+        identity = (
+            item.data(0, Qt.ItemDataRole.UserRole)
+            if item and item.parent() is None
+            else None
+        )
+        event_menu(self.table, position, self.cbus_service, identity)
