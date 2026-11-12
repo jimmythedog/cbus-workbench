@@ -374,6 +374,40 @@ immediate reachability and identity checks.
     polling opportunity -> idle? -> one RQNPN(3) -> PARAN / timeout
                                  -> Online / Offline -> next node if idle
 
+Manual **Refresh Node** acquires the idle connection through
+`refresh_unavailable_reason()` and delegates to the existing `rediscover_node()`
+FIFO. It also honours the UI's polling permission (edit/modal ownership) and
+uncertain EV learn-mode cleanup. A running poll must drain before refresh starts;
+further polls wait until the refresh releases ownership. No QNN is sent.
+RQNPN responses supply fresh identity fields (1, 3, 8) and the sender CAN ID;
+parameter 8 determines whether consumed-event discovery is needed. The prior
+identity, or an address-only provisional carrier for a remembered node, never
+supplies refresh capabilities. Unsolicited PNNs cannot enroll unrelated nodes
+while the targeted operation owns discovery. Live values are cleared first,
+while metadata persistence is suppressed for this manual read. Partial results
+remain partial and existing write-failure latches are not cleared.
+
+    Refresh Node -> idle ownership check -> clear selected live configuration
+                 -> RQNPN -> existing parameter/NV/event/EV queue
+                 -> replies / bounded timeouts -> complete / incomplete / Offline
+                 -> release ownership -> selection and details updated
+
+**Layouts → Refresh** uses the same idle-ownership check, then repeats
+`discover_nodes()` on the selected service. It clears live values and the PNN
+registry before QNN so even unchanged identities initiate normal parameter/NV/
+event/EV discovery. Address-only state is retained for previously discovered nodes;
+PNN confirms identity again. The quiet discovery window and shared FIFO define
+completion. Missing nodes become Offline and leave the result incomplete. Metadata
+writes are suppressed throughout the manual pass, without touching annotations or
+backups. Other services, even those sharing a logical layout, are unaffected.
+Writer uncertainty markers survive both kinds of refresh: reading configuration
+cannot establish that an earlier unacknowledged transaction succeeded.
+
+    Refresh Layout -> idle check -> clear live values -> QNN on selected connection
+                   -> PNN -> existing parameter/NV/event/EV queue
+                   -> quiet window + FIFO drained -> Ready / Incomplete
+                   -> mark missing nodes Offline, release refresh ownership
+
 Offline metadata is loaded independently of connections and shown in the existing
 details fields. It never seeds live discovery or hardware-write eligibility.
 Missing nodes are retained, and backup-only directories remain supported.

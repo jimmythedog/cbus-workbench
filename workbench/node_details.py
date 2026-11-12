@@ -544,6 +544,11 @@ class NodeDetails(QWidget):
         self.update_connection_details()
         self.update_backup_buttons()
         self.show_parameters(state.parameters, module_name)
+        flags = state.parameters.get(8)
+        if flags is None and state.identity_confirmed:
+            flags = state.identity.flags
+        mode = "-" if flags is None else "FLiM" if flags & 4 else "SLiM"
+        self.summary_mode.setText(f"Mode: {mode}")
         self.details_page.stored_events.setText(
             "-" if state.stored_event_count is None else str(state.stored_event_count)
         )
@@ -727,7 +732,7 @@ class NodeDetails(QWidget):
             for index, value in enumerate(metadata.get("parameters", []))
             if value is not None
         }
-        if metadata:
+        if metadata and self.live_state is None:
             self.show_parameters(parameters)
             self.details_page.node_number.setText(str(self.node))
         is_can = (

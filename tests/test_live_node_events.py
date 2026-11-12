@@ -22,7 +22,7 @@ class LiveNodeEventsTests(unittest.TestCase):
         self.view = NodeView({258: {45: {"description": "Signal cleared"}}})
         self.addCleanup(self.view.close)
         self.states = {}
-        self.view.state_lookup = self.states.__getitem__
+        self.view.state_lookup = self.states.get
 
     def test_full_discovery_restores_selection_and_displays_final_state(self):
         for status in ("Configuration ready", "Discovery incomplete"):
@@ -59,7 +59,7 @@ class LiveNodeEventsTests(unittest.TestCase):
                     item.setData(Qt.ItemDataRole.UserRole, remembered)
                     self.view.node_list.addItem(item)
                     self.view.node_list.setCurrentItem(item)
-                self.view.state_lookup = self.states.__getitem__
+                self.view.state_lookup = self.states.get
                 self.view.begin_discovery()
                 node = Pnn(258, 13, 34, 0x03)
                 self.states[258] = NodeState(node)
@@ -81,7 +81,7 @@ class LiveNodeEventsTests(unittest.TestCase):
         self.assertIsNone(self.view.node_list.currentItem())
         self.assertIsNone(self.view.details.node)
         # Subsequent use retains normal first-node selection.
-        self.view.state_lookup = self.states.__getitem__
+        self.view.state_lookup = self.states.get
         self.states[258] = NodeState(node)
         self.view.show_identity(node)
         self.assertEqual(self.view.details.node, node)

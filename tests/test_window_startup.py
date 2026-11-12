@@ -42,6 +42,7 @@ class RecordingConnection(QObject):
     def __init__(self, layout_name, parent):
         super().__init__(parent)
         self.layout_name = layout_name
+        self.state = "Disconnected"
         self.window = parent
         self.state_changed = RecordingSignal()
         self.failed = RecordingSignal()
@@ -55,12 +56,15 @@ class RecordingConnection(QObject):
             (self.layout_name, type(self).__name__, endpoint, selected)
         )
         if self.layout_name == self.failing_layout:
+            self.state = "Error"
             self.state_changed.emit("Error")
             self.failed.emit("Connection refused")
         else:
+            self.state = "Connected"
             self.state_changed.emit("Connected")
 
     def disconnect(self):
+        self.state = "Disconnected"
         self.state_changed.emit("Disconnected")
 
     def send(self, frame):
@@ -113,6 +117,113 @@ class WindowStartupTests(unittest.TestCase):
             window = MainWindow()
         self.addCleanup(window.close)
         return window
+
+    def test_manual_refresh_preserves_saved_metadata(self):
+        from test_refresh_node import answer_refresh
+
+        settings = sample_settings()
+        settings["layouts"]["Home"]["connection"]["host"] = "localhost"
+        save_settings(settings, self.path)
+        save_metadata("home", NodeState(Pnn(42, 1, 2, 0), parameters={1: 1, 3: 2}))
+        original = load_metadata("home", 42)
+        with patch("workbench.window.TcpConnection", RecordingTcpConnection):
+            window = self.open_window()
+            window.connect_layout()
+        service = window.cbus_services["Home"]
+        window.connections["Home"].state = "Connected"
+        # Let the initial QNN response window expire before manual ownership.
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):
+            service.discover_nodes()
+            QTest.qWait(30)
+        service.refresh_node(42)
+        answer_refresh(window.connections["Home"])
+        self.app.processEvents()
+        self.assertEqual(load_metadata("home", 42), original)
+        self.assertEqual(service.node_states[42].identity, Pnn(42, 13, 34, 5))
+        self.assertIn("Refresh Node complete", window.statusBar().currentMessage())
+
+    def test_layout_refresh_menu_preserves_files_and_other_layout_connection(self):
+        from test_refresh_node import answer_refresh
+
+        from workbench.node_backup_files import backup_directory, save_backup
+
+        settings = sample_settings()
+        for layout in settings["layouts"].values():
+            layout["logical_layout"] = "home"  # Same inventory, separate connections.
+            layout["connection"]["host"] = "localhost"
+        save_settings(settings, self.path)
+        for number in (42, 43):
+            save_metadata("home", NodeState(Pnn(number, 1, 2, 5), parameters={6: 5}))
+        save_backup(
+            "home",
+            {
+                "format_version": 1,
+                "node": 42,
+                "complete": False,
+                "partOfLayoutBackup": False,
+                "nvs": [],
+                "events": [],
+            },
+        )
+        with (
+            patch("workbench.window.TcpConnection", RecordingTcpConnection),
+            patch(
+                "workbench.annotations.application_directories",
+                return_value={"Data": self.path.parent / "data"},
+            ),
+            patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10),
+        ):
+            window = self.open_window()
+            self.assertFalse(window.refresh_layout_action.isEnabled())
+            actions = window.layout_menu.actions()
+            self.assertEqual(
+                actions[actions.index(window.disconnect_action) + 1],
+                window.refresh_layout_action,
+            )
+            window.layouts["Home"].annotations.save({"name": "Yard lights"}, 42)
+            directory = backup_directory("home")
+            original = {p: p.read_bytes() for p in directory.rglob("*") if p.is_file()}
+            choices = window.layout_group.actions()
+            for choice in choices:
+                choice.trigger()
+                window.connect_layout()
+                window.connections[choice.data()].state = "Connected"
+            QTest.qWait(30)
+            choices[0].trigger()
+            service = window.cbus_services["Home"]
+            other = window.cbus_services["Test Layout"]
+            other_before = window.connections["Test Layout"].sent.copy()
+            # Recheck on menu opening: polls and edit ownership need not change discovery status.
+            service.nv_write.active = True
+            window.layout_menu.aboutToShow.emit()
+            self.assertFalse(window.refresh_layout_action.isEnabled())
+            service.nv_write.active = False
+            window.layout_menu.aboutToShow.emit()
+            self.assertTrue(window.refresh_layout_action.isEnabled())
+            window.refresh_layout_action.trigger()
+            self.assertFalse(window.refresh_layout_action.isEnabled())
+            connection = window.connections["Home"]
+            self.assertEqual(connection.sent[-1], b":SBFC0N0D;")
+            connection.frame_received.emit(b":SB040NB6002A0D2205;")
+            answer_refresh(connection)
+            QTest.qWait(30)
+            nodes = window.layouts["Home"].node_view
+            self.assertIn("Online", nodes.node_list.item(0).text())
+            self.assertIn("Yard lights", nodes.node_list.item(0).text())
+            self.assertIn("Offline", nodes.node_list.item(1).text())
+            self.assertEqual(nodes.details.live_state.nv_values, {1: 9})
+            self.assertEqual(nodes.details.live_state.ev_values, {7: {1: 11}})
+            self.assertIn(
+                "Refresh Layout incomplete", window.statusBar().currentMessage()
+            )
+            self.assertEqual(window.connections["Test Layout"].sent, other_before)
+            self.assertEqual(other.node_states, {})
+            self.assertEqual(other.presence, {42: False, 43: False})
+            self.assertEqual(
+                original,
+                {p: p.read_bytes() for p in directory.rglob("*") if p.is_file()},
+            )
+            self.assertIs(window.connections["Home"], connection)
 
     def test_observed_events_route_by_layout_and_load_before_connecting(self):
         settings = sample_settings()

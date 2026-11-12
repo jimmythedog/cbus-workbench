@@ -124,7 +124,7 @@ class MainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        self.layout_menu = self.menuBar().addMenu("&Layout")
+        self.layout_menu = self.menuBar().addMenu("&Layouts")
         self.layout_group = QActionGroup(self)
         self.layout_group.setExclusive(True)
         self.layout_group.triggered.connect(self.select_layout)
@@ -166,6 +166,12 @@ class MainWindow(QMainWindow):
         self.disconnect_action = QAction("&Disconnect", self)
         self.disconnect_action.triggered.connect(self.disconnect_layout)
         self.layout_menu.addAction(self.disconnect_action)
+
+        self.refresh_layout_action = QAction("&Refresh", self)
+        self.refresh_layout_action.triggered.connect(self.refresh_layout)
+        self.layout_menu.addAction(self.refresh_layout_action)
+        self.layout_menu.setToolTipsVisible(True)
+        self.layout_menu.aboutToShow.connect(self.update_refresh_action)
 
         self.send_event_action = QAction("Send Event…", self)
         self.send_event_action.triggered.connect(self.show_send_event_dialog)
@@ -360,20 +366,42 @@ class MainWindow(QMainWindow):
         service.restore.changed.connect(node_view.details.show_restore_progress)
         service.restore.finished.connect(node_view.details.finish_restore)
         node_view.details.logical_layout = self.layout_settings[name]["logical_layout"]
-        node_view.state_lookup = lambda node_number: service.node_states[node_number]
+        node_view.state_lookup = lambda node_number: service.node_states.get(
+            node_number
+        )
         service.node_state_updated.connect(node_view.refresh_state)
         service.parameter_updated.connect(
-            lambda number, _index, _value: self.error_reporter.run(
-                f"Could not save metadata for node {number} on layout '{name}'",
-                lambda: save_metadata(
-                    self.layout_settings[name]["logical_layout"],
-                    service.node_states[number],
-                ),
+            lambda number, _index, _value: (
+                None
+                if service.manual_refresh_node == number or service.refreshing_layout
+                else self.error_reporter.run(
+                    f"Could not save metadata for node {number} on layout '{name}'",
+                    lambda: save_metadata(
+                        self.layout_settings[name]["logical_layout"],
+                        service.node_states[number],
+                    ),
+                )
+            )
+        )
+        service.refresh_reported.connect(
+            lambda number, outcome: self.statusBar().showMessage(
+                f"Layout '{name}', node {number}: {outcome}", 10000
+            )
+        )
+        service.layout_refresh_reported.connect(
+            lambda outcome: self.statusBar().showMessage(
+                f"Layout '{name}': {outcome}", 10000
             )
         )
         self.cbus_services[name] = service
         service.discovery_status_changed.connect(self.update_discovery_status)
         service.discovery_status_changed.connect(node_view.discovery_status_changed)
+        service.discovery_status_changed.connect(
+            lambda _status: self.update_refresh_action()
+        )
+        node_view.details.editing_changed.connect(
+            lambda _editing: self.update_refresh_action()
+        )
         self.layouts[name].discovery_states = lambda: (
             list(self.cbus_services[name].node_states.values())
             if name in self.cbus_services
@@ -386,13 +414,17 @@ class MainWindow(QMainWindow):
 
     def record_node_identity(self, name: str, node: Pnn) -> None:
         service = self.cbus_services[name]
-        self.error_reporter.run(
-            f"Could not save metadata for node {node.node_number} on layout '{name}'",
-            lambda: save_metadata(
-                self.layout_settings[name]["logical_layout"],
-                service.node_states[node.node_number],
-            ),
-        )
+        if (
+            service.manual_refresh_node != node.node_number
+            and not service.refreshing_layout
+        ):
+            self.error_reporter.run(
+                f"Could not save metadata for node {node.node_number} on layout '{name}'",
+                lambda: save_metadata(
+                    self.layout_settings[name]["logical_layout"],
+                    service.node_states[node.node_number],
+                ),
+            )
         self.layouts[name].node_view.show_identity(node)
 
     def observe_event(self, name: str, identity: EventIdentity) -> None:
@@ -600,8 +632,29 @@ class MainWindow(QMainWindow):
         self.discovery_status.setVisible(connected and bool(text))
         self.discovery_separator.setVisible(connected and bool(text))
 
+    def update_refresh_action(self):
+        action = self.layout_group.checkedAction()
+        service = self.cbus_services.get(action.data()) if action else None
+        reason = (
+            service.refresh_unavailable_reason()
+            if service
+            else "Refresh requires a connected layout"
+        )
+        self.refresh_layout_action.setEnabled(not reason)
+        self.refresh_layout_action.setToolTip(
+            reason or "Reread this layout connection from hardware"
+        )
+
+    def refresh_layout(self):
+        action = self.layout_group.checkedAction()
+        service = self.cbus_services.get(action.data()) if action else None
+        if service is not None:
+            self.error_reporter.run("Could not refresh layout", service.refresh_layout)
+        self.update_refresh_action()
+
     def update_connection_actions(self):
         self.update_discovery_status()
+        self.update_refresh_action()
         action = self.layout_group.checkedAction()
 
         if action is None:

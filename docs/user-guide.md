@@ -22,7 +22,7 @@ and running instructions.
 
 ## Layouts and connections
 
-A new installation starts with no layouts. Choose **Layout → New…** to create one.
+A new installation starts with no layouts. Choose **Layouts → New…** to create one.
 Enter a name and a logical layout, then choose the connection type:
 
 - **TCP/IP**: enter the hub's host and port.
@@ -48,17 +48,17 @@ Select a layout in the **Layout** menu. **Edit…** opens Layout Settings.
 you save, without reconnecting, and are saved for the next session. While a
 connection is active, only the polling interval is editable. **Delete…** and
 changes to connection settings require the connection to be closed.
-The first layout becomes the startup default. Choose **Layout → Set as default**
+The first layout becomes the startup default. Choose **Layouts → Set as default**
 to change it. A star marks the default; the radio indicator marks the current
 selection. Selecting a layout during a session does not change the default.
 Renaming the default preserves that choice; deleting it chooses another layout.
 
 ## Connecting and discovering nodes
 
-Select the layout, then choose **Layout → Connect**. Workbench automatically
+Select the layout, then choose **Layouts → Connect**. Workbench automatically
 looks for nodes and reads their configuration. Discovered nodes appear in the
 selected layout's **Nodes** navigator; values fill in as replies arrive.
-Choose **Layout → Disconnect** to close the connection.
+Choose **Layouts → Disconnect** to close the connection.
 
 Known nodes remain in the navigator and start Offline. Normal discovery marks
 responding nodes Online. While connected, Workbench checks known nodes roughly
@@ -68,7 +68,8 @@ One failed check marks Offline; a successful check marks Online again.
 Disconnect marks every node Offline. Status is runtime-only and is not saved.
 
 If a configuration read fails or times out, confirmed values remain visible and
-Workbench continues with other nodes. Reconnect to try discovery again.
+Workbench continues with other nodes. Use **Refresh Node** or
+**Layouts → Refresh** to reread configuration when the connection is idle.
 Online status does not replace Restore's fresh pre-write safety checks.
 
 ## Observed events
@@ -108,7 +109,7 @@ the field. Only overrides are stored; changing an MDF can change its defaults.
 Saved-only nodes use their last confirmed parameters to locate the MDF and show
 read-only NV forms for offline label editing. Without a matching MDF, overrides
 remain saved but have no labels from which to edit them. Offline EV labels require
-an existing presentation; reconnect to inspect EV forms that are not available.
+an existing presentation; use **Refresh Node** to inspect EV forms that are not available.
 Token editing is unavailable during NV/EV configuration editing or hardware writes.
 
 On **Consumed Events**, double-click an event's **Description** cell to open a
@@ -181,6 +182,25 @@ Known nodes start **Offline** and return to Offline after one failed check or
 when the layout disconnects. Disabling periodic polling keeps the last status
 until fresh evidence arrives or the layout disconnects.
 
+To reread one node, right-click it in the node list and choose **Refresh Node**.
+This works for an Offline node while its layout connection is active. It rereads
+identity, parameters, NVs, consumed events and EVs using that connection, without
+reconnecting or discovering other nodes. The status bar reports completion,
+incomplete reads or a node that did not respond. Unconfirmed values remain unknown;
+annotations, saved identification metadata and backups are preserved.
+Refresh waits until discovery, polling, editing, writes, restores and learn mode
+have finished. Hover over a disabled action for its reason. Refresh only rereads
+hardware; it does not retry configuration writes.
+
+To reread the whole selected connection, choose **Layouts → Refresh** below
+**Disconnect**. This repeats node discovery and reads parameters, NVs, consumed
+events and EVs. Existing entries remain in the navigator; nodes that do not respond
+become Offline, and old configuration is not presented as newly confirmed. The
+status bar reports completion or incomplete results. Annotations, saved metadata
+and backups are preserved. Other layout connections, including connections sharing
+the same logical layout, are unaffected. The same idle-operation safeguards apply
+as for Refresh Node. Neither action disconnects or reconnects the transport.
+
 ## Editing node variables (NVs)
 
 The live node's **Raw Node Variables** tab shows confirmed values as they arrive.
@@ -250,8 +270,11 @@ repeat a write or change the response timeout.
 Applying the complete target can remove firmware-created events or reconstruct
 an event to clear EVs. There is no rollback. Do not use another configuration tool
 on the network during application. Failure stops further writes and refreshes the
-resulting state; earlier writes may remain applied. Reconnect and compare before
-retrying. A disconnect during Save reports a partial, unverified result.
+resulting state; earlier writes may remain applied. Use **Refresh Node** or
+**Layouts → Refresh**, when safe, to reread hardware and compare before
+retrying. Refreshing does not retry failed writes or clear protocol safety blocks.
+A disconnect during Save reports a partial, unverified result; resolve the connection
+failure before reconnecting and comparing.
 
 Cancel is unavailable after Save begins. Disconnecting or selecting another node
 before Save discards unsaved edits. Backup restoration remains available outside
@@ -445,7 +468,9 @@ confirm learn-mode exit after failure and therefore require reconnection.
 Workbench reads the resulting configuration and shows **Requested vs Actual** with
 remaining differences and unknown values. **Retry**, when available, reads hardware
 afresh and applies only outstanding differences. Follow any safety blocker or
-learn-mode warning before reconnecting and comparing again.
+learn-mode warning before refreshing and comparing again. Refreshing rereads
+hardware state; it does not retry failed writes or clear safety blocks. Reconnect
+after resolving genuine connection failures.
 
 For a saved layout backup, **Restore** opens the node and operation selection.
 **Restore configuration** and **Restore annotations** both start checked. Uncheck
@@ -495,8 +520,10 @@ is read again for an updated comparison. Retry occurs only when clicked. It is h
 for a conclusive match and disabled while disconnected, busy, or blocked by unresolved
 protocol safety or reported learn mode. An offline node does not disable Retry while
 the connection is active; presence and identity are revalidated before writes. Follow any safety
-warning before reconnecting and comparing again; a report from a disconnected service
-cannot retry through a replacement connection. Ordinary backup Compare has no Retry.
+warning before using **Layouts → Refresh** to reread hardware and compare
+again. Refreshing does not retry failed writes or clear safety blocks. Reconnect
+when the transport has failed; a report from a disconnected service cannot retry
+through a replacement connection. Ordinary backup Compare has no Retry.
 
 ## Diagnostics and application directories
 
@@ -505,7 +532,7 @@ opcodes and shows raw frames for others. Use **View** to show or hide the panel.
 **View → Logging Level** changes logging detail for the current session.
 
 For raw frame sending, connect a layout and choose
-**Layout → Send GridConnect Frame…**. Enter a complete GridConnect frame. Raw
+**Layouts → Send GridConnect Frame…**. Enter a complete GridConnect frame. Raw
 commands can change node configuration; use them only when you understand the command.
 
 **Help → Application Directories…** shows the settings, logs and Data locations.

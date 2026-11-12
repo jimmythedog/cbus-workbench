@@ -45,6 +45,7 @@ class ForgetNodeTests(unittest.TestCase):
         self.view.show_live_layout("yard", list)
         self.nodes = self.view.node_view
         self.connection = ConnectionStub("yard")
+        self.connection.state = "Connected"
         self.service = CbusService(self.connection, can_id=126)
         self.addCleanup(self.service.close)
         self.nodes.details.cbus_service = self.service
@@ -116,7 +117,7 @@ class ForgetNodeTests(unittest.TestCase):
         self.assertEqual(self.nodes.details.node, 42)
         self.assertIn("Access denied", warning.call_args.args[2])
 
-    def test_menu_offered_only_for_offline_node(self):
+    def test_menu_offers_refresh_for_live_and_offline_nodes(self):
         self.view.show()
         self.app.processEvents()
         position = self.nodes.node_list.visualItemRect(self.item).center()
@@ -133,11 +134,11 @@ class ForgetNodeTests(unittest.TestCase):
         timer.start(0)
         self.nodes.show_node_menu(position)
         timer.stop()
-        self.assertEqual(offered, ["Forget Node"])
+        self.assertEqual(offered, ["Refresh Node", "Forget Node"])
         offered.clear()
         self.nodes.show_identity(self.identity)
         timer.start(0)
         self.nodes.show_node_menu(position)
         self.nodes.show_node_menu(QPoint(-1, -1))
         timer.stop()
-        self.assertEqual(offered, [])
+        self.assertEqual(offered, ["Refresh Node"])

@@ -64,7 +64,9 @@ class NodeRestore(QObject):
                 "Wait for discovery or the current Save/restore to finish."
             )
         if service.ev_write.blocked or service.nv_write.unverified:
-            raise ValueError("Reconnect to rediscover before restoring.")
+            raise ValueError(
+                "Protocol safety unresolved; no further Restore is allowed. Refresh Node, when safe, rereads hardware state; it does not retry failed writes or clear this safety block."
+            )
         if backup["complete"] and any(v is None for v in backup["nvs"]):
             raise ValueError("A complete backup cannot contain unknown NVs.")
         if not node_backup(state)["complete"]:
@@ -392,6 +394,10 @@ class NodeRestore(QObject):
         self.active = False
         if not success:
             message = f"Partial restoration: {self.nvs_verified} NV writes and {self.evs_verified} EV writes verified; {self.removals_transmitted} event removals transmitted, {self.events_removed} event removals verified. {message}"
+            if self.service._closed or self.service.connection.state != "Connected":
+                message += " Reconnect after resolving the connection failure, then compare hardware state."
+            else:
+                message += " Use Refresh Node or Layouts → Refresh when safe to reread hardware state. Refreshing does not retry failed writes or clear protocol safety blocks."
         if self.nvs_recovered:
             message += (
                 f" Verification required recovery for {self.nvs_recovered} NV write(s)."

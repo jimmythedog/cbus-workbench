@@ -422,7 +422,7 @@ class EvWrite(QObject):
             if self.verified:
                 message = f"{self.verified} of {self.total} changes verified. {message}"
             if self.blocked:
-                message += " Reconnect to rediscover before another Save."
+                message += " Protocol safety unresolved; no further Save is allowed. Refresh Node, when safe, rereads hardware state; it does not retry failed writes or clear this safety block."
         self.log(
             "EV Save finished", success=success, verified=self.verified, result=message
         )

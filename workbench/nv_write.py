@@ -96,10 +96,13 @@ class NvWrite(QObject):
     def receive_value(self, node_number: int, index: int, value: int) -> bool:
         """Consume unverified write replies before normal discovery records them."""
         # Failure rediscovery may confirm physical state without resolving an
-        # ambiguous transaction; its uncertainty marker still requires reconnecting.
+        # ambiguous transaction; rereading cannot clear its uncertainty marker.
         if (
             not self.active
-            and self.service.refreshing_node == node_number
+            and (
+                self.service.refreshing_node == node_number
+                or self.service.refreshing_layout
+            )
             and self.service._outstanding_request == ("nv", node_number, index)
         ):
             return False

@@ -63,12 +63,16 @@ class NodeState:
     event_progress: DiscoveryProgress = DiscoveryProgress.NOT_STARTED
     ev_progress: DiscoveryProgress = DiscoveryProgress.NOT_STARTED
     can_id: int | None = None
+    # PNN normally confirms identity; manual reads need fresh parameters 1/3/8.
+    identity_confirmed: bool = True
 
 
 class CbusService(QObject):
     presence_changed = Signal(int, bool)
     presence_checked = Signal(int, bool, int)  # Node, responded, module type.
     node_refresh_finished = Signal(int)
+    refresh_reported = Signal(int, str)
+    layout_refresh_reported = Signal(str)
     discovery_status_changed = Signal(str)
     node_discovered = Signal(Pnn)
     node_updated = Signal(Pnn)
@@ -117,6 +121,8 @@ class CbusService(QObject):
         self.nv_write = NvWrite(self)
         self.ev_write = EvWrite(self)
         self.refreshing_node = None
+        self.manual_refresh_node: int | None = None
+        self.refreshing_layout = False
         # Import after the service types are defined; serializers also use them.
         from .node_restore import NodeRestore
 
@@ -126,6 +132,16 @@ class CbusService(QObject):
     def close(self) -> None:
         """Stop observing frames when this connection's live state ends."""
         self._closed = True
+        if self.refreshing_layout:
+            self.refreshing_layout = False
+            self.layout_refresh_reported.emit(
+                "Refresh Layout interrupted: disconnected"
+            )
+        if self.manual_refresh_node is not None:
+            number = self.manual_refresh_node
+            self.manual_refresh_node = None
+            self.refreshing_node = None
+            self.refresh_reported.emit(number, "Refresh Node interrupted: disconnected")
         self._poll_timer.stop()
         self._poll_pending.clear()
         for number in self.presence:
@@ -188,6 +204,10 @@ class CbusService(QObject):
             ready = (
                 bool(self.node_states)
                 and not self._qnn_failed
+                and (
+                    not self.refreshing_layout
+                    or all(number in self.nodes for number in self.presence)
+                )
                 and all(
                     progress in complete
                     for state in self.node_states.values()
@@ -200,6 +220,22 @@ class CbusService(QObject):
                 )
             )
             status = DiscoveryStatus.READY if ready else DiscoveryStatus.INCOMPLETE
+        if self.refreshing_layout and status != DiscoveryStatus.DISCOVERING:
+            missing = set(self.presence) - self.nodes.keys()
+            for number in missing:
+                self.set_presence(number, False)
+            self.refreshing_layout = False
+            outcome = (
+                "Refresh Layout complete"
+                if status == DiscoveryStatus.READY
+                else f"Refresh Layout incomplete ({len(missing)} nodes did not respond)"
+            )
+            trace(
+                logger,
+                outcome,
+                extra={"fields": {"layout": self.connection.layout_name}},
+            )
+            self.layout_refresh_reported.emit(outcome)
         self._set_discovery_status(status)
 
     def send_event(
@@ -303,6 +339,7 @@ class CbusService(QObject):
             self._outstanding_request
             or self._request_queue
             or self.refreshing_node is not None
+            or self.refreshing_layout
         )
 
     def set_presence(self, number: int, online: bool) -> None:
@@ -406,6 +443,83 @@ class CbusService(QObject):
             extra={"fields": {"layout": self.connection.layout_name}},
         )
 
+    def refresh_unavailable_reason(self) -> str:
+        """Manual refresh must acquire the same idle wire used by discovery."""
+        if self._closed or self.connection.state != "Connected":
+            return "Refresh Node requires a connected layout"
+        if (
+            self.writes_busy()
+            or self.discovery_pending()
+            or self._discovery_window.isActive()
+            or self.ev_write.blocked
+            or not self.polling_allowed()
+            or any(
+                state.identity.flags & 0x20 or state.parameters.get(8, 0) & 0x20
+                for state in self.node_states.values()
+            )
+        ):
+            return (
+                "Wait for discovery, polling, writes, restores and learn mode to finish"
+            )
+        return ""
+
+    def refresh_layout(self) -> None:
+        """Repeat full discovery on this connection, keeping local inventory."""
+        reason = self.refresh_unavailable_reason()
+        if reason:
+            trace(
+                logger,
+                "Refresh Layout refused: %s",
+                reason,
+                extra={"fields": {"layout": self.connection.layout_name}},
+            )
+            raise ValueError(reason)
+        # Keep addresses for missing nodes, but no previous configuration is
+        # evidence for this pass. PNN will initiate the ordinary discovery FIFO.
+        self.node_states = {
+            number: NodeState(state.identity, identity_confirmed=False)
+            for number, state in self.node_states.items()
+        }
+        self.nodes.clear()
+        self._nv_started.clear()
+        self._ev_started.clear()
+        self._qnn_failed = False
+        self.refreshing_layout = True
+        trace(
+            logger,
+            "Refresh Layout started",
+            extra={"fields": {"layout": self.connection.layout_name}},
+        )
+        self.layout_refresh_reported.emit("Refreshing Layout…")
+        self.discover_nodes()
+
+    def refresh_node(self, node_number: int) -> None:
+        """Reread one node without QNN, transport changes or persisted values."""
+        reason = self.refresh_unavailable_reason()
+        if reason:
+            trace(
+                logger,
+                "Refresh Node refused: %s",
+                reason,
+                extra={
+                    "fields": {
+                        "layout": self.connection.layout_name,
+                        "node_number": node_number,
+                    }
+                },
+            )
+            raise ValueError(reason)
+        if type(node_number) is not int or not 1 <= node_number <= 65535:
+            raise ValueError("Node number must be between 1 and 65535")
+        # A remembered node may have no live identity. This provisional carrier
+        # supplies only its address; flags/capabilities come from fresh PARANs.
+        identity = self.nodes.get(node_number, Pnn(node_number, 0, 0, 0))
+        self.node_states[node_number] = NodeState(identity, identity_confirmed=False)
+        self.presence.setdefault(node_number, False)
+        self.manual_refresh_node = node_number
+        self.refresh_reported.emit(node_number, "Refreshing Node…")
+        self.rediscover_node(node_number)
+
     def rediscover_node(self, node_number: int) -> None:
         """Read the entire selected node afresh, retaining its confirmed identity."""
         if self._closed or self.connection.state != "Connected":
@@ -469,7 +583,9 @@ class CbusService(QObject):
         if self.ev_write.blocked or any(
             node == node_number for node, _index in self.nv_write.unverified
         ):
-            raise ValueError("Reconnect to rediscover this node before another NV Save")
+            raise ValueError(
+                "Protocol safety unresolved; no further Save is allowed. Refresh Node, when safe, rereads hardware state; it does not retry failed writes or clear this safety block."
+            )
         for index, value in values.items():
             if type(index) is not int or not 1 <= index <= min(count, 255):
                 raise ValueError(
@@ -511,7 +627,9 @@ class CbusService(QObject):
         ):
             raise ValueError("Another Save is in progress")
         if self.ev_write.blocked or self.nv_write.unverified:
-            raise ValueError("Reconnect to rediscover before another Save")
+            raise ValueError(
+                "Protocol safety unresolved; no further Save is allowed. Refresh Node, when safe, rereads hardware state; it does not retry failed writes or clear this safety block."
+            )
         if (
             not node_number
             or not state.identity.is_flim
@@ -776,8 +894,34 @@ class CbusService(QObject):
                 },
             )
             return
+        # Unsolicited identities must not start unrelated discovery during a
+        # targeted refresh. Other received events remain observable as usual.
+        if self.manual_refresh_node is not None and pnn is not None:
+            return
+        if self.manual_refresh_node is not None:
+            reply = next(
+                (
+                    value
+                    for value in (paran, nvans, numev, enrsp, neval, cmderr)
+                    if value is not None
+                ),
+                None,
+            )
+            if reply is not None and reply.node_number != self.manual_refresh_node:
+                return
         if pnn is None:
             if paran is not None:
+                if (
+                    self.manual_refresh_node == paran.node_number
+                    and self._outstanding_request
+                    != ("parameter", paran.node_number, paran.parameter_index)
+                ):
+                    return
+                if self.manual_refresh_node == paran.node_number:
+                    self.node_states[paran.node_number].can_id = (
+                        int(frame[2:6], 16) >> 5
+                    ) & 0x7F
+
                 self._receive_paran(
                     paran.node_number, paran.parameter_index, paran.parameter_value
                 )
@@ -816,6 +960,7 @@ class CbusService(QObject):
         else:
             state.identity = pnn
         state.can_id = can_id
+        state.identity_confirmed = True
         logger.info(
             "Node discovered" if is_new else "Node identity updated",
             extra={
@@ -903,6 +1048,20 @@ class CbusService(QObject):
             )
             self.parameter_updated.emit(node_number, index, value)
             self.node_state_updated.emit(node_number)
+
+        if self.manual_refresh_node == node_number:
+            self.set_presence(node_number, True)
+            if all(key in state.parameters for key in (1, 3, 8)):
+                state.identity = Pnn(
+                    node_number,
+                    state.parameters[1],
+                    state.parameters[3],
+                    state.parameters[8],
+                )
+                state.identity_confirmed = True
+                if self.nodes.get(node_number) != state.identity:
+                    self.nodes[node_number] = state.identity
+                    self.node_updated.emit(state.identity)
 
         # Parameter 6 is the confirmed NV count. It may arrive outside our
         # automatic parameter sequence, so discovery starts on the reply itself.
@@ -1195,7 +1354,11 @@ class CbusService(QObject):
         self._finish_request("ev", node_number)
 
     def _queue_event_count(self, node_number: int) -> None:
-        if self.node_states[node_number].identity.is_consumer is False:
+        state = self.node_states[node_number]
+        consumer = state.identity.is_consumer
+        if not state.identity_confirmed:
+            consumer = bool(state.parameters[8] & 1) if 8 in state.parameters else None
+        if consumer is False:
             trace(
                 logger,
                 "Automatic event discovery skipped: node is not a consumer",
@@ -1315,6 +1478,45 @@ class CbusService(QObject):
         if self.refreshing_node is not None:
             number = self.refreshing_node
             self.refreshing_node = None
+            if self.manual_refresh_node == number:
+                state = self.node_states[number]
+                self.set_presence(
+                    number,
+                    bool(state.parameters) or state.stored_event_count is not None,
+                )
+                if not state.identity_confirmed:
+                    self._set_progress(
+                        "parameter", number, DiscoveryProgress.INCOMPLETE
+                    )
+                complete = (DiscoveryProgress.COMPLETE, DiscoveryProgress.SKIPPED)
+                ready = all(
+                    progress in complete
+                    for progress in (
+                        state.parameter_progress,
+                        state.nv_progress,
+                        state.event_progress,
+                        state.ev_progress,
+                    )
+                )
+                outcome = (
+                    "Refresh Node complete"
+                    if ready
+                    else "Refresh Node incomplete"
+                    if self.presence.get(number, False)
+                    else "Refresh Node: node did not respond (Offline)"
+                )
+                trace(
+                    logger,
+                    outcome,
+                    extra={
+                        "fields": {
+                            "layout": self.connection.layout_name,
+                            "node_number": number,
+                        }
+                    },
+                )
+                self.manual_refresh_node = None
+                self.refresh_reported.emit(number, outcome)
             self.node_refresh_finished.emit(number)
 
         self._send_next_poll()

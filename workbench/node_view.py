@@ -46,7 +46,7 @@ class NodeView(QSplitter):
         self.details = NodeDetails(events)
         self.mdf_repository = MdfRepository()
         self.saved_metadata = {}
-        self.state_lookup: Callable[[int], NodeState] | None = None
+        self.state_lookup: Callable[[int], NodeState | None] | None = None
         self.discovering = False
         self.editing = False
         self.selection_before_discovery: int | None = None
@@ -61,17 +61,39 @@ class NodeView(QSplitter):
 
     def show_node_menu(self, position):
         item = self.node_list.itemAt(position)
-        if (
-            item is None
-            or not isinstance(item.data(Qt.ItemDataRole.UserRole), int)
-            or self.details.logical_layout is None
-            or self.discovering
-            or self.editing
-        ):
+        if item is None or self.details.logical_layout is None:
             return
+        self.node_list.setCurrentItem(item)
         menu = QMenu(self)
-        action = menu.addAction("Forget Node")
-        if menu.exec(self.node_list.viewport().mapToGlobal(position)) == action:
+        refresh = menu.addAction("Refresh Node")
+        service = self.details.cbus_service
+        reason = (
+            service.refresh_unavailable_reason()
+            if service
+            else "Refresh Node requires a connected layout"
+        )
+        if self.editing or self.discovering:
+            reason = "Finish editing or discovery before refreshing"
+        refresh.setEnabled(not reason)
+        refresh.setToolTip(reason or "Reread this node from hardware")
+        menu.setToolTipsVisible(True)
+        forget = None
+        if (
+            isinstance(item.data(Qt.ItemDataRole.UserRole), int)
+            and not self.discovering
+            and not self.editing
+        ):
+            forget = menu.addAction("Forget Node")
+        chosen = menu.exec(self.node_list.viewport().mapToGlobal(position))
+        if chosen == refresh:
+            # Recheck after the menu's nested event loop before taking ownership.
+            try:
+                if self.editing or self.discovering:
+                    raise ValueError("Finish editing or discovery before refreshing")
+                service.refresh_node(node_number(item.data(Qt.ItemDataRole.UserRole)))
+            except ValueError as error:
+                QMessageBox.warning(self, "Cannot refresh node", str(error))
+        elif forget is not None and chosen == forget:
             self.forget_saved_node(item)
 
     def forget_saved_node(self, item):
@@ -181,12 +203,15 @@ class NodeView(QSplitter):
             for index in range(self.node_list.count()):
                 item = self.node_list.item(index)
                 node = item.data(Qt.ItemDataRole.UserRole)
-                if isinstance(node, Pnn):
-                    if selected is None:
-                        selected = item
-                    if node.node_number == self.selection_before_discovery:
-                        selected = item
-                        break
+                if selected is None and isinstance(node, Pnn):
+                    selected = item
+                if node_number(node) == self.selection_before_discovery and (
+                    isinstance(node, Pnn)
+                    or self.state_lookup is not None
+                    and self.state_lookup(node_number(node)) is not None
+                ):
+                    selected = item
+                    break
         self.selection_before_discovery = None
         # Restore selection without its usual lookup: the final pass below resolves
         # every live node once, including the selected node's details.
@@ -209,8 +234,7 @@ class NodeView(QSplitter):
         if status != DiscoveryStatus.DISCONNECTED and self.state_lookup is not None:
             for index in range(self.node_list.count()):
                 node = self.node_list.item(index).data(Qt.ItemDataRole.UserRole)
-                if isinstance(node, Pnn):
-                    self.refresh_state(node.node_number)
+                self.refresh_state(node_number(node))
         trace(
             logger,
             "Node selection resumed after discovery",
@@ -228,7 +252,14 @@ class NodeView(QSplitter):
 
     def show_selected_node(self, current, _previous=None) -> None:
         self.details.show_node(current)
-        if current is not None and isinstance(self.details.node, int):
+        if (
+            current is not None
+            and isinstance(self.details.node, int)
+            and (
+                self.state_lookup is None
+                or self.state_lookup(self.details.node) is None
+            )
+        ):
             parameters = {
                 index: value
                 for index, value in enumerate(
@@ -254,10 +285,9 @@ class NodeView(QSplitter):
                 self.details.refresh_annotations()
         if current is not None and self.state_lookup is not None:
             node = current.data(Qt.ItemDataRole.UserRole)
-            if isinstance(node, Pnn):
-                state = self.state_lookup(node.node_number)
-                if state is not None:
-                    self.show_live_state(state)
+            state = self.state_lookup(node_number(node))
+            if state is not None:
+                self.show_live_state(state)
 
     def show_live_state(self, state: NodeState) -> None:
         """Display discovery values and resolve MDFs from the same live evidence."""
@@ -268,7 +298,11 @@ class NodeView(QSplitter):
         form = self.details.details_page
         error_message = None
         try:
-            mdf = self.mdf_repository.lookup(state.identity, state.parameters)
+            mdf = (
+                self.mdf_repository.lookup(state.identity, state.parameters)
+                if state.identity_confirmed
+                else None
+            )
         except MdfError as error:
             # The repository logs the detailed failure; retain node/layout context here.
             logger.error(
@@ -284,8 +318,12 @@ class NodeView(QSplitter):
             mdf = None
             error_message = str(error)
         name = module_name(
-            state.identity.manufacturer,
-            state.identity.module_type,
+            state.identity.manufacturer
+            if state.identity_confirmed
+            else state.parameters.get(1),
+            state.identity.module_type
+            if state.identity_confirmed
+            else state.parameters.get(3),
             mdf.data.get("moduleName") if mdf else None,
         )
         selected = False
@@ -341,8 +379,10 @@ class NodeView(QSplitter):
         for index in range(self.node_list.count()):
             item = self.node_list.item(index)
             node = item.data(Qt.ItemDataRole.UserRole)
-            if isinstance(node, Pnn) and node.node_number == node_number:
-                item.setData(Qt.ItemDataRole.UserRole, identity)
+            if (node if isinstance(node, int) else node.node_number) == node_number:
+                # Remembered addresses are promoted by the identity signal.
+                if isinstance(node, Pnn):
+                    item.setData(Qt.ItemDataRole.UserRole, identity)
                 item.setText(f"{node_number} - {name}")
                 self.refresh_annotation_names(node_number)
                 self.show_live_state(state)

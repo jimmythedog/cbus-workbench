@@ -148,7 +148,7 @@ class LayoutRestoreWorkflow:
     def safety_warning(self):
         warning = ""
         if self.service.ev_write.blocked or self.service.nv_write.unverified:
-            warning = "Protocol safety unresolved; reconnect and rediscover before further writes."
+            warning = "Protocol safety unresolved; resolve transaction and learn-mode uncertainty before further writes. Once safe, use Layouts → Refresh to reread hardware state; refreshing does not retry failed writes or clear this safety block."
         if any(
             s.identity.flags & 0x20 or s.parameters.get(8, 0) & 0x20
             for s in self.service.node_states.values()

@@ -460,7 +460,7 @@ class NodeRestoreTests(unittest.TestCase):
         before = list(self.connection.sent)
         for delayed in ("9701021981", "590102", "6F010201"):
             self.reply(delayed)
-            with self.assertRaisesRegex(ValueError, "Reconnect"):
+            with self.assertRaisesRegex(ValueError, "Protocol safety unresolved"):
                 self.service.restore.begin(258, self.backup)
         self.assertEqual(self.connection.sent, before)
         self.assertEqual(
@@ -682,7 +682,7 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertFalse(self.results[-1][1])
         self.assertIn("still reports learn mode", self.results[-1][2])
         self.assertEqual(self.events[(0, 1000)], {1: 0, 2: 12, 3: None})
-        with self.assertRaisesRegex(ValueError, "Reconnect"):
+        with self.assertRaisesRegex(ValueError, "Protocol safety unresolved"):
             self.service.restore.check(258, self.backup)
 
     def test_failed_creation_skips_dependent_evs_but_restores_other_event(self):
@@ -721,7 +721,7 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertIn("timed out", self.results[-1][2])
         self.assertEqual(self.state.nv_values, self.nvs)
         self.assertEqual(len([f for f in self.connection.sent if b"N96" in f]), 1)
-        with self.assertRaisesRegex(ValueError, "Reconnect"):
+        with self.assertRaisesRegex(ValueError, "Protocol safety unresolved"):
             self.service.restore.begin(258, node_backup(self.state))
 
     def test_application_ownership_survives_deferred_nv_comparison(self):
@@ -1009,6 +1009,9 @@ class NodeRestoreTests(unittest.TestCase):
         self.close_service()
         self.assertFalse(self.results[-1][1])
         self.assertIn("Connection ended", self.results[-1][2])
+        self.assertIn(
+            "Reconnect after resolving the connection failure", self.results[-1][2]
+        )
 
     def backup_details(self):
         from PySide6.QtCore import Qt
@@ -1610,6 +1613,10 @@ class NodeRestoreTests(unittest.TestCase):
         self.run_node()
         self.assertIn(("NV 1", "10", "7"), self.report_rows(details))
         self.assertIn("CMDERR", details.failure_report.dialog.message.text())
+        message = details.failure_report.dialog.message.text()
+        self.assertIn("Refresh Node", message)
+        self.assertIn("does not retry failed writes", message)
+        self.assertNotIn("Reconnect", message)
         self.assertTrue(details.failure_report.dialog.retry_button.isEnabled())
         self.addCleanup(details.failure_report.dialog.close)
 
@@ -1627,6 +1634,9 @@ class NodeRestoreTests(unittest.TestCase):
         self.addCleanup(report.dialog.close)
         self.assertIn("EV", report.dialog.message.text())
         self.assertIn("Partial Restore:", report.dialog.message.text())
+        self.assertIn("Layouts → Refresh", report.dialog.message.text())
+        self.assertIn("does not retry failed writes", report.dialog.message.text())
+        self.assertNotIn("Reconnect", report.dialog.message.text())
         self.assertTrue(report.dialog.retry_button.isEnabled())
         self.assertEqual(report.dialog.retry_status.text(), "")
         self.assertTrue(
