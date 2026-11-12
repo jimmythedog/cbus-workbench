@@ -25,7 +25,6 @@ class NodeBackupWorkflowTests(unittest.TestCase):
             firmware="1a",
             has_mdf=False,
             nv_values={1: 7},
-            nv_descriptions={1: "Speed"},
             consumed_events={"42:3": "Active"},
             ev_values={"42:3": {1: 5}},
         )

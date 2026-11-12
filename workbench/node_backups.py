@@ -1,6 +1,8 @@
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QStyle, QTreeWidget, QTreeWidgetItem
+from PySide6.QtWidgets import QHeaderView, QStyle, QTreeWidget, QTreeWidgetItem
 
+from .backup_description_edit import edit_backup_description
+from .backup_timestamp import backup_date_time
 from .node_backup_files import list_backups
 
 
@@ -8,8 +10,15 @@ class NodeBackups(QTreeWidget):
     def __init__(self):
         super().__init__()
 
-        self.setHeaderLabels(["Created", "Description"])
-        self.setColumnWidth(0, 200)
+        self.setHeaderLabels(["Date & Time", "Description", "Source"])
+        self.header().setStretchLastSection(False)
+        self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.setEditTriggers(QTreeWidget.EditTrigger.NoEditTriggers)
+        self.itemDoubleClicked.connect(
+            lambda item, column: edit_backup_description(self, item, column)
+        )
         self.setRootIsDecorated(False)
         self.setAlternatingRowColors(True)
         self.backups_by_node = {}
@@ -17,10 +26,18 @@ class NodeBackups(QTreeWidget):
 
     def show_live_node(self, logical_layout, node_number):
         self.clear()
-        self.setHeaderLabels(["Filename", "Description"])
-        self.setColumnWidth(0, 340)
-        for path, complete, description in list_backups(logical_layout, node_number):
-            item = QTreeWidgetItem(self, [path.name, description])
+        self.setHeaderLabels(["Date & Time", "Description", "Source"])
+        for path, complete, description, layout_backup in list_backups(
+            logical_layout, node_number
+        ):
+            item = QTreeWidgetItem(
+                self,
+                [
+                    backup_date_time(path),
+                    description,
+                    "Layout" if layout_backup else "Node",
+                ],
+            )
             item.setToolTip(0, str(path))
             if not complete:
                 item.setIcon(
@@ -37,8 +54,7 @@ class NodeBackups(QTreeWidget):
 
     def show_node(self, node):
         self.clear()
-        self.setHeaderLabels(["Created", "Description"])
-        self.setColumnWidth(0, 200)
+        self.setHeaderLabels(["Date & Time", "Description", "Source"])
 
         if node is None:
             return
@@ -62,9 +78,6 @@ class NodeBackups(QTreeWidget):
                 "ev_values": {
                     "256:302": {1: 3, 2: 10},
                 },
-                "nv_descriptions": {
-                    2: "Servo configuration",
-                },
                 "annotations": {
                     "name": "Goods Yard",
                 },
@@ -85,9 +98,6 @@ class NodeBackups(QTreeWidget):
                 "ev_values": {
                     "256:302": {1: 3, 2: 10},
                 },
-                "nv_descriptions": {
-                    2: "Servo configuration",
-                },
                 "annotations": {
                     "name": "Goods Yard",
                 },
@@ -107,9 +117,6 @@ class NodeBackups(QTreeWidget):
                 },
                 "ev_values": {
                     "256:302": {1: 2, 2: 10},
-                },
-                "nv_descriptions": {
-                    2: "Original servo configuration",
                 },
                 "annotations": {
                     "name": "Goods Yard",
@@ -136,7 +143,8 @@ class NodeBackups(QTreeWidget):
                         description = layout_backup.get("description", "")
                         break
 
-            item = QTreeWidgetItem(self, [backup["created"], description])
+            source = "Layout" if backup.get("partOfLayoutBackup", False) else "Node"
+            item = QTreeWidgetItem(self, [backup["created"], description, source])
             item.setData(0, Qt.ItemDataRole.UserRole, backup)
 
     def add_backup(self, node, backup):

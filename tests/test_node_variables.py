@@ -31,6 +31,13 @@ class MdfFormTests(unittest.TestCase):
         self.addCleanup(self.view.close)
         self.view.show_node(self.node, self.values)
 
+    def test_raw_values_columns(self):
+        table = self.view.raw_values
+        self.assertEqual(
+            [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())],
+            ["NV", "Value"],
+        )
+
     def test_real_dual_values_missing_bytes_and_shared_raw_edits(self):
         definition = json.loads(
             Path("tests/fixtures/mdfs/mmctest-dual.json").read_text()

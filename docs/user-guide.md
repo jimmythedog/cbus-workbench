@@ -174,6 +174,8 @@ connected nodes without discovery evidence show `-` for status.
 The live node's **Raw Node Variables** tab shows confirmed values as they arrive.
 Unread values show `-`; confirmed zero shows `0`.
 
+Raw Values shows only the NV number and value; use MDF token labels for local naming.
+
 For live nodes with a compatible MDF using the supported presentation subset,
 Node Variables offers compact settings pages with Raw Values first in the
 left-hand navigation. Flat MDF settings appear on a Settings page. Native bordered groups
@@ -298,11 +300,19 @@ ordinary node backup lists. For file-format details, see the
 
 ## Backup descriptions and warning icons
 
-Optional descriptions appear beside timestamp filenames in node and layout backup
-lists. A layout description also appears for its linked node backups. Blank
-descriptions are omitted from saved files.
+Node and layout backup lists show **Date & Time** in the current system locale
+and local timezone, without milliseconds, with newest backups first. Filenames
+record local wall time without a timezone offset, so the repeated hour when DST
+ends cannot be distinguished. Original filenames remain in use for backup actions.
+Optional descriptions appear beside the date and time. The node backup table also
+shows a read-only **Source** column: **Layout** for backups belonging to a layout backup, otherwise **Node**. A layout description
+also appears for its linked node backups. Blank
+descriptions are omitted when creating backups. Double-click a description to edit
+it, then choose **Save** to update the existing YAML file immediately, or **Cancel**
+to discard the edit. Editing a linked node backup updates its owning layout
+description. Configuration and annotations are unchanged; no CBUS traffic is sent.
 
-No icon beside a filename means discovery was complete when the backup was created.
+No icon beside a date and time means discovery was complete when the backup was created.
 A **warning icon** means some configuration was missing or unconfirmed, such as
 unread NVs or EVs, unavailable configuration counts or interrupted discovery.
 Hover over the icon for an explanatory tooltip.

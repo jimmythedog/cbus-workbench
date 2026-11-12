@@ -9,7 +9,6 @@ class Node:
     firmware: str
     has_mdf: bool
     nv_values: dict[int, int] = field(default_factory=dict)
-    nv_descriptions: dict[int, str] = field(default_factory=dict)
     consumed_events: dict[str, str] = field(default_factory=dict)
     ev_values: dict[str, dict[int, int]] = field(default_factory=dict)
     manufacturer_id: int | None = None

@@ -60,7 +60,6 @@ def backup_contents(backup):
         },
         "consumed_events": events,
         "ev_values": ev_values,
-        "nv_descriptions": annotations.get("nvDescriptions", {}),
         "annotations": annotations,
     }
 
@@ -133,15 +132,6 @@ class BackupView(QDialog):
             )
 
         add_configuration_items(tree, contents)
-
-        # Saved NV descriptions
-        descriptions = (
-            QTreeWidgetItem(tree, ["NV descriptions"])
-            if "nv_descriptions" in contents
-            else None
-        )
-        for number, description in contents.get("nv_descriptions", {}).items():
-            QTreeWidgetItem(descriptions, [f"NV {number}", description])
 
         # Other saved annotations
         annotations = (

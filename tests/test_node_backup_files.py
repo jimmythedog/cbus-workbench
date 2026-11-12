@@ -10,6 +10,7 @@ import yaml
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication, QListWidgetItem, QMessageBox
 
+from workbench.backup_timestamp import backup_date_time
 from workbench.cbus_service import DiscoveryProgress, NodeState
 from workbench.node_backup_files import node_backup
 from workbench.node_details import NodeDetails
@@ -52,6 +53,41 @@ class NodeBackupFilesTests(unittest.TestCase):
         self.details.show_node(item)
         self.details.show_live_state(self.state)
 
+    def test_source_column_uses_layout_membership_and_is_read_only(self):
+        directory = Path(self.temp.name) / "layouts/Yard/nodes/42/backups"
+        directory.mkdir(parents=True)
+        originals = {}
+        for filename, membership in (
+            ("layout", True),
+            ("node", False),
+            ("missing", None),
+        ):
+            backup = {"complete": True, "description": "Saved description"}
+            if membership is not None:
+                backup["partOfLayoutBackup"] = membership
+            path = directory / f"{filename}.yaml"
+            path.write_text(yaml.safe_dump(backup))
+            originals[path] = path.read_bytes()
+
+        table = self.details.node_backups
+        table.show_live_node("Yard", 42)
+        self.assertEqual(
+            [table.headerItem().text(column) for column in range(table.columnCount())],
+            ["Date & Time", "Description", "Source"],
+        )
+        sources = {}
+        for index in range(table.topLevelItemCount()):
+            item = table.topLevelItem(index)
+            sources[item.data(0, Qt.ItemDataRole.UserRole).name] = item.text(2)
+            self.assertFalse(item.flags() & Qt.ItemFlag.ItemIsEditable)
+            table.itemDoubleClicked.emit(item, 2)
+        self.assertEqual(
+            sources,
+            {"layout.yaml": "Layout", "node.yaml": "Node", "missing.yaml": "Node"},
+        )
+        for path, contents in originals.items():
+            self.assertEqual(path.read_bytes(), contents)
+
     def test_description_yaml_and_list_display(self):
         for kind in ("parameter", "nv", "event", "ev"):
             setattr(self.state, f"{kind}_progress", DiscoveryProgress.COMPLETE)
@@ -67,7 +103,7 @@ class NodeBackupFilesTests(unittest.TestCase):
                 self.assertEqual(saved.get("description", ""), expected)
                 if not expected:
                     self.assertNotIn("description", saved)
-                self.assertEqual(row.text(0), path.name)
+                self.assertEqual(row.text(0), backup_date_time(path))
                 self.assertEqual(row.text(1), expected)
                 self.assertTrue(row.icon(0).isNull())
                 self.assertEqual(row.toolTip(0), str(path))
@@ -191,10 +227,12 @@ class NodeBackupFilesTests(unittest.TestCase):
         )
         self.details.node_backups.clear()
         self.details.show_node(self.details.node_list_item)
-        self.assertEqual(self.details.node_backups.topLevelItem(0).text(0), path.name)
+        self.assertEqual(
+            self.details.node_backups.topLevelItem(0).text(0), backup_date_time(path)
+        )
         row = self.details.node_backups.topLevelItem(0)
-        self.assertEqual(self.details.node_backups.columnCount(), 2)
-        self.assertEqual(self.details.node_backups.headerItem().text(0), "Filename")
+        self.assertEqual(self.details.node_backups.columnCount(), 3)
+        self.assertEqual(self.details.node_backups.headerItem().text(0), "Date & Time")
         self.assertEqual(self.details.node_backups.headerItem().text(1), "Description")
         self.assertEqual(row.text(1), "")
         self.assertFalse(row.icon(0).isNull())

@@ -115,7 +115,7 @@ def save_backup(logical_layout: str, backup: dict, filename: str | None = None) 
 
 def list_backups(
     logical_layout: str, node_number: int | None = None
-) -> list[tuple[Path, bool, str]]:
+) -> list[tuple[Path, bool, str, bool]]:
     directory = backup_directory(logical_layout, node_number)
     if not directory.exists():
         return []
@@ -144,7 +144,14 @@ def list_backups(
                     }
                 },
             )
-        backups.append((path, backup["complete"], description))
+        backups.append(
+            (
+                path,
+                backup["complete"],
+                description,
+                backup.get("partOfLayoutBackup", False),
+            )
+        )
     trace(
         logger,
         "Configuration backups listed",

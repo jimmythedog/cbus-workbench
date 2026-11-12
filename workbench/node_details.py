@@ -51,7 +51,6 @@ class NodeDetails(QWidget):
         self.annotation_editing = False
         self.node = None
         self.node_list_item = None
-        self.editing_descriptions = None
         self.cbus_service = None
         self.original_configuration = None
         self.desired_configuration = None
@@ -313,7 +312,7 @@ class NodeDetails(QWidget):
         )
 
     def nv_display_node(self):
-        """Use the existing editors with confirmed live data and local descriptions."""
+        """Use the existing editors with confirmed live NV data."""
         if self.live_state is None:
             return self.node
         if isinstance(self.node, Pnn):
@@ -399,7 +398,6 @@ class NodeDetails(QWidget):
             self.desired_configuration = None
             self.node_events.cancel_edit()
             self.events_buttons.setCurrentIndex(0)
-        self.editing_descriptions = None
         self.stop_editing()
 
     def start_editing(self):
@@ -422,13 +420,8 @@ class NodeDetails(QWidget):
         for button in (self.save_button, self.events_save_button):
             button.setEnabled(True)
             button.setToolTip("")
-        self.editing_descriptions = node.nv_descriptions.copy()
-        self.raw_values.show_node(
-            node, self.desired_configuration["nvs"], self.editing_descriptions
-        )
-        self.mdf_values.show_node(
-            node, self.desired_configuration["nvs"], self.editing_descriptions
-        )
+        self.raw_values.show_node(node, self.desired_configuration["nvs"])
+        self.mdf_values.show_node(node, self.desired_configuration["nvs"])
         self.raw_values.set_editing(True)
         self.mdf_values.set_editing(True)
         self.buttons.setCurrentIndex(1)

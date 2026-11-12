@@ -403,7 +403,7 @@ class AnnotationTests(unittest.TestCase):
         with (
             patch.object(QDialog, "exec", respond),
             patch.object(Path, "replace", side_effect=OSError("disk full")),
-            patch("workbench.event_description_edit.QMessageBox.warning") as warning,
+            patch("PySide6.QtWidgets.QMessageBox.warning") as warning,
         ):
             self.click_consumed_cell(details)
         self.assertEqual(shown, {"open": True, "draft": "Draft"})

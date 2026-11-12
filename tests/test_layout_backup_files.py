@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication, QListWidgetItem, QMessageBox, QTreeWidget
 
 from workbench.backup_compare import BackupCompare
+from workbench.backup_timestamp import backup_date_time
 from workbench.backup_view import BackupView
 from workbench.cbus_service import DiscoveryProgress, NodeState
 from workbench.layout_view import LayoutView
@@ -87,7 +88,7 @@ class LayoutBackupTests(unittest.TestCase):
                 self.assertEqual(saved.get("description", ""), expected)
                 if not expected:
                     self.assertNotIn("description", saved)
-                self.assertEqual(row.text(0), path.name)
+                self.assertEqual(row.text(0), backup_date_time(path))
                 self.assertEqual(row.text(1), expected)
                 self.assertTrue(row.icon(0).isNull())
                 self.assertEqual(row.toolTip(0), str(path))
@@ -120,7 +121,9 @@ class LayoutBackupTests(unittest.TestCase):
         expected[path.name] = "Standalone node"
         tree.show_live_node("Yard", 42)
         displayed = {
-            tree.topLevelItem(index).text(0): tree.topLevelItem(index).text(1)
+            tree.topLevelItem(index)
+            .data(0, Qt.ItemDataRole.UserRole)
+            .name: tree.topLevelItem(index).text(1)
             for index in range(tree.topLevelItemCount())
         }
         self.assertEqual(displayed, expected)
@@ -303,7 +306,7 @@ class LayoutBackupTests(unittest.TestCase):
         self.assertEqual(backup["nodeNumbers"], [42])
         row = self.view.layout_backups.topLevelItem(0)
         self.assertEqual(self.view.layout_backups.columnCount(), 2)
-        self.assertEqual(self.view.layout_backups.headerItem().text(0), "Filename")
+        self.assertEqual(self.view.layout_backups.headerItem().text(0), "Date & Time")
         self.assertEqual(self.view.layout_backups.headerItem().text(1), "Description")
         self.assertEqual(row.text(1), "")
         self.assertFalse(row.icon(0).isNull())

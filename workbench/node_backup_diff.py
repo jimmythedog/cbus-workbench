@@ -43,13 +43,6 @@ def compare_node(node, backup):
         lambda key: f"NV {key}",
     )
 
-    compare_section(
-        "NV descriptions",
-        contents["nv_descriptions"],
-        node.nv_descriptions,
-        lambda key: f"NV {key}",
-    )
-
     event_ids = (
         contents["consumed_events"].keys()
         | node.consumed_events.keys()

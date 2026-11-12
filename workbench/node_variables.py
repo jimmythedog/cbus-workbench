@@ -30,9 +30,9 @@ class RawNodeVariables(QTableWidget):
     value_changed = Signal()
 
     def __init__(self):
-        super().__init__(0, 3)
+        super().__init__(0, 2)
 
-        self.setHorizontalHeaderLabels(["NV", "Value", "Description"])
+        self.setHorizontalHeaderLabels(["NV", "Value"])
         self.verticalHeader().setVisible(False)
         self.horizontalHeader().setStretchLastSection(True)
 
@@ -41,12 +41,9 @@ class RawNodeVariables(QTableWidget):
         self.values = None
         self.itemChanged.connect(self.update_value)
 
-    def show_node(self, node, values=None, descriptions=None):
+    def show_node(self, node, values=None):
         """Edit a positional backup NV list or the prototype indexed values."""
         self.values = values if values is not None else node.nv_values
-        self.descriptions = (
-            descriptions if descriptions is not None else node.nv_descriptions
-        )
         self.setRowCount(len(self.values))
 
         # setItem() emits itemChanged; rows must be complete before update_value runs.
@@ -61,7 +58,6 @@ class RawNodeVariables(QTableWidget):
             number_item.setFlags(number_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.setItem(row, 0, number_item)
             self.setItem(row, 1, QTableWidgetItem(str(value)))
-            self.setItem(row, 2, QTableWidgetItem(self.descriptions.get(number, "")))
         self.blockSignals(False)
 
     def show_live_values(self, count: int | None, values: dict[int, int]) -> None:
@@ -80,7 +76,6 @@ class RawNodeVariables(QTableWidget):
                 number_item = QTableWidgetItem(str(index))
                 number_item.setFlags(number_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.setItem(row, 0, number_item)
-                self.setItem(row, 2, QTableWidgetItem(""))
             value = str(values[index]) if index in values else "-"
             item = self.item(row, 1)
             if item is None or item.text() != value:
@@ -112,10 +107,6 @@ class RawNodeVariables(QTableWidget):
             return
 
         number = int(self.item(item.row(), 0).text())
-
-        if item.column() == 2:
-            self.descriptions[number] = item.text()
-            return
 
         if item.column() == 1:
             try:
@@ -965,14 +956,11 @@ class MdfNodeVariables(QSplitter):
         for index in range(1, self.pages.count()):
             self.pages.widget(index).show_values(values)
 
-    def show_node(self, node, values=None, descriptions=None):
+    def show_node(self, node, values=None):
         self.live_mode = False
         self.node = node
         self.values = values if values is not None else node.nv_values
-        self.descriptions = (
-            descriptions if descriptions is not None else node.nv_descriptions
-        )
-        self.raw_values.show_node(node, self.values, self.descriptions)
+        self.raw_values.show_node(node, self.values)
         for index in range(1, self.pages.count()):
             self.pages.widget(index).show_values(self.values)
         trace(logger, "Displayed prototype MDF node=%s", node.number)
@@ -985,7 +973,7 @@ class MdfNodeVariables(QSplitter):
             if self.live_mode:
                 self.raw_values.show_live_values(self.live_count, self.values)
             else:
-                self.raw_values.show_node(self.node, self.values, self.descriptions)
+                self.raw_values.show_node(self.node, self.values)
         else:
             self.pages.widget(index).show_values(self.values)
 

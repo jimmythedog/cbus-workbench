@@ -5,7 +5,6 @@ def restore_node_snapshot(node, contents):
     """Apply saved configuration values from normalized backup contents."""
 
     node.nv_values = deepcopy(contents["nv_values"])
-    node.nv_descriptions = deepcopy(contents["nv_descriptions"])
     node.consumed_events = deepcopy(contents["consumed_events"])
     node.ev_values = deepcopy(contents["ev_values"])
 
@@ -33,9 +32,6 @@ def create_node_snapshot(node):
         annotations.setdefault("events", {})["consumed"] = deepcopy(
             node.consumed_events
         )
-
-    if node.nv_descriptions:
-        annotations["nvDescriptions"] = deepcopy(node.nv_descriptions)
 
     return {
         "nodeNumber": node.number,
