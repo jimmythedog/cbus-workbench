@@ -107,20 +107,28 @@ class NodeView(QSplitter):
             QMessageBox.warning(self, "Cannot forget node", str(error))
             return
         self.saved_metadata.pop(number, None)
+        if self.details.cbus_service is not None:
+            self.details.cbus_service.presence.pop(number, None)
         self.node_list.takeItem(self.node_list.row(item))
         trace(logger, "Forgotten node removed from navigator", extra={"fields": fields})
 
     def refresh_annotation_names(self, number=-1):
         annotations = self.details.annotations
-        if annotations is None:
-            return
         for row in range(self.node_list.count()):
             item = self.node_list.item(row)
             nn = node_number(item.data(Qt.ItemDataRole.UserRole))
             if number not in (-1, nn):
                 continue
-            name = annotations.load(nn).get("name", "")
+            name = annotations.load(nn).get("name", "") if annotations else ""
             base = item.text().split(" — ")[0]
+            base = base.removesuffix(" (Online)").removesuffix(" (Offline)")
+            service = self.details.cbus_service
+            online = (
+                service.presence.get(nn, False)
+                if service is not None
+                else isinstance(item.data(Qt.ItemDataRole.UserRole), Pnn)
+            )
+            base += " (Online)" if online else " (Offline)"
             item.setText(base + (f" — {name}" if name else ""))
         if (
             not self.discovering
@@ -336,6 +344,7 @@ class NodeView(QSplitter):
             if isinstance(node, Pnn) and node.node_number == node_number:
                 item.setData(Qt.ItemDataRole.UserRole, identity)
                 item.setText(f"{node_number} - {name}")
+                self.refresh_annotation_names(node_number)
                 self.show_live_state(state)
                 return
 
@@ -369,6 +378,11 @@ class NodeView(QSplitter):
                 extra={"fields": {"node_number": node.node_number}},
             )
 
+    def refresh_presence(self, number: int, _online: bool) -> None:
+        self.refresh_annotation_names(number)
+        if self.details.node is not None and self.details.annotation_number() == number:
+            self.details.update_connection_details()
+
     def clear_identities(self) -> None:
         self.state_lookup = None
         self.node_list.clear()
@@ -387,7 +401,7 @@ class NodeView(QSplitter):
                 for i in range(self.node_list.count())
             ):
                 continue
-            item = NodeListItem(f"{number} (offline)")
+            item = NodeListItem(f"{number} (Offline)")
             item.setData(Qt.ItemDataRole.UserRole, number)
             self.node_list.addItem(item)
         self.refresh_annotation_names()

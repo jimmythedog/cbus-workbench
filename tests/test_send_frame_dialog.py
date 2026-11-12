@@ -371,11 +371,11 @@ class SendFrameDialogTests(unittest.TestCase):
             self.assertTrue(expected.startswith("Node 258: Partial Save:"))
             self.assertIn("Connection ended", expected)
             self.assertEqual(details.events_result.text(), expected)
-            self.assertEqual(view.node_list.currentItem().text(), "258 (offline)")
+            self.assertEqual(view.node_list.currentItem().text(), "258 (Offline)")
             self.assertIsNone(details.desired_configuration)
             self.assertFalse(details.saving_configuration)
             view.node_list.setCurrentRow(1)
-            self.assertEqual(view.node_list.currentItem().text(), "259 (offline)")
+            self.assertEqual(view.node_list.currentItem().text(), "259 (Offline)")
             self.assertEqual(details.nv_result.text(), "")
             self.assertEqual(details.events_result.text(), "")
 

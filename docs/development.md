@@ -347,7 +347,7 @@ Connection changes in `MainWindow.set_connection_state()` refresh backup actions
 through `LayoutView.set_connected()`. Availability uses the connection state,
 independently of discovery results. Disconnect still closes the service and clears
 live identities and values. The existing node navigator then lists node numbers
-with metadata or saved backups as “<node-number> (offline)”. These entries hold
+with metadata or saved backups as “<node-number> (Offline)”. These entries hold
 an integer rather than a cached PNN or NodeState. `node_metadata` stores confirmed
 parameters (a positional list including index zero, with null gaps) and optional
 last-observed `canId` in `layouts/<logical-layout>/nodes/<number>/metadata.yaml`.
@@ -357,6 +357,22 @@ saved values, and equal records are not rewritten. No reachability status is sav
     PNN / PARAN -> merge metadata -> write only if changed
     open layout -> metadata + backup inventory -> offline navigator/details
     reconnect   -> fresh NodeState -> live details and write eligibility
+
+Presence lives separately in the connection's `CbusService.presence` dictionary,
+seeded Offline from the saved inventory. PNN establishes Online without another
+initial scan. Each layout's `node_poll_seconds` setting defaults to 10 when
+absent from YAML. Its existing timer starts a bounded pass over known numbers;
+only one RQNPN(3) poll enters the shared queue at a time. Saving the interval
+updates the live service timer; zero stops it and discards unsent polls, while
+an in-flight read drains normally. Explicit Restore checks remain available.
+Discovery, writers,
+restore, editing and modal operations defer further polls. Polls do not change
+configuration discovery progress or suspend node selection. Disconnect clears
+Online evidence. This status never grants write permission: Restore retains its
+immediate reachability and identity checks.
+
+    polling opportunity -> idle? -> one RQNPN(3) -> PARAN / timeout
+                                 -> Online / Offline -> next node if idle
 
 Offline metadata is loaded independently of connections and shown in the existing
 details fields. It never seeds live discovery or hardware-write eligibility.

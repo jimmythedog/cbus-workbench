@@ -5,7 +5,17 @@ import unittest
 from unittest.mock import patch
 
 from layout_fixture import sample_settings
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtCore import QRect
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QGroupBox,
+    QLabel,
+    QStyle,
+    QStyleFactory,
+    QStyleOptionTitleBar,
+)
 
 from workbench.layout_settings import LayoutSettingsDialog
 from workbench.window import MainWindow
@@ -89,6 +99,11 @@ class LayoutSettingsTests(unittest.TestCase):
     def test_new_layout_defaults_to_auto_connect_off(self):
         def accept_new(dialog):
             self.assertFalse(dialog.auto_connect_check.isChecked())
+            self.assertEqual(dialog.node_poll_spin.value(), 10)
+            self.assertEqual(dialog.node_poll_spin.minimum(), 0)
+            self.assertEqual(dialog.node_poll_spin.maximum(), 300)
+            self.assertEqual(dialog.node_poll_spin.singleStep(), 5)
+            self.assertTrue(dialog.node_poll_spin.toolTip())
             self.assertEqual(dialog.can_id_spin.value(), 126)
             self.assertEqual(dialog.can_id_spin.minimum(), 100)
             self.assertEqual(dialog.can_id_spin.maximum(), 127)
@@ -101,6 +116,7 @@ class LayoutSettingsTests(unittest.TestCase):
 
         self.assertFalse(self.window.layout_settings["Garden"]["auto_connect"])
         self.assertEqual(self.window.layout_settings["Garden"]["can_id"], 126)
+        self.assertEqual(self.window.layout_settings["Garden"]["node_poll_seconds"], 10)
 
     def test_new_layout_can_enable_auto_connect(self):
         def accept_new(dialog):
@@ -152,6 +168,107 @@ class LayoutSettingsTests(unittest.TestCase):
                 dialog.connection_type_combo.setCurrentText(connection_type)
                 self.assertTrue(dialog.can_id_spin.isVisibleTo(dialog))
                 self.assertEqual(dialog.settings()["can_id"], 126)
+
+    def test_dialog_keeps_labels_and_text_fields_usable_across_styles_and_fonts(self):
+        previous_style = self.app.style().objectName()
+        previous_font = self.app.font()
+        self.addCleanup(self.app.setStyle, previous_style)
+        self.addCleanup(self.app.setFont, previous_font)
+        styles = QStyleFactory.keys()
+        for style in styles:
+            self.app.setStyle(style)
+            # Liberation Sans has Windows Arial-compatible metrics; native Segoe
+            # UI and Windows window decorations still need a Windows smoke test.
+            base_font = (
+                QFont("Liberation Sans", 9) if style == "Windows" else previous_font
+            )
+            for scale in (1, 1.5):
+                font = QFont(base_font)
+                font.setPointSizeF(font.pointSizeF() * scale)
+                self.app.setFont(font)
+                dialog = LayoutSettingsDialog(
+                    name="My railway layout",
+                    host="railway-gridconnect.example.com",
+                )
+                dialog.show()
+                for mode in ("TCP/IP", "Serial"):
+                    with self.subTest(style=style, scale=scale, mode=mode):
+                        dialog.connection_type_combo.setCurrentText(mode)
+                        self.app.processEvents()
+                        dialog.resize(dialog.minimumSizeHint())
+                        self.app.processEvents()
+                        for label in dialog.findChildren(QLabel):
+                            if label.isVisible():
+                                self.assertGreaterEqual(
+                                    label.width(), label.sizeHint().width()
+                                )
+                        endpoint = (
+                            dialog.host_edit
+                            if mode == "TCP/IP"
+                            else dialog.serial_port_edit
+                        )
+                        for field in (dialog.name_edit, endpoint):
+                            self.assertGreaterEqual(
+                                field.width(), field.sizeHint().width()
+                            )
+                            self.assertGreaterEqual(
+                                field.contentsRect().width(),
+                                field.fontMetrics().horizontalAdvance(field.text()),
+                            )
+                        if style == "Windows":
+                            self.assert_title_fits(dialog)
+                dialog.close()
+
+    def assert_title_fits(self, dialog):
+        title = QStyleOptionTitleBar()
+        title.initFrom(dialog)
+        title.titleBarFlags = dialog.windowFlags()
+        title.text = dialog.windowTitle()
+        title.rect = QRect(
+            0,
+            0,
+            dialog.width(),
+            dialog.style().pixelMetric(QStyle.PixelMetric.PM_TitleBarHeight),
+        )
+        label_rect = dialog.style().subControlRect(
+            QStyle.ComplexControl.CC_TitleBar,
+            title,
+            QStyle.SubControl.SC_TitleBarLabel,
+            dialog,
+        )
+        self.assertGreaterEqual(
+            label_rect.width(),
+            dialog.fontMetrics().horizontalAdvance(dialog.windowTitle()),
+        )
+
+    def test_serial_form_has_no_space_reserved_for_hidden_tcp_rows(self):
+        dialog = LayoutSettingsDialog(connection_type="Serial")
+        self.addCleanup(dialog.close)
+        dialog.show()
+        heights = {}
+        for mode in ("Serial", "TCP/IP", "Serial"):
+            dialog.connection_type_combo.setCurrentText(mode)
+            self.app.processEvents()
+            heights[mode] = dialog.height()
+            groups = {group.title(): group for group in dialog.findChildren(QGroupBox)}
+            advanced = groups["Advanced"]
+            self.assertTrue(advanced.isVisible())
+            self.assertTrue(advanced.isAncestorOf(dialog.node_poll_spin))
+            self.assertGreater(advanced.y(), groups["Connection"].geometry().bottom())
+            tcp = mode == "TCP/IP"
+            self.assertEqual(dialog.host_edit.isVisible(), tcp)
+            self.assertEqual(dialog.port_spin.isVisible(), tcp)
+            self.assertEqual(dialog.serial_port_edit.isVisible(), not tcp)
+            if not tcp:
+                type_gap = dialog.serial_port_edit.y() - (
+                    dialog.connection_type_combo.geometry().bottom() + 1
+                )
+                can_gap = dialog.can_id_spin.y() - (
+                    dialog.serial_port_edit.geometry().bottom() + 1
+                )
+                self.assertEqual(can_gap, type_gap)
+                self.assertEqual(dialog.can_id_spin.x(), dialog.serial_port_edit.x())
+        self.assertLess(heights["Serial"], heights["TCP/IP"])
 
     def test_cancel_leaves_existing_layout_settings_unchanged(self):
         original = self.window.layout_settings["Home"].copy()

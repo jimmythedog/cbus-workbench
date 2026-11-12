@@ -245,7 +245,7 @@ class NodeMdfDetailsTests(unittest.TestCase):
         self.assertEqual(self.label.text(), "None")
         self.reply("9B002A0267")
         self.assertEqual(self.label.text(), f"{ACE} (System)")
-        self.assertEqual(self.view.node_list.item(0).text(), "42 - CANACE3")
+        self.assertEqual(self.view.node_list.item(0).text(), "42 - CANACE3 (Online)")
         self.assertEqual(self.details.module_type.text(), "CANACE3")
         self.assertEqual(self.details.summary.title(), "Node 42 — CANACE3")
         self.assertEqual(self.label.toolTip(), str(self.system / ACE))
@@ -284,11 +284,19 @@ class NodeMdfDetailsTests(unittest.TestCase):
                 self.assertIsNone(self.view.node_list.currentItem())
                 self.assertEqual(self.details.node.node_number, 43)
                 self.assertEqual(self.label.text(), f"{GATE} (System)")
-                self.assertEqual(self.view.node_list.item(0).text(), "42 - CANACE3")
-                self.assertEqual(self.view.node_list.item(1).text(), "43 - CANGATE")
+                self.assertEqual(
+                    self.view.node_list.item(0).text(), "42 - CANACE3 (Online)"
+                )
+                self.assertEqual(
+                    self.view.node_list.item(1).text(), "43 - CANGATE (Online)"
+                )
                 self.view.finish_discovery(status)
-                self.assertEqual(self.view.node_list.item(0).text(), "42 - CANACE3")
-                self.assertEqual(self.view.node_list.item(1).text(), "43 - CANGATE")
+                self.assertEqual(
+                    self.view.node_list.item(0).text(), "42 - CANACE3 (Online)"
+                )
+                self.assertEqual(
+                    self.view.node_list.item(1).text(), "43 - CANGATE (Online)"
+                )
                 self.assertEqual(self.details.node.node_number, 43)
                 self.assertEqual(self.details.module_type.text(), "CANGATE")
                 self.assertEqual(self.details.summary.title(), "Node 43 — CANGATE")
@@ -296,13 +304,13 @@ class NodeMdfDetailsTests(unittest.TestCase):
 
         # Subsequent replies still resolve fresh firmware evidence for both nodes.
         self.reply("9B002A0703")
-        self.assertEqual(self.view.node_list.item(0).text(), "42 - CANACE3")
+        self.assertEqual(self.view.node_list.item(0).text(), "42 - CANACE3 (Online)")
         self.assertEqual(self.details.module_type.text(), "CANGATE")
         self.reply("9B002B0702")
-        self.assertEqual(self.view.node_list.item(1).text(), "43 - CANGATE")
+        self.assertEqual(self.view.node_list.item(1).text(), "43 - CANGATE (Online)")
         self.assertEqual(self.label.text(), "None")
         self.reply("9B002B0701")
-        self.assertEqual(self.view.node_list.item(1).text(), "43 - CANGATE")
+        self.assertEqual(self.view.node_list.item(1).text(), "43 - CANGATE (Online)")
         self.assertEqual(self.label.text(), f"{GATE} (System)")
 
     def test_cancmd_groups_display_confirmed_values(self):
@@ -354,7 +362,7 @@ class NodeMdfDetailsTests(unittest.TestCase):
         data["moduleName"] = "Custom ACE"
         override.write_text(json.dumps(data))
         self.discover()
-        self.assertEqual(self.view.node_list.item(0).text(), "42 - CANACE3")
+        self.assertEqual(self.view.node_list.item(0).text(), "42 - CANACE3 (Online)")
         self.assertEqual(self.details.module_type.text(), "CANACE3")
         self.assertEqual(self.label.text(), f"{ACE} (User)")
         self.assertEqual(self.label.toolTip(), str(override))
@@ -375,7 +383,7 @@ class NodeMdfDetailsTests(unittest.TestCase):
         self.assertEqual(self.label.text(), "None")
         self.assertEqual(self.label.toolTip(), "")
         self.assertEqual(self.details.firmware.text(), "2g")
-        self.assertEqual(self.view.node_list.item(0).text(), "42 - CANACE3")
+        self.assertEqual(self.view.node_list.item(0).text(), "42 - CANACE3 (Online)")
         self.assertEqual(self.details.module_type.text(), "CANACE3")
         self.assertEqual(self.details.details_page.module_identifier.text(), "A504")
         self.assertIs(self.details.variables.currentWidget(), self.details.raw_values)
@@ -392,24 +400,28 @@ class NodeMdfDetailsTests(unittest.TestCase):
                     json.dumps({"moduleName": "Descriptor only", "nodeVariables": []})
                 )
                 self.discover(module=module_type)
-                self.assertEqual(self.view.node_list.item(0).text(), f"42 - {expected}")
+                self.assertEqual(
+                    self.view.node_list.item(0).text(), f"42 - {expected} (Online)"
+                )
                 self.assertEqual(self.details.module_type.text(), expected)
                 self.assertEqual(self.label.text(), f"{filename} (System)")
                 (self.system / filename).unlink()
                 self.view.refresh_state(42)
                 fallback = "251" if module_type == 251 else expected
-                self.assertEqual(self.view.node_list.item(0).text(), f"42 - {fallback}")
+                self.assertEqual(
+                    self.view.node_list.item(0).text(), f"42 - {fallback} (Online)"
+                )
                 self.assertEqual(self.details.module_type.text(), fallback)
                 self.assertEqual(self.label.text(), "None")
 
     def test_no_matching_mdf_retains_translated_module_name(self):
         self.reply("B6002AA52004")
-        self.assertEqual(self.view.node_list.item(0).text(), "42 - CANMIO")
+        self.assertEqual(self.view.node_list.item(0).text(), "42 - CANMIO (Online)")
         self.assertEqual(self.details.module_type.text(), "-")
 
         self.discover(module=32)
         self.view.refresh_state(42)
-        self.assertEqual(self.view.node_list.item(0).text(), "42 - CANMIO")
+        self.assertEqual(self.view.node_list.item(0).text(), "42 - CANMIO (Online)")
         self.assertEqual(self.details.module_type.text(), "CANMIO")
         self.assertEqual(self.label.text(), "None")
         self.assertIs(self.details.variables.currentWidget(), self.details.raw_values)
@@ -422,11 +434,11 @@ class NodeMdfDetailsTests(unittest.TestCase):
         self.assertEqual(self.label.text(), f"{ACE} (System)")
         self.view.node_list.setCurrentRow(1)
         self.assertEqual(self.label.text(), f"{GATE} (System)")
-        self.assertEqual(self.view.node_list.item(1).text(), "43 - CANGATE")
+        self.assertEqual(self.view.node_list.item(1).text(), "43 - CANGATE (Online)")
         self.assertEqual(self.details.module_type.text(), "CANGATE")
         self.assertEqual(self.label.toolTip(), str(self.system / GATE))
         self.reply("9B002A0703")  # Unselected node changes firmware.
-        self.assertEqual(self.view.node_list.item(0).text(), "42 - CANACE3")
+        self.assertEqual(self.view.node_list.item(0).text(), "42 - CANACE3 (Online)")
         self.assertEqual(self.label.text(), f"{GATE} (System)")
         self.view.node_list.setCurrentRow(0)
         self.assertEqual(self.label.text(), "None")
@@ -475,7 +487,7 @@ class NodeMdfDetailsTests(unittest.TestCase):
         self.details.cbus_service = None
         self.view.clear_identities()
         self.view.show_saved_nodes("yard")
-        self.assertEqual(self.view.node_list.item(0).text(), "42 (offline)")
+        self.assertEqual(self.view.node_list.item(0).text(), "42 (Offline)")
         self.assertEqual(self.details.module_type.text(), "CANACE3")
         self.assertIsNone(self.details.live_state)
         self.assertEqual(self.details.status.text(), "Offline")

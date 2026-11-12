@@ -45,6 +45,151 @@ class CbusServiceTests(unittest.TestCase):
         )
         self.service.node_state_updated.connect(self.state_updates.append)
 
+    def tearDown(self):
+        # Qt keeps parented services alive; don't leave polling into later UI tests.
+        if not self.service._closed:
+            self.service.close()
+
+    def test_presence_from_pnn_and_disconnect_without_initial_scan(self):
+        app = QApplication.instance() or QApplication([])
+        self.connection.state = "Connected"
+        self.service.presence = {258: False, 259: False}
+        self.service.discover_nodes()
+        self.assertEqual(self.connection.sent, [b":SBFC0N0D;"])
+        self.connection.frame_received.emit(b":SB040NB601020D2203;")
+        self.assertTrue(self.service.presence[258])
+        self.assertFalse(self.service.presence[259])
+        self.service.set_presence(258, False)
+        # A repeated PNN is still fresh evidence, even with unchanged identity.
+        self.connection.frame_received.emit(b":SB040NB601020D2203;")
+        self.assertTrue(self.service.presence[258])
+        self.service.close()
+        self.assertEqual(self.service.presence, {258: False, 259: False})
+        app.processEvents()
+
+    def test_periodic_presence_failure_recovery_and_bounded_requests(self):
+        app = QApplication.instance() or QApplication([])
+        self.connection.state = "Connected"
+        self.service.presence = {258: True, 259: False}
+        with patch.object(cbus_service.response_timeout, "RESPONSE_TIMEOUT_MS", 20):
+            self.service.poll_presence()
+            for _ in range(20):
+                self.service.poll_presence()
+            self.assertEqual(self.connection.sent, [b":SBFC0N73010203;"])
+            self.service.polling_allowed = lambda: False
+            QTest.qWait(30)
+            self.assertFalse(self.service.presence[258])
+            self.assertEqual(len(self.connection.sent), 1)
+            self.service.polling_allowed = lambda: True
+            self.service.poll_presence()
+            self.assertEqual(self.connection.sent[-1], b":SBFC0N73010303;")
+            self.connection.frame_received.emit(b":SB040N9B01030322;")
+            self.assertTrue(self.service.presence[259])
+            self.service.poll_presence()
+            self.connection.frame_received.emit(b":SB040N9B01020322;")
+            self.assertTrue(self.service.presence[258])
+            self.connection.frame_received.emit(b":SB040N9B01030322;")
+            # Repeated ticks did not leave extra passes queued behind this one.
+            self.assertEqual(len(self.connection.sent), 4)
+            app.processEvents()
+            self.assertNotEqual(
+                self.service.discovery_status, "Discovering configuration…"
+            )
+
+    def test_repeated_poll_ticks_keep_only_one_queued_or_outstanding_request(self):
+        app = QApplication.instance() or QApplication([])
+        self.connection.state = "Connected"
+        self.service.presence = {258: False, 259: False}
+        frames = [b":SBFC0N73010203;", b":SBFC0N73010303;"]
+
+        with patch.object(cbus_service.response_timeout, "RESPONSE_TIMEOUT_MS", 50):
+            self.service.poll_presence()
+            for sent_count, number in enumerate((258, 259), start=1):
+                # Check both paths: another node remains to poll, then the last
+                # node is outstanding and the list of remaining nodes is empty.
+                for _ in range(20):
+                    self.service.poll_presence()
+                    polls = [
+                        request
+                        for request in self.service._request_queue
+                        if request[0] == "poll"
+                    ]
+                    outstanding = self.service._outstanding_request
+                    if outstanding is not None and outstanding[0] == "poll":
+                        polls.append(outstanding)
+                    self.assertEqual(polls, [("poll", number, 3)])
+                    self.assertEqual(self.connection.sent, frames[:sent_count])
+                if number == 258:
+                    self.connection.frame_received.emit(b":SB040N9B01020322;")
+
+            # The last node times out; no extra requests accumulated behind it.
+            QTest.qWait(80)
+            self.assertIsNone(self.service._outstanding_request)
+            self.assertFalse(
+                any(request[0] == "poll" for request in self.service._request_queue)
+            )
+            self.assertEqual(self.connection.sent, frames)
+            # The next opportunity starts just one fresh request.
+            self.service.poll_presence()
+            self.assertEqual(self.service._outstanding_request, ("poll", 258, 3))
+            self.assertFalse(
+                any(request[0] == "poll" for request in self.service._request_queue)
+            )
+            self.assertEqual(self.connection.sent, frames + frames[:1])
+            app.processEvents()
+
+    def test_poll_interval_changes_disable_pending_polls_and_are_per_connection(self):
+        app = QApplication.instance() or QApplication([])
+        self.connection.state = "Connected"
+        self.service.presence = {258: True, 259: False}
+        other_connection = ConnectionStub("Other Layout")
+        other_connection.state = "Connected"
+        other = CbusService(other_connection, 125)
+        other.presence = {300: False}
+        self.addCleanup(other.close)
+        other.set_node_poll_seconds(0)
+        self.service.set_node_poll_seconds(1)
+        QTest.qWait(1150)
+        self.assertEqual(self.connection.sent, [b":SBFC0N73010203;"])
+        self.assertEqual(other_connection.sent, [])
+
+        # Disable while a read is in flight: it drains, but no next poll is sent.
+        self.service.set_node_poll_seconds(0)
+        self.connection.frame_received.emit(b":SB040N9B01020322;")
+        self.assertTrue(self.service.presence[258])
+        self.assertEqual(len(self.connection.sent), 1)
+        # Explicit Restore presence checks remain available with polling disabled.
+        self.service.check_presence([259])
+        self.connection.frame_received.emit(b":SB040N9B01030322;")
+        other.set_node_poll_seconds(1)
+        QTest.qWait(1150)
+        self.assertEqual(len(self.connection.sent), 2)
+        self.assertEqual(other_connection.sent, [b":SBFA0N73012C03;"])
+        other_connection.frame_received.emit(b":SB040N9B012C0322;")
+        self.assertTrue(other.presence[300])
+        app.processEvents()
+
+    def test_polling_defers_to_discovery_editing_and_explicit_presence_checks(self):
+        app = QApplication.instance() or QApplication([])
+        self.connection.state = "Connected"
+        self.service.presence = {258: False, 259: False}
+        self.service.polling_allowed = lambda: False
+        self.service.poll_presence()
+        self.assertEqual(self.connection.sent, [])
+        self.service.polling_allowed = lambda: True
+        with patch.object(cbus_service.response_timeout, "RESPONSE_TIMEOUT_MS", 20):
+            self.service.discover_nodes()
+            self.service.poll_presence()
+            self.assertEqual(self.connection.sent, [b":SBFC0N0D;"])
+            QTest.qWait(30)
+            self.service.check_presence([259])
+            for _ in range(20):
+                self.service.poll_presence()
+            self.assertEqual(self.connection.sent[-1], b":SBFC0N73010303;")
+            self.connection.frame_received.emit(b":SB040N9B01030322;")
+            self.assertEqual(len(self.connection.sent), 2)
+            app.processEvents()
+
     def test_discovery_status_waits_for_qnn_and_reply_triggered_phases(self):
         app = QApplication.instance() or QApplication([])
         with patch.object(cbus_service.response_timeout, "RESPONSE_TIMEOUT_MS", 30):

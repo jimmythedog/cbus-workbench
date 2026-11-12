@@ -51,30 +51,30 @@ class NodeDetailsFormTests(unittest.TestCase):
         view.state_lookup = states.get
         view.show_identity(first.identity)
         selected = view.node_list.currentItem()
-        self.assertEqual(selected.text(), "258 - CANMIO")
+        self.assertEqual(selected.text(), "258 - CANMIO (Online)")
         self.assertEqual(view.details.summary.title(), "Node 258 — CANMIO")
         view.show_identity(second.identity)
         self.assertIs(view.node_list.currentItem(), selected)
-        self.assertEqual(view.node_list.item(1).text(), "259 - EMPTY")
+        self.assertEqual(view.node_list.item(1).text(), "259 - EMPTY (Online)")
 
         # An update to an unselected node must not replace the selected details.
         second.identity = Pnn(259, 165, 32, 5)
         second.parameters[3] = 32
         view.refresh_state(259)
-        self.assertEqual(view.node_list.item(1).text(), "259 - CANMIO")
+        self.assertEqual(view.node_list.item(1).text(), "259 - CANMIO (Online)")
         self.assertIs(view.node_list.currentItem(), selected)
         self.assertEqual(view.details.summary.title(), "Node 258 — CANMIO")
 
         first.identity = Pnn(258, 1, 32, 5)
         view.refresh_state(258)
-        self.assertEqual(selected.text(), "258 - 32")
+        self.assertEqual(selected.text(), "258 - 32 (Online)")
         self.assertEqual(view.details.summary.title(), "Node 258 — CANMIO")
         self.assertEqual(selected.data(Qt.ItemDataRole.UserRole).module_type, 32)
         self.assertIs(view.node_list.currentItem(), selected)
 
         first.identity = Pnn(258, 165, 32, 5)
         view.show_identity(first.identity)
-        self.assertEqual(selected.text(), "258 - CANMIO")
+        self.assertEqual(selected.text(), "258 - CANMIO (Online)")
         self.assertEqual(view.details.summary.title(), "Node 258 — CANMIO")
         self.assertIs(view.node_list.currentItem(), selected)
         view.node_list.setCurrentRow(1)
@@ -82,7 +82,7 @@ class NodeDetailsFormTests(unittest.TestCase):
         view.details.show_node(None)
         self.assertEqual(view.details.summary.title(), "Node details")
         self.select(260)
-        self.assertEqual(self.details.summary.title(), "Node 260 (offline)")
+        self.assertEqual(self.details.summary.title(), "Node 260")
 
     def test_confirmed_identity_names_and_unknown_fallbacks(self):
         for manufacturer, module_type, name, module, identifier in (

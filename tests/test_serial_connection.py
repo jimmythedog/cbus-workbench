@@ -472,7 +472,7 @@ class SerialLayoutTests(unittest.TestCase):
     def test_changing_serial_device_path_after_disconnect_replaces_connection(self):
         self.window.connect_layout()
         port = FakeSerialPort.ports[-1]
-        self.assertFalse(self.window.edit_action.isEnabled())
+        self.assertTrue(self.window.edit_action.isEnabled())
         self.window.disconnect_layout()
         updated = self.window.layout_settings["Home"].copy()
         updated["serial_port"] = "/dev/ttyACM1"

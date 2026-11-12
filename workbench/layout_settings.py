@@ -5,11 +5,11 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QGroupBox,
+    QLayout,
     QLineEdit,
+    QSizePolicy,
     QSpinBox,
-    QStackedWidget,
     QVBoxLayout,
-    QWidget,
 )
 
 
@@ -26,6 +26,8 @@ class LayoutSettingsDialog(QDialog):
         serial_port="/dev/ttyACM0",
         can_id=126,
         auto_connect=False,
+        node_poll_seconds=10,
+        connection_active=False,
     ):
         super().__init__(parent)
         self.setWindowTitle("Layout settings")
@@ -53,6 +55,28 @@ class LayoutSettingsDialog(QDialog):
         self.can_id_spin.setRange(100, 127)
         self.can_id_spin.setValue(can_id)
 
+        self.node_poll_spin = QSpinBox()
+        self.node_poll_spin.setRange(0, 300)
+        self.node_poll_spin.setSingleStep(5)
+        self.node_poll_spin.setValue(node_poll_seconds)
+        self.node_poll_spin.setToolTip(
+            "Seconds between node reachability checks. Zero disables periodic polling."
+        )
+
+        # QLineEdit's default hint fits only a short string. Give names and
+        # endpoints room for a full hostname, measured in the current font rather
+        # than fixed pixels. minimumSizeHint includes the field's frame/margins.
+        for field in (self.name_edit, self.host_edit, self.serial_port_edit):
+            field.setSizePolicy(
+                QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Fixed
+            )
+            field.setMinimumWidth(
+                field.fontMetrics().horizontalAdvance(
+                    "my-railway-gridconnect-hub.example.com"
+                )
+                + field.minimumSizeHint().width()
+            )
+
         layout_form = QFormLayout()
         layout_form.addRow("Name:", self.name_edit)
         layout_form.addRow("Logical layout:", self.logical_layout_combo)
@@ -61,31 +85,34 @@ class LayoutSettingsDialog(QDialog):
         layout_form.addRow(self.auto_connect_check)
 
         connection_group = QGroupBox("Connection")
-        connection_form = QFormLayout(connection_group)
-        connection_form.addRow("Type:", self.connection_type_combo)
+        self.connection_form = QFormLayout(connection_group)
+        self.connection_form.addRow("Type:", self.connection_type_combo)
+        self.connection_form.addRow("Host:", self.host_edit)
+        self.connection_form.addRow("Port:", self.port_spin)
+        self.connection_form.addRow("Port:", self.serial_port_edit)
+        self.connection_form.addRow("CAN ID:", self.can_id_spin)
 
-        self.tcp_fields = QWidget()
-        tcp_form = QFormLayout(self.tcp_fields)
-        tcp_form.setContentsMargins(0, 0, 0, 0)
-        tcp_form.addRow("Host:", self.host_edit)
-        tcp_form.addRow("Port:", self.port_spin)
+        advanced_group = QGroupBox("Advanced")
+        advanced_form = QFormLayout(advanced_group)
+        advanced_form.addRow("Node polling (seconds):", self.node_poll_spin)
+        for form in (layout_form, self.connection_form, advanced_form):
+            form.setFieldGrowthPolicy(
+                QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+            )
 
-        self.serial_fields = QWidget()
-        serial_form = QFormLayout(self.serial_fields)
-        serial_form.setContentsMargins(0, 0, 0, 0)
-        serial_form.addRow("Port:", self.serial_port_edit)
-
-        self.connection_fields = QStackedWidget()
-        self.connection_fields.addWidget(self.tcp_fields)
-        self.connection_fields.addWidget(self.serial_fields)
-
-        connection_form.addRow(self.connection_fields)
-        connection_form.addRow("CAN ID:", self.can_id_spin)
-
-        self.connection_type_combo.currentTextChanged.connect(
-            self.update_connection_fields
-        )
-        self.update_connection_fields(connection_type)
+        if connection_active:
+            # Only the polling interval can change while the transport is active.
+            for field in (
+                self.name_edit,
+                self.logical_layout_combo,
+                self.auto_connect_check,
+                self.connection_type_combo,
+                self.host_edit,
+                self.port_spin,
+                self.serial_port_edit,
+                self.can_id_spin,
+            ):
+                field.setEnabled(False)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -94,12 +121,25 @@ class LayoutSettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
 
         main_layout = QVBoxLayout(self)
+        main_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         main_layout.addLayout(layout_form)
         main_layout.addWidget(connection_group)
+        main_layout.addWidget(advanced_group)
+        main_layout.addStretch()
         main_layout.addWidget(buttons)
 
+        self.connection_type_combo.currentTextChanged.connect(
+            self.update_connection_fields
+        )
+        self.update_connection_fields(connection_type)
+
     def update_connection_fields(self, connection_type):
-        self.connection_fields.setCurrentIndex(0 if connection_type == "TCP/IP" else 1)
+        # Unlike a stack, hidden form rows contribute neither height nor spacing.
+        tcp = connection_type == "TCP/IP"
+        self.connection_form.setRowVisible(self.host_edit, tcp)
+        self.connection_form.setRowVisible(self.port_spin, tcp)
+        self.connection_form.setRowVisible(self.serial_port_edit, not tcp)
+        self.adjustSize()
 
     def settings(self):
         return {
@@ -111,4 +151,5 @@ class LayoutSettingsDialog(QDialog):
             "serial_port": self.serial_port_edit.text().strip(),
             "can_id": self.can_id_spin.value(),
             "auto_connect": self.auto_connect_check.isChecked(),
+            "node_poll_seconds": self.node_poll_spin.value(),
         }

@@ -26,7 +26,12 @@ def _validate_layout(name: object, value: object) -> dict:
         raise SettingsError("Layout names must be non-empty strings")
     if not isinstance(value, dict):
         raise SettingsError(f"Layout '{name}' must be a mapping")
-    if set(value) - {"logical_layout", "auto_connect", "connection"}:
+    if set(value) - {
+        "logical_layout",
+        "auto_connect",
+        "connection",
+        "node_poll_seconds",
+    }:
         raise SettingsError(f"Layout '{name}' has unsupported fields")
     logical_layout = value.get("logical_layout")
     if (
@@ -42,6 +47,12 @@ def _validate_layout(name: object, value: object) -> dict:
     auto_connect = value.get("auto_connect", False)
     if not isinstance(auto_connect, bool):
         raise SettingsError(f"Layout '{name}' needs a Boolean auto_connect")
+
+    node_poll_seconds = value.get("node_poll_seconds", 10)
+    if type(node_poll_seconds) is not int or not 0 <= node_poll_seconds <= 300:
+        raise SettingsError(
+            f"Layout '{name}' node polling seconds must be from 0 to 300"
+        )
 
     connection = value.get("connection")
     if not isinstance(connection, dict):
@@ -71,6 +82,7 @@ def _validate_layout(name: object, value: object) -> dict:
     return {
         "logical_layout": logical_layout,
         "auto_connect": auto_connect,
+        "node_poll_seconds": node_poll_seconds,
         "connection": {**connection, "can_id": can_id},
     }
 
@@ -123,6 +135,7 @@ def layout_settings_for_ui(stored_layouts: dict[str, dict]) -> dict[str, dict]:
             "serial_port": saved["connection"]["serial_port"],
             "can_id": saved["connection"]["can_id"],
             "auto_connect": saved["auto_connect"],
+            "node_poll_seconds": saved.get("node_poll_seconds", 10),
         }
         for name, saved in stored_layouts.items()
     }
@@ -134,6 +147,7 @@ def layout_settings_for_storage(layouts: dict[str, dict]) -> dict[str, dict]:
         name: {
             "logical_layout": settings["logical_layout"],
             "auto_connect": settings["auto_connect"],
+            "node_poll_seconds": settings.get("node_poll_seconds", 10),
             "connection": {
                 "type": settings["connection_type"],
                 "host": settings["host"],

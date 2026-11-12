@@ -42,8 +42,12 @@ The summary to the right of **Nodes | Events | Backups** shows the selected
 layout name and configured host/port or serial device, plus CAN ID. Hover over
 it to read the full summary when space is limited.
 
-Select a layout in the **Layout** menu. **Edit…** and **Delete…** are available
-only when its connection is closed. Layout changes are saved for the next session.
+Select a layout in the **Layout** menu. **Edit…** opens Layout Settings.
+**Node polling (seconds)** sets this connection's reachability interval from 0 to
+300 seconds (default 10); zero disables periodic polling. Changes apply when
+you save, without reconnecting, and are saved for the next session. While a
+connection is active, only the polling interval is editable. **Delete…** and
+changes to connection settings require the connection to be closed.
 The first layout becomes the startup default. Choose **Layout → Set as default**
 to change it. A star marks the default; the radio indicator marks the current
 selection. Selecting a layout during a session does not change the default.
@@ -56,9 +60,16 @@ looks for nodes and reads their configuration. Discovered nodes appear in the
 selected layout's **Nodes** navigator; values fill in as replies arrive.
 Choose **Layout → Disconnect** to close the connection.
 
-Reconnecting starts fresh discovery. A node that does not reply may be missing
-from the list. If a read fails or times out, confirmed values remain visible and
+Known nodes remain in the navigator and start Offline. Normal discovery marks
+responding nodes Online. While connected, Workbench checks known nodes roughly
+at the configured interval (default 10 seconds), deferring checks during
+discovery, editing and restore.
+One failed check marks Offline; a successful check marks Online again.
+Disconnect marks every node Offline. Status is runtime-only and is not saved.
+
+If a configuration read fails or times out, confirmed values remain visible and
 Workbench continues with other nodes. Reconnect to try discovery again.
+Online status does not replace Restore's fresh pre-write safety checks.
 
 ## Observed events
 
@@ -165,9 +176,10 @@ an invalid user override does not silently fall back to a system file.
 The selected MDF also supplies NV forms when its presentation constructs
 are supported. Supported EV controls appear beside the raw values in consumed events.
 
-**Online** means the node was discovered during the current connection; Workbench
-does not continually poll its liveness. Disconnected nodes show **Offline**;
-connected nodes without discovery evidence show `-` for status.
+**Online** means the node responded during discovery or its latest presence check.
+Known nodes start **Offline** and return to Offline after one failed check or
+when the layout disconnects. Disabling periodic polling keeps the last status
+until fresh evidence arrives or the layout disconnects.
 
 ## Editing node variables (NVs)
 

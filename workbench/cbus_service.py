@@ -66,6 +66,7 @@ class NodeState:
 
 
 class CbusService(QObject):
+    presence_changed = Signal(int, bool)
     presence_checked = Signal(int, bool, int)  # Node, responded, module type.
     node_refresh_finished = Signal(int)
     discovery_status_changed = Signal(str)
@@ -83,6 +84,13 @@ class CbusService(QObject):
         super().__init__(connection)
         self.connection = connection
         self.can_id = can_id
+        self.presence: dict[int, bool] = {}
+        self.polling_allowed = lambda: True
+        self._poll_pending: deque[int] = deque()
+        self._poll_timer = QTimer(self)
+        self.node_poll_seconds = 10
+        self._poll_timer.setInterval(self.node_poll_seconds * 1000)
+        self._poll_timer.timeout.connect(self.poll_presence)
         self.nodes: dict[int, Pnn] = {}
         self.node_states: dict[int, NodeState] = {}
         self._request_queue: deque[tuple[str, int, RequestIndex]] = deque()
@@ -118,6 +126,10 @@ class CbusService(QObject):
     def close(self) -> None:
         """Stop observing frames when this connection's live state ends."""
         self._closed = True
+        self._poll_timer.stop()
+        self._poll_pending.clear()
+        for number in self.presence:
+            self.set_presence(number, False)
         self._discovery_window.stop()
         self._status_update.stop()
         self._set_discovery_status(DiscoveryStatus.DISCONNECTED)
@@ -159,7 +171,10 @@ class CbusService(QObject):
             return
         if (
             self._discovery_window.isActive()
-            or self._outstanding_request is not None
+            or (
+                self._outstanding_request is not None
+                and self._outstanding_request[0] != "poll"
+            )
             or self._request_queue
             or self.restore.active
             or self.nv_write.active
@@ -230,6 +245,8 @@ class CbusService(QObject):
 
     def discover_nodes(self) -> None:
         """Queue one QNN request; PNN responses arrive independently by signal."""
+        if self.node_poll_seconds:
+            self._poll_timer.start()
         self._set_discovery_status(DiscoveryStatus.DISCOVERING)
         self._discovery_window.start(response_timeout.RESPONSE_TIMEOUT_MS)
         # The guide specifies major priority bits 0b10 and minor priority
@@ -287,6 +304,87 @@ class CbusService(QObject):
             or self._request_queue
             or self.refreshing_node is not None
         )
+
+    def set_presence(self, number: int, online: bool) -> None:
+        """Record runtime evidence independently of discovery/configuration data."""
+        previous = self.presence.get(number, False)
+        self.presence[number] = online
+        if previous != online:
+            trace(
+                logger,
+                "Node presence changed",
+                extra={
+                    "fields": {
+                        "layout": self.connection.layout_name,
+                        "node_number": number,
+                        "online": online,
+                    }
+                },
+            )
+            self.presence_changed.emit(number, online)
+
+    def set_node_poll_seconds(self, seconds: int) -> None:
+        """Apply a layout's interval without interrupting an in-flight read."""
+        if type(seconds) is not int or not 0 <= seconds <= 300:
+            raise ValueError("Node polling seconds must be from 0 to 300")
+        self.node_poll_seconds = seconds
+        self._poll_timer.stop()
+        if seconds:
+            self._poll_timer.setInterval(seconds * 1000)
+            if not self._closed:
+                self._poll_timer.start()
+        else:
+            self._poll_pending.clear()
+        trace(
+            logger,
+            "Node polling interval changed",
+            extra={
+                "fields": {
+                    "layout": self.connection.layout_name,
+                    "seconds": seconds,
+                }
+            },
+        )
+
+    def poll_presence(self) -> None:
+        """Start at most one bounded pass; busy periods skip this opportunity."""
+        if self._poll_pending:
+            self._send_next_poll()
+            return
+        if not self._poll_idle():
+            trace(
+                logger,
+                "Presence polling deferred",
+                extra={
+                    "fields": {
+                        "layout": self.connection.layout_name,
+                    }
+                },
+            )
+            return
+        self._poll_pending.extend(sorted(self.presence))
+        self._send_next_poll()
+
+    def _poll_idle(self) -> bool:
+        return (
+            not self._closed
+            and self.node_poll_seconds > 0
+            and self.connection.state == "Connected"
+            and not self._discovery_window.isActive()
+            and not self.discovery_pending()
+            and not self.writes_busy()
+            and self.polling_allowed()
+        )
+
+    def _send_next_poll(self) -> None:
+        # Keep only one poll on the shared wire. Critical work always goes first.
+        if self._poll_pending and self._poll_idle():
+            number = self._poll_pending.popleft()
+            if number not in self.presence:
+                self._send_next_poll()
+                return
+            self._request_queue.append(("poll", number, 3))
+            self._send_next_request()
 
     def check_presence(self, numbers) -> None:
         """Queue read-only RQNPN(3) checks without starting discovery."""
@@ -548,7 +646,7 @@ class CbusService(QObject):
     def _set_progress(
         self, kind: str, node_number: int, progress: DiscoveryProgress
     ) -> None:
-        if kind == "presence":
+        if kind in ("presence", "poll"):
             return
         state = self.node_states[node_number]
         if kind == "parameter":
@@ -702,6 +800,7 @@ class CbusService(QObject):
                 self._receive_cmderr(cmderr.node_number, cmderr.code)
             return
 
+        self.set_presence(pnn.node_number, True)
         previous = self.nodes.get(pnn.node_number)
         # PNN identifies the sender; event node numbers may identify another node.
         can_id = (int(frame[2:6], 16) >> 5) & 0x7F
@@ -756,7 +855,10 @@ class CbusService(QObject):
             self.node_state_updated.emit(pnn.node_number)
 
     def _receive_paran(self, node_number: int, index: int, value: int) -> None:
-        if index == 3 and self._outstanding_request == ("presence", node_number, 3):
+        if index == 3 and self._outstanding_request in (
+            ("presence", node_number, 3),
+            ("poll", node_number, 3),
+        ):
             self._request_timer.stop()
             self._outstanding_request = None
             trace(
@@ -770,6 +872,7 @@ class CbusService(QObject):
                     }
                 },
             )
+            self.set_presence(node_number, True)
             self.presence_checked.emit(node_number, True, value)
             self._send_next_request()
             return
@@ -1137,7 +1240,10 @@ class CbusService(QObject):
     def _send_next_request(self) -> None:
         # Starts are synchronous so UI work cannot delay the first reply's next
         # request. Completion stays deferred until chained operations have queued.
-        if not self._closed and (self._request_queue or self.writes_busy()):
+        if not self._closed and (
+            any(kind != "poll" for kind, *_ in self._request_queue)
+            or self.writes_busy()
+        ):
             self._set_discovery_status(DiscoveryStatus.DISCOVERING)
         self._status_update.start(0)
         if self._outstanding_request is not None:
@@ -1168,11 +1274,11 @@ class CbusService(QObject):
             else:
                 fields[
                     "parameter_index"
-                    if kind in ("parameter", "presence")
+                    if kind in ("parameter", "presence", "poll")
                     else "nv_index"
                 ] = index
             try:
-                if kind in ("parameter", "presence"):
+                if kind in ("parameter", "presence", "poll"):
                     self.request_parameter(node_number, index)
                 elif kind == "nv":
                     self.request_nv(node_number, index)
@@ -1191,7 +1297,8 @@ class CbusService(QObject):
                 )
                 logger.error("Automatic requests stopped", extra={"fields": fields})
                 self._set_progress(kind, node_number, DiscoveryProgress.INCOMPLETE)
-                if kind == "presence":
+                if kind in ("presence", "poll"):
+                    self.set_presence(node_number, False)
                     self.presence_checked.emit(node_number, False, 0)
                 if kind == "parameter":
                     self._queue_event_count(node_number)
@@ -1209,6 +1316,8 @@ class CbusService(QObject):
             number = self.refreshing_node
             self.refreshing_node = None
             self.node_refresh_finished.emit(number)
+
+        self._send_next_poll()
 
     def _finish_ev_refresh_if_idle(self) -> None:
         writer = self.ev_write
@@ -1296,14 +1405,17 @@ class CbusService(QObject):
                 )
         else:
             fields[
-                "parameter_index" if kind in ("parameter", "presence") else "nv_index"
+                "parameter_index"
+                if kind in ("parameter", "presence", "poll")
+                else "nv_index"
             ] = index
         logger.warning(
             "Automatic request timed out; remaining requests of this kind abandoned",
             extra={"fields": fields},
         )
         self._set_progress(kind, node_number, DiscoveryProgress.INCOMPLETE)
-        if kind == "presence":
+        if kind in ("presence", "poll"):
+            self.set_presence(node_number, False)
             self.presence_checked.emit(node_number, False, 0)
         if kind == "parameter":
             self._queue_event_count(node_number)

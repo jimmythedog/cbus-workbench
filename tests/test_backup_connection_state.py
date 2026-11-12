@@ -8,10 +8,11 @@ from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication, QTreeWidget
 
-from workbench.cbus_service import NodeState
+from workbench.cbus_service import CbusService, NodeState
 from workbench.layout_view import LayoutView
 from workbench.node_backup_files import node_backup, save_backup
 from workbench.pnn import Pnn
+from workbench.tcp_connection import TcpConnection
 
 
 class BackupConnectionTests(unittest.TestCase):
@@ -65,9 +66,9 @@ class BackupConnectionTests(unittest.TestCase):
         self.select_backups()
         self.assert_buttons(False, False)
         self.assertEqual(
-            self.view.node_view.node_list.currentItem().text(), "42 (offline)"
+            self.view.node_view.node_list.currentItem().text(), "42 (Offline)"
         )
-        self.assertEqual(self.details.summary.title(), "Node 42 (offline)")
+        self.assertEqual(self.details.summary.title(), "Node 42")
         titles = []
 
         def inspect(dialog):
@@ -102,7 +103,7 @@ class BackupConnectionTests(unittest.TestCase):
         self.assert_buttons(True, True)
         self.assertEqual(
             self.view.node_view.node_list.currentItem().text(),
-            f"42 - {self.state.identity.module_type}",
+            f"42 - {self.state.identity.module_type} (Online)",
         )
         self.assertEqual(
             self.details.summary.title(),
@@ -116,9 +117,9 @@ class BackupConnectionTests(unittest.TestCase):
         self.assertIsNone(self.details.live_state)
         self.assert_buttons(False, False)
         self.assertEqual(
-            self.view.node_view.node_list.currentItem().text(), "42 (offline)"
+            self.view.node_view.node_list.currentItem().text(), "42 (Offline)"
         )
-        self.assertEqual(self.details.summary.title(), "Node 42 (offline)")
+        self.assertEqual(self.details.summary.title(), "Node 42")
         self.view.node_view.state_lookup = lambda number: self.state
         self.states.append(self.state)
         self.view.set_connected(True)
@@ -127,7 +128,7 @@ class BackupConnectionTests(unittest.TestCase):
         self.assert_buttons(True, True)
         self.assertEqual(
             self.view.node_view.node_list.currentItem().text(),
-            f"42 - {self.state.identity.module_type}",
+            f"42 - {self.state.identity.module_type} (Online)",
         )
         self.assertEqual(
             self.details.summary.title(),
@@ -142,6 +143,10 @@ class BackupConnectionTests(unittest.TestCase):
         self.assertEqual(len(titles), 4)
 
     def test_node_connection_details_follow_discovery_and_disconnect(self):
+        service = CbusService(TcpConnection("yard", self.view), 126)
+        self.addCleanup(service.close)
+        self.details.cbus_service = service
+        service.presence_changed.connect(self.view.node_view.refresh_presence)
         self.state.parameters[10] = 1
 
         def assert_details(can_id, status):
@@ -155,12 +160,19 @@ class BackupConnectionTests(unittest.TestCase):
 
         assert_details("-", "Offline")
         self.view.set_connected(True)
-        assert_details("-", "-")
+        assert_details("-", "Offline")
         self.view.node_view.show_identity(self.state.identity)
-        assert_details("-", "-")
+        assert_details("-", "Offline")
         self.view.node_view.state_lookup = lambda number: self.state
         self.view.node_view.refresh_state(42)
+        service.set_presence(42, True)
         assert_details("-", "Online")
+        self.assertIn("(Online)", self.view.node_view.node_list.currentItem().text())
+        service.set_presence(42, False)
+        assert_details("-", "Offline")
+        self.assertIn("(Offline)", self.view.node_view.node_list.currentItem().text())
+        service.set_presence(42, True)
+
         self.state.can_id = 7
         self.state.stored_event_count = 4
         self.view.node_view.refresh_state(42)

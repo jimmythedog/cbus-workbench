@@ -258,20 +258,28 @@ class LayoutPersistenceTests(unittest.TestCase):
                 self.assertIn("Could not delete layout", critical.call_args.args[2])
                 assert_unchanged()
 
-    def test_active_and_open_error_connections_block_edit_and_delete(self):
+    def test_active_connections_allow_polling_edits_but_block_connection_changes_and_delete(
+        self,
+    ):
         window = self.open_window(sample_settings())
         for state in ("Connecting", "Connected"):
             with self.subTest(state=state):
                 window.set_connection_state("Home", state)
-                self.assertFalse(window.edit_action.isEnabled())
+                self.assertTrue(window.edit_action.isEnabled())
                 self.assertFalse(window.delete_action.isEnabled())
+
+                def inspect(dialog):
+                    self.assertFalse(dialog.name_edit.isEnabled())
+                    self.assertFalse(dialog.can_id_spin.isEnabled())
+                    self.assertTrue(dialog.node_poll_spin.isEnabled())
+                    return QDialog.DialogCode.Rejected
+
                 with (
-                    patch.object(LayoutSettingsDialog, "exec") as edit_dialog,
+                    patch.object(LayoutSettingsDialog, "exec", inspect),
                     patch.object(QMessageBox, "question") as delete_dialog,
                 ):
                     window.edit_layout()
                     window.delete_layout()
-                edit_dialog.assert_not_called()
                 delete_dialog.assert_not_called()
 
         connection = Mock()
@@ -280,7 +288,7 @@ class LayoutPersistenceTests(unittest.TestCase):
         )
         window.connections["Home"] = connection
         window.set_connection_state("Home", "Error")
-        self.assertFalse(window.edit_action.isEnabled())
+        self.assertTrue(window.edit_action.isEnabled())
         self.assertFalse(window.delete_action.isEnabled())
         window.delete_layout()
         self.assertIn("Home", window.layouts)

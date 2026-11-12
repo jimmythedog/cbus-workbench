@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtNetwork import QAbstractSocket
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QDockWidget,
     QFrame,
@@ -345,6 +346,14 @@ class MainWindow(QMainWindow):
             lambda node, layout=name: self.record_node_identity(layout, node)
         )
         node_view = self.layouts[name].node_view
+        service.set_node_poll_seconds(self.layout_settings[name]["node_poll_seconds"])
+        service.presence = dict.fromkeys(node_view.saved_metadata, False)
+        service.presence_changed.connect(node_view.refresh_presence)
+        service.polling_allowed = lambda: (
+            not node_view.editing
+            and self.isEnabled()
+            and QApplication.activeModalWidget() is None
+        )
         node_view.details.cbus_service = service
         node_view.details.node_events.cbus_service = service
         self.layouts[name].layout_events.cbus_service = service
@@ -614,7 +623,7 @@ class MainWindow(QMainWindow):
     def update_layout_actions(self):
         action = self.layout_group.checkedAction()
         enabled = action is not None and self.layout_can_change(action.data())
-        self.edit_action.setEnabled(enabled)
+        self.edit_action.setEnabled(action is not None)
         self.delete_action.setEnabled(enabled)
         self.set_default_action.setEnabled(
             action is not None and action.data() != self.default_layout
@@ -789,12 +798,6 @@ class MainWindow(QMainWindow):
             return
 
         old_name = action.data()
-        if not self.layout_can_change(old_name):
-            layout_logger.info(
-                "Edit layout skipped: connection is active",
-                extra={"fields": {"layout": old_name}},
-            )
-            return
         current = self.layout_settings[old_name]
         settings = self._edited_layout_settings(old_name, current)
         if settings is None:
@@ -802,10 +805,25 @@ class MainWindow(QMainWindow):
         name = settings["name"]
 
         if not self.layout_can_change(old_name):
-            layout_logger.info(
-                "Edit layout skipped: connection became active",
-                extra={"fields": {"layout": old_name}},
-            )
+            # Never rebuild the live view or change its endpoint/identity here.
+            if any(
+                settings[key] != current[key]
+                for key in current
+                if key != "node_poll_seconds"
+            ):
+                self.statusBar().showMessage(
+                    "Disconnect before changing connection settings", 5000
+                )
+                return
+            proposed = self.layout_settings.copy()
+            proposed[old_name] = settings
+            self.save_layouts(proposed, self.default_layout)
+            self.layout_settings[old_name] = settings
+            service = self.cbus_services.get(old_name)
+            if service is not None:
+                service.set_node_poll_seconds(settings["node_poll_seconds"])
+            self._log_layout_edit(old_name, settings)
+            self.statusBar().showMessage(f"Layout '{old_name}' updated", 5000)
             return
 
         proposed = self.layout_settings.copy()
@@ -826,6 +844,7 @@ class MainWindow(QMainWindow):
         dialog = LayoutSettingsDialog(
             self,
             **current,
+            connection_active=not self.layout_can_change(old_name),
             logical_layouts=sorted(
                 {
                     settings["logical_layout"]
@@ -943,6 +962,7 @@ class MainWindow(QMainWindow):
                         "layout": name,
                         "connection_type": settings["connection_type"],
                         "can_id": settings["can_id"],
+                        "node_poll_seconds": settings["node_poll_seconds"],
                     }
                 },
             )
@@ -957,6 +977,7 @@ class MainWindow(QMainWindow):
                         "layout": name,
                         "connection_type": settings["connection_type"],
                         "can_id": settings["can_id"],
+                        "node_poll_seconds": settings["node_poll_seconds"],
                     }
                 },
             )

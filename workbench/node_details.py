@@ -346,7 +346,7 @@ class NodeDetails(QWidget):
         name = data.get("name", "")
         self.node_name.setText(name or "-")
         title = (
-            f"Node {self.annotation_number()} (offline)"
+            f"Node {self.annotation_number()}"
             if isinstance(self.node, int)
             else f"Node {self.annotation_number()} — {self.module_type.text()}"
         )
@@ -642,7 +642,7 @@ class NodeDetails(QWidget):
         if current is None or saved_node:
             self._show_no_node()
             if saved_node:
-                self.summary.setTitle(f"Node {self.node} (offline)")
+                self.summary.setTitle(f"Node {self.node}")
                 self.node_events.show_produced_events(self.node)
         elif live_identity:
             self._show_live_identity(self.node)
@@ -744,10 +744,12 @@ class NodeDetails(QWidget):
         )
         status = "-"
         if self.node is not None:
-            if not self.connected:
-                status = "Offline"
-            elif self.live_state is not None:
-                status = "Online"
+            online = (
+                self.connected
+                and self.cbus_service is not None
+                and self.cbus_service.presence.get(self.annotation_number(), False)
+            )
+            status = "Online" if online else "Offline"
         text = str(can_id) if can_id is not None else "-"
         self.can_id.setText(text)
         self.summary_can_id.setText(f"CAN ID: {text}")

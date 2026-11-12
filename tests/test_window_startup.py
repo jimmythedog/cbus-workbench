@@ -276,6 +276,7 @@ class WindowStartupTests(unittest.TestCase):
                 "name": "Home",
                 "logical_layout": "home",
                 "auto_connect": False,
+                "node_poll_seconds": 10,
                 "connection_type": "TCP/IP",
                 "host": "localhost",
                 "port": 5551,
@@ -573,6 +574,52 @@ class WindowStartupTests(unittest.TestCase):
         self.assertIn(("RX", "PARAN", "Default: node 259, parameter 4 = 5"), records)
         self.assertIn(("RX", "0x00", "Default: :SB060N00;"), records)
 
+    def test_connected_layout_polling_edits_apply_and_persist_without_reconnecting(
+        self,
+    ):
+        self.save_startup_layouts(
+            [("First", "TCP/IP", True), ("Default", "Serial", True)]
+        )
+        settings = load_settings(self.path)
+        settings["layouts"]["First"]["node_poll_seconds"] = 25
+        settings["layouts"]["Default"]["node_poll_seconds"] = 15
+        save_settings(settings, self.path)
+        window = self.start_with_recording_connections()
+        service = window.cbus_services["Default"]
+        connection = window.connections["Default"]
+        node_view = window.layouts["Default"].node_view
+        self.assertEqual(service.node_poll_seconds, 15)
+        self.assertEqual(window.cbus_services["First"].node_poll_seconds, 25)
+        self.assertTrue(window.edit_action.isEnabled())
+
+        for interval in (0, 20):
+
+            def edit(dialog, interval=interval):
+                self.assertEqual(
+                    dialog.node_poll_spin.value(), service.node_poll_seconds
+                )
+                self.assertTrue(dialog.node_poll_spin.isEnabled())
+                for field in (dialog.name_edit, dialog.host_edit, dialog.can_id_spin):
+                    self.assertFalse(field.isEnabled())
+                dialog.node_poll_spin.setValue(interval)
+                return QDialog.DialogCode.Accepted
+
+            with (
+                patch("workbench.app_settings.settings_path", return_value=self.path),
+                patch.object(LayoutSettingsDialog, "exec", edit),
+            ):
+                window.edit_layout()
+            self.assertEqual(service.node_poll_seconds, interval)
+            self.assertEqual(
+                load_settings(self.path)["layouts"]["Default"]["node_poll_seconds"],
+                interval,
+            )
+            self.assertEqual(window.cbus_services["First"].node_poll_seconds, 25)
+            self.assertIs(window.cbus_services["Default"], service)
+            self.assertIs(window.connections["Default"], connection)
+            self.assertIs(window.layouts["Default"].node_view, node_view)
+        self.assertEqual(len(RecordingConnection.attempts), 2)
+
     def test_frame_diagnostics_use_renamed_layout_on_reused_connection(self):
         self.save_startup_layouts([("Default", "TCP/IP", True)])
         window = self.start_with_recording_connections()
@@ -644,7 +691,7 @@ class WindowStartupTests(unittest.TestCase):
         first_action.setChecked(True)
         window.select_layout(first_action)
         details = first_view.details
-        self.assertEqual(item.text(), "258 - 34")
+        self.assertEqual(item.text(), "258 - 34 (Online)")
         self.assertEqual(details.node_number.text(), "258")
         self.assertEqual(details.manufacturer.text(), "-")
         self.assertEqual(details.module_type.text(), "-")
@@ -654,7 +701,7 @@ class WindowStartupTests(unittest.TestCase):
         window.connections["First"].frame_received.emit(b":SB040NB601020D2307;")
         self.assertIs(first_view.node_list.currentItem(), item)
         self.assertEqual(first_view.node_list.count(), 1)
-        self.assertEqual(item.text(), "258 - 35")
+        self.assertEqual(item.text(), "258 - 35 (Online)")
         self.assertEqual(details.module_type.text(), "-")
 
         window.connections["Default"].frame_received.emit(b":SB040NB601030D2203;")
@@ -669,16 +716,16 @@ class WindowStartupTests(unittest.TestCase):
         default_action.setChecked(True)
         window.select_layout(default_action)
         self.assertIs(window.layout_stack.currentWidget(), window.layouts["Default"])
-        self.assertEqual(default_view.node_list.item(0).text(), "259 - 34")
+        self.assertEqual(default_view.node_list.item(0).text(), "259 - 34 (Online)")
         self.assertIs(
             default_view.node_list.currentItem(), default_view.node_list.item(0)
         )
         self.assertEqual(default_view.details.node_number.text(), "259")
-        self.assertEqual(first_view.node_list.item(0).text(), "258 - 35")
+        self.assertEqual(first_view.node_list.item(0).text(), "258 - 35 (Online)")
 
         window.connections["First"].disconnect()
         self.assertEqual(first_view.node_list.count(), 1)
-        self.assertEqual(first_view.node_list.currentItem().text(), "258 (offline)")
+        self.assertEqual(first_view.node_list.currentItem().text(), "258 (Offline)")
         self.assertEqual(first_view.details.node, 258)
         self.assertIsNone(first_view.details.live_state)
         self.assertEqual(first_view.details.node_number.text(), "258")
@@ -1026,7 +1073,7 @@ class WindowStartupTests(unittest.TestCase):
         self.assertEqual(window.cbus_services, {})
         self.assertEqual(navigator.count(), 1)
         self.assertTrue(navigator.isEnabled())
-        self.assertEqual(navigator.currentItem().text(), "258 (offline)")
+        self.assertEqual(navigator.currentItem().text(), "258 (Offline)")
         self.assertIsNone(window.layouts["Default"].node_view.state_lookup)
         self.assertIsInstance(window.layouts["Default"].node_view.details.node, int)
         self.assertIsNone(window.layouts["Default"].node_view.details.live_state)

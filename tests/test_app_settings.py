@@ -53,6 +53,7 @@ class AppSettingsTests(unittest.TestCase):
                 "Home": {
                     "logical_layout": "track-plan",
                     "auto_connect": True,
+                    "node_poll_seconds": 10,
                     "connection": {
                         "type": "TCP/IP",
                         "host": "localhost",
@@ -64,6 +65,7 @@ class AppSettingsTests(unittest.TestCase):
                 "Workshop": {
                     "logical_layout": "workshop",
                     "auto_connect": False,
+                    "node_poll_seconds": 0,
                     "connection": {
                         "type": "Serial",
                         "host": "",
@@ -81,6 +83,10 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(yaml.safe_load(self.path.read_text()), settings)
         self.assertEqual(set(load_settings(self.path)["layouts"]), {"Home", "Workshop"})
 
+        ui = layout_settings_for_ui(load_settings(self.path)["layouts"])
+        self.assertEqual(ui["Home"]["node_poll_seconds"], 10)
+        self.assertEqual(ui["Workshop"]["node_poll_seconds"], 0)
+        settings["layouts"]["Home"]["node_poll_seconds"] = 25
         settings["layouts"]["Home"]["connection"]["host"] = "new-host"
         save_settings(settings, self.path)
         self.assertEqual(load_settings(self.path), settings)
@@ -98,6 +104,7 @@ class AppSettingsTests(unittest.TestCase):
             "Workshop": {
                 "logical_layout": "shared-track",
                 "auto_connect": True,
+                "node_poll_seconds": 300,
                 "connection": {
                     "type": "Serial",
                     "host": "unused-host",
@@ -109,6 +116,7 @@ class AppSettingsTests(unittest.TestCase):
             "Home": {
                 "logical_layout": "home-track",
                 "auto_connect": False,
+                "node_poll_seconds": 10,
                 "connection": {
                     "type": "TCP/IP",
                     "host": "localhost",
@@ -130,6 +138,7 @@ class AppSettingsTests(unittest.TestCase):
         self.assertTrue(ui_layouts["Workshop"]["auto_connect"])
         self.assertEqual(ui_layouts["Workshop"]["connection_type"], "Serial")
         self.assertEqual(ui_layouts["Workshop"]["can_id"], 127)
+        self.assertEqual(ui_layouts["Workshop"]["node_poll_seconds"], 300)
         self.assertEqual(ui_layouts["Home"]["logical_layout"], "home-track")
         self.assertFalse(ui_layouts["Home"]["auto_connect"])
         self.assertEqual(ui_layouts["Home"]["connection_type"], "TCP/IP")
@@ -168,6 +177,7 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(loaded["default_layout"], "Home")
         self.assertFalse(ui_layouts["Home"]["auto_connect"])
         self.assertEqual(ui_layouts["Home"]["can_id"], 126)
+        self.assertEqual(ui_layouts["Home"]["node_poll_seconds"], 10)
         self.assertEqual(layout_settings_for_storage(ui_layouts), loaded["layouts"])
 
     def test_stale_default_recovers_to_first_layout_without_rewriting_file(self):
