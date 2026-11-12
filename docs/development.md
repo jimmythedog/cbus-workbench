@@ -152,6 +152,13 @@ versions are defined in `pyproject.toml`.
 
 To add a Python runtime dependency, use `uv add <package>`; to add a development dependency, use `uv add --dev <package>`. Commit changes to both `pyproject.toml` and `uv.lock`, but never commit `.venv/`.
 
+Help → About prefers the installed distribution version, then reads
+`[project].version` from the source checkout, and shows `Development` if neither
+is available. Use `uv version` for version bumps; `pyproject.toml` remains the
+single source of truth. Hatchling supplies distribution metadata for installed
+and portable builds; PyInstaller includes it with `--copy-metadata`. Direct
+NixOS development runs require no project installation.
+
 ### NixOS development
 
 NixOS may not load the native libraries included in PySide6's PyPI wheels without extra compatibility setup. For local NixOS development, we use Nix-provided Python and PySide6 instead.

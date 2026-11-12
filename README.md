@@ -58,6 +58,7 @@ uv run python main.py
 ```
 
 `uv` manages the project's virtual environment; manual activation is unnecessary.
+Help → About displays the application version.
 On NixOS, follow the [NixOS development setup](docs/development.md#nixos-development)
 instead, using Nix-provided Python and PySide6.
 

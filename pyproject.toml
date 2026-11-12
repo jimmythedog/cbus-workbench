@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "cbus-workbench"
 version = "0.1.0"
@@ -9,3 +13,6 @@ dependencies = [
 
 [tool.cbus-workbench]
 mmc_version = "v0.23.2"
+
+[tool.hatch.build.targets.wheel]
+packages = ["workbench"]

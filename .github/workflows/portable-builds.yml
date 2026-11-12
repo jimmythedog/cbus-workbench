@@ -31,7 +31,7 @@ jobs:
       - name: Install PyInstaller
         run: uv pip install --python .venv pyinstaller
       - name: Bundle application
-        run: uv run --no-sync pyinstaller --noconfirm --clean --windowed --onedir --name "CBUS Workbench" main.py
+        run: uv run --no-sync pyinstaller --noconfirm --clean --windowed --onedir --copy-metadata cbus-workbench --name "CBUS Workbench" main.py
       - name: Verify bundle exists
         shell: bash
         run: test -e "${{ matrix.executable }}"

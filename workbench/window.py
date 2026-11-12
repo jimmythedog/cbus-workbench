@@ -1,5 +1,8 @@
 import logging
 import sys
+import tomllib
+from importlib import metadata
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
@@ -1196,10 +1199,22 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def show_about(self):
+        try:
+            version = metadata.version("cbus-workbench")
+        except metadata.PackageNotFoundError:
+            # Direct source runs (including NixOS) need no installation.
+            source_config = Path(__file__).resolve().parents[1] / "pyproject.toml"
+            try:
+                with source_config.open("rb") as config:
+                    version = tomllib.load(config)["project"]["version"]
+            except OSError, tomllib.TOMLDecodeError, KeyError:
+                version = "Development"
+        trace(logging.getLogger("workbench"), "Showing About: version=%s", version)
         QMessageBox.about(
             self,
             "About CBUS Workbench",
             "<h3>CBUS Workbench</h3>"
+            f"<p>Version: {version}</p>"
             "<p>A desktop application for configuring and managing "
             "CBUS/VLCB model railway networks.</p>"
             "<p>Built with Python and PySide6.</p>",

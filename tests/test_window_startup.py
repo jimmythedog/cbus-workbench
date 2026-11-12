@@ -2,7 +2,9 @@
 
 import os
 import tempfile
+import tomllib
 import unittest
+from importlib import metadata
 from pathlib import Path
 from typing import ClassVar
 from unittest.mock import patch
@@ -117,6 +119,42 @@ class WindowStartupTests(unittest.TestCase):
             window = MainWindow()
         self.addCleanup(window.close)
         return window
+
+    def test_about_displays_installed_project_version(self):
+        window = self.open_window()
+        with (
+            patch("workbench.window.metadata.version", return_value="2.3.4"),
+            patch("workbench.window.QMessageBox.about") as about,
+        ):
+            window.show_about()
+        self.assertIn("<p>Version: 2.3.4</p>", about.call_args.args[2])
+
+    def test_about_displays_source_version_without_distribution_metadata(self):
+        with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as f:
+            expected = tomllib.load(f)["project"]["version"]
+        window = self.open_window()
+        with (
+            patch(
+                "workbench.window.metadata.version",
+                side_effect=metadata.PackageNotFoundError("cbus-workbench"),
+            ),
+            patch("workbench.window.QMessageBox.about") as about,
+        ):
+            window.show_about()
+        self.assertIn(f"<p>Version: {expected}</p>", about.call_args.args[2])
+
+    def test_about_without_metadata_or_source_config_displays_development(self):
+        window = self.open_window()
+        with (
+            patch(
+                "workbench.window.metadata.version",
+                side_effect=metadata.PackageNotFoundError("cbus-workbench"),
+            ),
+            patch("workbench.window.Path.open", side_effect=FileNotFoundError),
+            patch("workbench.window.QMessageBox.about") as about,
+        ):
+            window.show_about()
+        self.assertIn("<p>Version: Development</p>", about.call_args.args[2])
 
     def test_manual_refresh_preserves_saved_metadata(self):
         from test_refresh_node import answer_refresh
