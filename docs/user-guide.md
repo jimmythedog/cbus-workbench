@@ -146,7 +146,9 @@ reconnecting preserves the catalogue.
 Double-click the read-only **Name** label on **Node Details** to open a small
 node-name editor. Choose **Save** to update the label and navigator immediately,
 or **Cancel** to discard the draft. This also works for offline nodes. Node Details
-has no separate annotation action buttons or MDF token list.
+has no separate annotation action buttons or MDF token list. The navigator shows
+the node number, user-defined name (or module type when unnamed), and Online/Offline
+status. Node Details keeps the name and module type separate.
 
 To edit a token name, double-click its existing MDF label in **Node Variables**
 or an expanded **Consumed Events** form. Group headings and NV page titles also

@@ -135,9 +135,14 @@ class WindowStartupTests(unittest.TestCase):
         with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):
             service.discover_nodes()
             QTest.qWait(30)
+        window.layouts["Home"].annotations.save({"name": "Yard lights"}, 42)
         service.refresh_node(42)
         answer_refresh(window.connections["Home"])
         self.app.processEvents()
+        self.assertEqual(
+            window.layouts["Home"].node_view.node_list.item(0).text(),
+            "42 - Yard lights (Online)",
+        )
         self.assertEqual(load_metadata("home", 42), original)
         self.assertEqual(service.node_states[42].identity, Pnn(42, 13, 34, 5))
         self.assertIn("Refresh Node complete", window.statusBar().currentMessage())
@@ -208,8 +213,9 @@ class WindowStartupTests(unittest.TestCase):
             answer_refresh(connection)
             QTest.qWait(30)
             nodes = window.layouts["Home"].node_view
-            self.assertIn("Online", nodes.node_list.item(0).text())
-            self.assertIn("Yard lights", nodes.node_list.item(0).text())
+            self.assertEqual(
+                nodes.node_list.item(0).text(), "42 - Yard lights (Online)"
+            )
             self.assertIn("Offline", nodes.node_list.item(1).text())
             self.assertEqual(nodes.details.live_state.nv_values, {1: 9})
             self.assertEqual(nodes.details.live_state.ev_values, {7: {1: 11}})

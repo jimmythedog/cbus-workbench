@@ -244,11 +244,19 @@ class AnnotationTests(unittest.TestCase):
     def test_node_name_and_consumed_names_save_cancel_offline_restart_rediscovery(self):
         state = self.show_state()
         details = self.view.node_view.details
+        item = self.view.node_view.node_list.currentItem()
+        self.assertEqual(item.text(), "42 - 1 (Online)")
         self.edit_node_name(details, "Cancelled", save=False)
         self.assertEqual(load_annotations("test", 42), {})
         self.edit_node_name(details, "West yard")
         self.assertEqual(details.node_name.text(), "West yard")
-        self.assertIn("West yard", self.view.node_view.node_list.currentItem().text())
+        self.assertEqual(item.text(), "42 - West yard (Online)")
+        self.assertEqual(details.module_type.text(), "1")
+        self.view.node_view.refresh_annotation_names()
+        self.assertEqual(item.text(), "42 - West yard (Online)")
+        self.edit_node_name(details, "")
+        self.assertEqual(item.text(), "42 - 1 (Online)")
+        self.edit_node_name(details, "West yard")
         self.assertEqual(details.action_area.widget(0).findChildren(QPushButton), [])
         events = details.node_events
         self.edit_consumed_description(details, "Ignored", save=False)
@@ -276,6 +284,11 @@ class AnnotationTests(unittest.TestCase):
             ["0:1", "2:2", "2:10", "10:1"],
         )
         self.assertIsInstance(offline.node, int)
+        offline_item = reopened.node_view.node_list.currentItem()
+        self.assertEqual(offline_item.text(), "42 - West yard (Offline)")
+        self.edit_node_name(offline, "")
+        self.assertEqual(offline_item.text(), "42 - 1 (Offline)")
+        self.edit_node_name(offline, "West yard")
         self.assertEqual(offline.node_name.text(), "West yard")
         self.assertTrue(offline.node_name.isEnabled())
         self.assertEqual(
@@ -298,6 +311,15 @@ class AnnotationTests(unittest.TestCase):
         self.assertEqual(
             details.node_events.consumed_table.topLevelItem(0).text(1), "Offline route"
         )
+
+    def test_offline_name_removal_without_saved_identity_keeps_number(self):
+        save_metadata("test", NodeState(Pnn(42, 13, 1, 5)))
+        self.annotations.save({"name": "West yard"}, 42)
+        reopened = self.open_view()
+        item = reopened.node_view.node_list.currentItem()
+        self.assertEqual(item.text(), "42 - West yard (Offline)")
+        self.edit_node_name(reopened.node_view.details, "")
+        self.assertEqual(item.text(), "42 (Offline)")
 
     def test_consumed_description_dialog_is_local_and_retains_hardware_ev_editing(self):
         from test_nv_write import Connection

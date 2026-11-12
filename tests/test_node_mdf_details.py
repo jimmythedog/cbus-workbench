@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 from test_cbus_service import ConnectionStub
 
+from workbench.annotations import Annotations
 from workbench.cbus_service import CbusService
 from workbench.layout_view import LayoutView
 from workbench.mdfs import MdfRepository
@@ -389,6 +390,14 @@ class NodeMdfDetailsTests(unittest.TestCase):
         self.assertIs(self.details.variables.currentWidget(), self.details.raw_values)
 
     def test_static_names_override_compatible_mdf_and_unknown_types_use_it(self):
+        paths = patch(
+            "workbench.annotations.application_directories",
+            return_value={"Data": self.root / "data"},
+        )
+        paths.start()
+        self.addCleanup(paths.stop)
+        annotations = Annotations("yard")
+        self.layout.set_annotations(annotations)
         for module_type, expected in (
             (8, "CANSOL"),
             (36, "CANCDU"),
@@ -405,6 +414,16 @@ class NodeMdfDetailsTests(unittest.TestCase):
                 )
                 self.assertEqual(self.details.module_type.text(), expected)
                 self.assertEqual(self.label.text(), f"{filename} (System)")
+                annotations.save({"name": "West yard"}, 42)
+                self.view.refresh_annotation_names()
+                self.assertEqual(
+                    self.view.node_list.item(0).text(), "42 - West yard (Online)"
+                )
+                annotations.save({"name": ""}, 42)
+                self.view.refresh_annotation_names()
+                self.assertEqual(
+                    self.view.node_list.item(0).text(), f"42 - {expected} (Online)"
+                )
                 (self.system / filename).unlink()
                 self.view.refresh_state(42)
                 fallback = "251" if module_type == 251 else expected
@@ -487,7 +506,7 @@ class NodeMdfDetailsTests(unittest.TestCase):
         self.details.cbus_service = None
         self.view.clear_identities()
         self.view.show_saved_nodes("yard")
-        self.assertEqual(self.view.node_list.item(0).text(), "42 (Offline)")
+        self.assertEqual(self.view.node_list.item(0).text(), "42 - CANACE3 (Offline)")
         self.assertEqual(self.details.module_type.text(), "CANACE3")
         self.assertIsNone(self.details.live_state)
         self.assertEqual(self.details.status.text(), "Offline")

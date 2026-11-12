@@ -28,6 +28,11 @@ logger = logging.getLogger("workbench.ui")
 
 
 class NodeListItem(QListWidgetItem):
+    def __init__(self, text, module_label=""):
+        super().__init__(text)
+        # Keep the resolved label separate so annotation edits need no MDF lookup.
+        self.module_label = module_label
+
     def __lt__(self, other):
         return node_number(self.data(Qt.ItemDataRole.UserRole)) < node_number(
             other.data(Qt.ItemDataRole.UserRole)
@@ -142,8 +147,8 @@ class NodeView(QSplitter):
             if number not in (-1, nn):
                 continue
             name = annotations.load(nn).get("name", "") if annotations else ""
-            base = item.text().split(" — ")[0]
-            base = base.removesuffix(" (Online)").removesuffix(" (Offline)")
+            label = name or item.module_label
+            base = f"{nn} - {label}" if label else str(nn)
             service = self.details.cbus_service
             online = (
                 service.presence.get(nn, False)
@@ -151,7 +156,7 @@ class NodeView(QSplitter):
                 else isinstance(item.data(Qt.ItemDataRole.UserRole), Pnn)
             )
             base += " (Online)" if online else " (Offline)"
-            item.setText(base + (f" — {name}" if name else ""))
+            item.setText(base)
         if (
             not self.discovering
             and self.details.node is not None
@@ -333,7 +338,7 @@ class NodeView(QSplitter):
                 node_number(item.data(Qt.ItemDataRole.UserRole))
                 == state.identity.node_number
             ):
-                item.setText(f"{state.identity.node_number} - {name}")
+                item.module_label = name
                 selected = item is self.node_list.currentItem()
                 break
         trace(
@@ -383,7 +388,7 @@ class NodeView(QSplitter):
                 # Remembered addresses are promoted by the identity signal.
                 if isinstance(node, Pnn):
                     item.setData(Qt.ItemDataRole.UserRole, identity)
-                item.setText(f"{node_number} - {name}")
+                item.module_label = name
                 self.refresh_annotation_names(node_number)
                 self.show_live_state(state)
                 return
@@ -395,7 +400,7 @@ class NodeView(QSplitter):
             item = self.node_list.item(index)
             if node_number(item.data(Qt.ItemDataRole.UserRole)) == node.node_number:
                 item.setData(Qt.ItemDataRole.UserRole, node)
-                item.setText(f"{node.node_number} - {name}")
+                item.module_label = name
                 if item is self.node_list.currentItem():
                     self.show_selected_node(item)
                 else:
@@ -404,7 +409,7 @@ class NodeView(QSplitter):
                 return
 
         first_node = self.node_list.count() == 0
-        item = NodeListItem(f"{node.node_number} - {name}")
+        item = NodeListItem(f"{node.node_number} - {name}", name)
         item.setData(Qt.ItemDataRole.UserRole, node)
         self.node_list.addItem(item)
         self.refresh_annotation_names(node.node_number)
@@ -441,7 +446,13 @@ class NodeView(QSplitter):
                 for i in range(self.node_list.count())
             ):
                 continue
-            item = NodeListItem(f"{number} (Offline)")
+            parameters = self.saved_metadata[number].get("parameters", [])
+            name = (
+                module_name(parameters[1], parameters[3])
+                if len(parameters) > 3 and parameters[3] is not None
+                else ""
+            )
+            item = NodeListItem(f"{number} (Offline)", name)
             item.setData(Qt.ItemDataRole.UserRole, number)
             self.node_list.addItem(item)
         self.refresh_annotation_names()

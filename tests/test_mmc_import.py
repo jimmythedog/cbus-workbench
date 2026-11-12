@@ -360,7 +360,9 @@ class MmcImportTests(unittest.TestCase):
         action.setChecked(True)
         reopened.select_layout(action)
         self.assertEqual(view.node_view.node_list.count(), 2)
-        self.assertIn("Offline", view.node_view.node_list.item(0).text())
+        self.assertEqual(
+            view.node_view.node_list.item(0).text(), "42 - West yard (Offline)"
+        )
         self.assertIsInstance(
             view.node_view.node_list.item(0).data(Qt.ItemDataRole.UserRole), int
         )
@@ -387,7 +389,9 @@ class MmcImportTests(unittest.TestCase):
         )
         view.node_view.show_identity(Pnn(42, 13, 1, 5))
         view.node_view.refresh_annotation_names()
-        self.assertIn("West yard", view.node_view.node_list.item(0).text())
+        self.assertEqual(
+            view.node_view.node_list.item(0).text(), "42 - West yard (Online)"
+        )
         self.assertEqual(
             load_annotations(logical, 42)["tokens"]["channel"]["1"], "Signal"
         )
