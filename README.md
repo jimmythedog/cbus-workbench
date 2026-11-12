@@ -59,6 +59,8 @@ uv run python main.py
 
 `uv` manages the project's virtual environment; manual activation is unnecessary.
 Help → About displays the application version.
+Portable builds include the pinned MDF collection for offline use. For source runs,
+use `make mdfs` to fetch it. See [MDF sourcing and release refresh instructions](docs/development.md#mdf-collection-for-development-and-portable-builds).
 On NixOS, follow the [NixOS development setup](docs/development.md#nixos-development)
 instead, using Nix-provided Python and PySide6.
 

@@ -174,7 +174,7 @@ The repository's `.envrc` loads `.shell.nix`, which provides Python, PySide6, uv
 
 The NixOS setup is a development-environment exception, not a separate application implementation. The application code remains cross-platform. Dependencies installed only into uv's `.venv/` will not automatically be available to Nix-provided Python; when adding dependencies, verify the NixOS setup as well.
 
-### Development MDF collection
+### MDF collection for development and portable builds
 
 Run `make mdfs` to download the MMC-SERVER release pinned by
 `[tool.cbus-workbench].mmc_version` in `pyproject.toml` (currently `v0.23.2`).
@@ -190,7 +190,20 @@ ignored by Git. Do not commit the downloaded MDFs.
 Each successful fetch replaces the previous collection and reports the release
 tag and MDF count. Download, archive and missing/empty collection errors return
 a nonzero status; download/extraction failures leave the previous collection intact.
-The generated directory is intended for development and future packaging work.
+The portable-build workflow runs this same script without a version override before
+PyInstaller packaging on Windows, Linux and macOS. An unsuccessful or empty fetch
+fails the build. `--add-data "resources/mdfs:resources/mdfs"` places the collection
+under the bundle resource root: `_internal/` in Windows/Linux onedir builds and
+`Contents/Resources/` in the macOS app. These are the locations exposed at runtime
+through `sys._MEIPASS`. The post-build check compares every JSON filename and its
+contents with the fetched source collection before uploading artifacts.
+
+To refresh MDFs for a subsequent release, change `mmc_version` in `pyproject.toml`
+to an explicit MMC-SERVER release tag, run `make mdfs`, review compatibility and
+run `make check`. Build the portable artifacts and manually check offline MDF
+presentation and a user override on each target platform before releasing.
+Changing `MMC_VERSION` locally does not change the release pin. The application
+never downloads MDFs at runtime.
 
 ### MDF form visual reference
 

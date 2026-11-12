@@ -1,4 +1,4 @@
-"""Fetch development MDFs from a pinned MMC-SERVER release source archive."""
+"""Fetch development and packaged MDFs from a pinned MMC-SERVER release source archive."""
 
 import argparse
 import logging

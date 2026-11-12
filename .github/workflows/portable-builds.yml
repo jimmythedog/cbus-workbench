@@ -10,16 +10,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: Linux x64
+            runner: ubuntu-24.04
+            artifact: cbus-workbench-linux-x64
+            bundle: dist/CBUS Workbench
+            executable: dist/CBUS Workbench/CBUS Workbench
+            resource_root: dist/CBUS Workbench/_internal
           - name: Windows x64
             runner: windows-2025
             artifact: cbus-workbench-windows-x64
             bundle: dist/CBUS Workbench
             executable: dist/CBUS Workbench/CBUS Workbench.exe
+            resource_root: dist/CBUS Workbench/_internal
           - name: macOS Intel
             runner: macos-15-intel
             artifact: cbus-workbench-macos-x64
             bundle: dist/CBUS Workbench.app
             executable: dist/CBUS Workbench.app
+            resource_root: dist/CBUS Workbench.app/Contents/Resources
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
@@ -30,11 +38,15 @@ jobs:
         run: uv sync --no-dev
       - name: Install PyInstaller
         run: uv pip install --python .venv pyinstaller
+      - name: Fetch pinned MDF collection
+        run: uv run --no-sync python scripts/fetch_mdfs.py
       - name: Bundle application
-        run: uv run --no-sync pyinstaller --noconfirm --clean --windowed --onedir --copy-metadata cbus-workbench --name "CBUS Workbench" main.py
+        run: uv run --no-sync pyinstaller --noconfirm --clean --windowed --onedir --add-data "resources/mdfs:resources/mdfs" --copy-metadata cbus-workbench --name "CBUS Workbench" main.py
       - name: Verify bundle exists
         shell: bash
         run: test -e "${{ matrix.executable }}"
+      - name: Verify packaged MDF collection
+        run: uv run --no-sync python scripts/check_bundled_mdfs.py "${{ matrix.resource_root }}"
       - name: Archive macOS application
         if: runner.os == 'macOS'
         shell: bash
