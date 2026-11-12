@@ -115,7 +115,7 @@ class ObservedEventsTests(unittest.TestCase):
         state = NodeState(Pnn(258, 1, 1, 0))
         view.node_view.state_lookup = lambda number: state
         view.node_view.show_identity(state.identity)
-        self.assertEqual(events.produced_table.item(0, 0).text(), "258:45")
+        self.assertEqual(events.produced_table.rowCount(), 0)
         self.assertEqual(view.layout_events.table.topLevelItemCount(), 1)
         # Removing the old service stops observations; reconnect retains identities.
         service.close()
@@ -137,18 +137,32 @@ class ObservedEventsTests(unittest.TestCase):
         restored_view.set_observed_events(ObservedEvents("a"))
         restored_events = restored_view.node_view.details.node_events
         restored_events.show_produced_events(258)
-        self.assertEqual(restored_events.produced_table.rowCount(), 1)
+        self.assertEqual(restored_events.produced_table.rowCount(), 0)
         restored_events.show_produced_events(259)
         self.assertEqual(restored_events.produced_table.rowCount(), 0)
         # Short events do not get attributed to their sender's node pane.
         reconnect.frame_received.emit(b":SB040N980102002D;")
         events.show_produced_events(258)
-        self.assertEqual(events.produced_table.rowCount(), 1)
+        self.assertEqual(events.produced_table.rowCount(), 0)
         events.show_produced_events(0)
-        self.assertEqual(events.produced_table.item(0, 0).text(), "0:45")
+        self.assertEqual(events.produced_table.rowCount(), 0)
         self.assertEqual(view.layout_events.table.topLevelItem(0).text(0), "0:45")
         view.set_observed_events(b)
         self.assertEqual(view.layout_events.table.topLevelItem(0).text(0), "259:46")
+
+    def test_catalogue_short_events_use_layout_identity_without_node_attribution(self):
+        view = LayoutView(empty=True)
+        self.addCleanup(view.close)
+        view.events.update({0: {30001: {}}, 258: {30001: {}}})
+        view.layout_events.refresh()
+        table = view.layout_events.table
+        self.assertEqual(table.topLevelItem(0).text(0), "0:30001")
+        self.assertEqual(table.topLevelItem(1).text(0), "258:30001")
+        events = view.node_view.details.node_events
+        events.show_produced_events(0)
+        self.assertEqual(events.produced_table.rowCount(), 0)
+        events.show_produced_events(258)
+        self.assertEqual(events.produced_table.item(0, 0).text(), "258:30001")
 
     def test_failed_save_preserves_existing_file_and_allows_next_reception_to_retry(
         self,

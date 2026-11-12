@@ -28,7 +28,7 @@ from .layout_settings import LayoutSettingsDialog
 from .layout_view import LayoutView
 from .logging_config import TRACE, trace
 from .node_metadata import save_metadata
-from .observed_events import ObservedEvents
+from .observed_events import EventIdentity, ObservedEvents, decode_event
 from .pnn import Pnn
 from .send_event_dialog import SendEventDialog
 from .send_frame_dialog import SendFrameDialog
@@ -335,12 +335,8 @@ class MainWindow(QMainWindow):
     def start_cbus_service(self, name: str) -> None:
         connection = self.connections[name]
         service = CbusService(connection, self.layout_settings[name]["can_id"])
-        observations = self.layouts[name].observed_events
         service.event_received.connect(
-            lambda identity: self.error_reporter.run(
-                f"Could not save observed event on layout '{name}'",
-                lambda: observations.observe(identity),
-            )
+            lambda identity: self.observe_event(name, identity)
         )
         service.node_discovered.connect(
             lambda node, layout=name: self.record_node_identity(layout, node)
@@ -390,7 +386,17 @@ class MainWindow(QMainWindow):
         )
         self.layouts[name].node_view.show_identity(node)
 
+    def observe_event(self, name: str, identity: EventIdentity) -> None:
+        self.error_reporter.run(
+            f"Could not save observed event on layout '{name}'",
+            lambda: self.layouts[name].observed_events.observe(identity),
+        )
+
     def record_frame(self, name: str, direction: str, frame: bytes) -> None:
+        if direction == "TX":
+            identity = decode_event(frame)
+            if identity is not None:
+                self.observe_event(name, identity)
         opcode, details = describe_frame(frame, name)
         self.diagnostics_dock.widget().add_message(direction, opcode, details)
 

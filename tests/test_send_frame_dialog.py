@@ -127,6 +127,51 @@ class SendFrameDialogTests(unittest.TestCase):
                 service.send_event(event_type, nn, 1, True)
         dialog.close()
 
+    def test_sent_events_appear_without_echo_and_received_echo_deduplicates(self):
+        self.connect_home()
+        view = self.window.layouts["Home"]
+        observations = view.observed_events
+        # Use an isolated collection so existing user data cannot satisfy the test.
+        with TemporaryDirectory() as directory:
+            observations.events.clear()
+            observations.path = Path(directory) / "observed-events.yaml"
+            view.refresh_observed_events()
+            configured = {nn: dict(events) for nn, events in view.events.items()}
+            dialog = SendEventDialog(self.window.cbus_services["Home"], self.window)
+            self.addCleanup(dialog.close)
+            dialog.short_radio.click()
+            dialog.event_number.setValue(30001)
+            dialog.on_button.click()
+            table = view.layout_events.table
+            self.assertEqual(table.topLevelItemCount(), 1)
+            self.assertEqual(table.topLevelItem(0).text(0), "0:30001")
+            self.wait_for(lambda: self.peer.bytesAvailable() > 0)
+            self.assertEqual(bytes(self.peer.readAll()), b":SBFC0N9800007531;")
+            dialog.long_radio.click()
+            dialog.node_number.setValue(258)
+            dialog.on_button.click()
+            self.assertEqual(table.topLevelItemCount(), 2)
+            self.assertEqual(table.topLevelItem(1).text(0), "258:30001")
+            self.peer.write(b":SB040N9901037531;:SB040N9101027531;")
+            self.peer.flush()
+            self.wait_for(
+                lambda: (
+                    self.window.diagnostics_dock.widget()
+                    .table.item(
+                        self.window.diagnostics_dock.widget().table.rowCount() - 1, 1
+                    )
+                    .text()
+                    == "RX"
+                )
+            )
+            self.assertEqual(table.topLevelItemCount(), 2)
+            self.assertEqual(view.events, configured)
+            produced = view.node_view.details.node_events
+            produced.show_produced_events(258)
+            self.assertEqual(
+                produced.produced_table.rowCount(), len(configured.get(258, {}))
+            )
+
     def test_event_actions_use_selected_layout_without_fallback(self):
         self.assertFalse(self.window.send_event_action.isEnabled())
         self.connect_home()

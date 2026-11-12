@@ -14,10 +14,11 @@ layout also share observed identities.
 All updates run through Qt's existing GUI-thread connection/service path.
 
 ```text
-connection.frame_received -> CbusService -> event_received(identity)
+connection.frame_received -> CbusService -> event_received(identity) --+
+connection.frame_sent -> MainWindow.record_frame -> decode_event -----+
     -> layout collection: new identity -> write temporary YAML -> replace file
                           known identity -> no disk write or view refresh
-    -> add new identity -> changed -> layout and node views
+    -> add new identity -> changed -> layout event list
     save failure -> existing ErrorReporter (traceback + dialog); next sighting retries
 ```
 
@@ -29,11 +30,14 @@ and timestamps are not tracked.
 Disconnect removes the service's receiver, leaving the collection intact;
 reconnect uses that collection. Switching a connection's logical layout binds its
 views to the destination collection.
-Both event panes resolve names from the layout annotations; there is no node-owned produced-event name.
+The layout event list uses observations; node Produced Events use the existing
+configured event catalogue, independently of traffic. Both event panes resolve
+names from the layout annotations; there is no node-owned produced-event name.
 
 Event sending uses the selected layout's `CbusService.send_event()` for both
 context actions and the Send Event dialog. The transport's existing TX signal
-records outgoing frames in Diagnostics. Short identities keep NN zero in the UI;
+records outgoing frames in Diagnostics and adds event identities to the same
+collection used by RX; no RX echo is required. Short identities keep NN zero in the UI;
 ASON/ASOF frames also use NN zero. Their CAN header uses that layout's configured
 CAN ID, independently of the event node number. Long events default to the first
 discovered node when the dialog opens or switches to the long type.

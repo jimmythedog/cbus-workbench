@@ -138,8 +138,8 @@ class WindowStartupTests(unittest.TestCase):
             home = restarted.layouts["Home"]
             self.assertEqual(home.layout_events.table.topLevelItem(0).text(0), "258:45")
             self.assertEqual(
-                home.node_view.details.node_events.produced_table.item(0, 0).text(),
-                "258:45",
+                home.node_view.details.node_events.produced_table.rowCount(),
+                0,
             )
             self.assertEqual(home.layout_events.table.topLevelItem(0).text(1), "")
             # Connections that intentionally share a logical layout see the same list.

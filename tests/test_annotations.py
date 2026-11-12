@@ -54,6 +54,7 @@ class AnnotationTests(unittest.TestCase):
 
     def open_view(self):
         view = LayoutView(empty=True)
+        view.events[42] = {1: {}}
         self.addCleanup(view.close)
         view.set_observed_events(ObservedEvents("test"))
         view.set_annotations(self.annotations)

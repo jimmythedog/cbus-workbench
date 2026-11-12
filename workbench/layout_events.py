@@ -58,11 +58,7 @@ class LayoutEvents(QWidget):
 
         for node_number, node_events in self.events.items():
             for event_number, details in node_events.items():
-                identifier = (
-                    str(event_number)
-                    if node_number == 0
-                    else f"{node_number}:{event_number}"
-                )
+                identifier = f"{node_number}:{event_number}"
 
                 event_item = QTreeWidgetItem(
                     self.table,

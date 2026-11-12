@@ -35,6 +35,9 @@ Early development. Currently implemented:
   Long events default to the first discovered node; event numbers are 0–65535.
   Sending requires a connection and does not confirm that a node acted on the
   event. Outgoing frames appear in Diagnostics.
+- Transmitted and received events appear in the layout event list as `NN:EN`, with short
+  events using `0:EN`. Short events are not attributed to a node's Produced
+  Events list. Observations do not become configured events.
 
 Layout Restore confirms and restores selected online nodes sequentially, then shows
 remaining differences, unknown values and offline nodes. Retry reads hardware afresh

@@ -209,26 +209,15 @@ class NodeEvents(QWidget):
         self.set_editing(False)
 
     def show_produced_events(self, node_number: int) -> None:
-        observations = getattr(self, "observed_events", None)
-        if observations is not None:
-            produced = [
-                identity
-                for identity in sorted(observations.events)
-                if identity.node_number == node_number
-            ]
-            self.produced_table.setRowCount(len(produced))
-            names = (
-                self.annotations.load().get("events", {}) if self.annotations else {}
-            )
-            for row, identity in enumerate(produced):
-                self.produced_table.setItem(row, 0, QTableWidgetItem(identity.label()))
-                self.produced_table.setItem(
-                    row, 1, QTableWidgetItem(names.get(identity.label(), ""))
-                )
-            return
+        # Network observations belong to the layout, not node configuration.
+        names = self.annotations.load().get("events", {}) if self.annotations else {}
         produced = [
-            (f"{node_number}:{number}", details.get("description", ""))
+            (
+                f"{node_number}:{number}",
+                names.get(f"{node_number}:{number}", details.get("description", "")),
+            )
             for number, details in self.events.get(node_number, {}).items()
+            if node_number != 0
         ]
         self.produced_table.setRowCount(len(produced))
         for row, (event, description) in enumerate(produced):
