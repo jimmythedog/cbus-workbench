@@ -30,8 +30,9 @@ and timestamps are not tracked.
 Disconnect removes the service's receiver, leaving the collection intact;
 reconnect uses that collection. Switching a connection's logical layout binds its
 views to the destination collection.
-The layout event list uses observations; node Produced Events use the existing
-configured event catalogue, independently of traffic. Both event panes resolve
+The layout event list uses only observed identities. Node Produced Events filter
+the same collection by node number, excluding short events (NN zero).
+Annotations never create event entries. Both event panes resolve
 names from the layout annotations; there is no node-owned produced-event name.
 
 Event sending uses the selected layout's `CbusService.send_event()` for both
@@ -98,6 +99,40 @@ and Save/Cancel. Repeated tokens share a single field; surrounding label text is
 fixed. Non-numbered structural placeholders are excluded. Saving merges only the
 label's overrides, then uses existing annotation notifications to refresh all
 occurrences. The node name remains a read-only label in Node Details; double-clicking it opens its own small Save/Cancel dialog using the same annotation persistence.
+
+MMC import translates supported names into these same annotations. Display-name
+matches prepopulate the existing settings and logical-layout ID; other names start
+with MMC details. Every target uses the normal Layout Settings dialog, collection
+and validation. The confirmed logical ID determines the annotation destination;
+confirmed settings are saved using normal layout persistence. The dialog itself
+never saves. All reviews complete before import writes begin; cancelling one leaves
+the whole batch untouched. Existing destination annotations use the same merge rule,
+even for a new display name sharing a logical ID. Empty node annotations retain
+offline nodes without creating confirmed hardware metadata. Valid named MMC events
+also merge into the destination's ObservedEvents collection through observe(), regardless
+of the description-overwrite option. Existing identities remain; repeat imports
+are idempotent. Hardware data are outside the import's write set. The preview and save use the same leaf-value merge
+rule, with destination annotations reloaded at confirmation.
+MMC's `nodeDetails` and `eventDetails` are loose objects that can also contain
+metadata or stale placeholder entries. The importer selects numeric node candidates
+and eight-hex-digit event identities before validating their records. Nonnumeric
+node keys and non-event keys are ignored; node zero is excluded. Actual node
+records still require a valid positive 16-bit number and valid annotations.
+An MMC event name of `null` is absent, just like a missing or blank name.
+
+```text
+MMC JSON -> validate/preview -> review settings -> merge names -> annotation saves
+                                                            -> merge observed identities
+                                                            -> settings save
+                         save failure -> undo completed saves, remove new directories
+                         success -> reload shared observed collection, refresh views
+                                    without connecting
+```
+
+Rollback restores both annotation files and the previous observed-event file.
+This rollback handles ordinary write failures, not process crashes or a disk that
+also refuses rollback writes; those failures are logged and reported. Settings are
+published last, so interrupted imports can leave unpublished directories.
 
 New backups add a separate `annotations` mapping, including an empty mapping so
 restoration can explicitly clear saved names. Layout manifests carry layout names;
@@ -1072,7 +1107,8 @@ For live nodes, the views read `NodeState` on
 selection and state-update signals. Consumed event rows and editor working copies use stable event identities;
 internal table indices are resolved from current discovery only. Expanded rows
 remain associated with their event even when rediscovery changes its index. The layout event
-catalogue supplies known produced events and any available descriptions. The
+collection of observed identities supplies produced events; layout annotations supply
+any available descriptions. The
 display clears with the selected identity on disconnect; it keeps no separate
 discovery model.
 

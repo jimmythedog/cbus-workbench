@@ -1,0 +1,96 @@
+{
+  "layoutDetails": {
+    "title": "TEST",
+    "subTitle": "",
+    "baseNodeNumber": 256
+  },
+  "nodeDetails": {
+    "0": {
+      "colour": "black",
+      "group": "",
+      "moduleIdentifer": "A520",
+      "moduleName": "CANMIO"
+    },
+    "258": {
+      "colour": "black",
+      "group": "",
+      "moduleIdentifer": "A520",
+      "moduleName": "CANMIO",
+      "numberOfChannels": 16,
+      "tokens": {
+        "channel": {
+          "userNames": {
+            "1": "Button close",
+            "2": "Button throw",
+            "3": "LED Thrown",
+            "4": "LED Closed",
+            "8": "Turnout servo"
+          }
+        }
+      },
+      "backup_required": true
+    },
+    "updateTimestamp": {
+      "colour": "black",
+      "group": "",
+      "moduleIdentifer": ""
+    }
+  },
+  "eventDetails": {
+    "01020001": {
+      "colour": "black",
+      "group": "",
+      "name": "Close button"
+    },
+    "01020002": {
+      "colour": "black",
+      "group": "",
+      "name": "Throw button"
+    },
+    "000003E8": {
+      "colour": "black",
+      "group": "",
+      "name": ""
+    },
+    "undefined": {
+      "colour": "black",
+      "group": null,
+      "name": null
+    },
+    "0NAN0NAN": {
+      "colour": "black",
+      "group": null,
+      "name": null
+    },
+    "01000135": {
+      "colour": "black",
+      "name": null
+    }
+  },
+  "updateTimestamp": 1794401294499,
+  "settings": {
+    "MainLayout": {
+      "showEventsOnly": false
+    },
+    "enableBusTraffic": true,
+    "NodesView": {
+      "enableBackupStatus": true,
+      "enableCANID": true,
+      "enableGroup": true,
+      "enableSpaceLeft": true,
+      "enableStoredEvents": true
+    },
+    "EventsByNodeView": {
+      "enableEventIndex": true
+    },
+    "enableEventIdentifier": true,
+    "enableEventGroup": true
+  },
+  "connectionDetails": {
+    "mode": "SerialPort",
+    "serialPort": "/dev/ttyACM1",
+    "host": "",
+    "hostPort": "",
+    "FCU_Compatibility": false
+  }
+}

@@ -168,9 +168,7 @@ class SendFrameDialogTests(unittest.TestCase):
             self.assertEqual(view.events, configured)
             produced = view.node_view.details.node_events
             produced.show_produced_events(258)
-            self.assertEqual(
-                produced.produced_table.rowCount(), len(configured.get(258, {}))
-            )
+            self.assertEqual(produced.produced_table.rowCount(), 1)
 
     def test_event_actions_use_selected_layout_without_fallback(self):
         self.assertFalse(self.window.send_event_action.isEnabled())

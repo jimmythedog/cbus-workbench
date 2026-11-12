@@ -149,8 +149,8 @@ class LayoutPersistenceTests(unittest.TestCase):
         self.assertTrue(home.isChecked())
         self.assertFalse(window.set_default_action.isEnabled())
         self.assertEqual(
-            [action.text() for action in window.layout_menu.actions()[:4]],
-            ["&New…", "&Edit…", "&Delete…", "Set as &default"],
+            [action.text() for action in window.layout_menu.actions()[:5]],
+            ["&New…", "Import MMC layouts…", "&Edit…", "&Delete…", "Set as &default"],
         )
 
         other.trigger()

@@ -166,6 +166,8 @@ class AnnotationTests(unittest.TestCase):
         fresh = ObservedEvents("test")
         fresh.observe(EventIdentity(42, 1))
         self.view.set_observed_events(fresh)
+        self.assertEqual(editor.table.topLevelItemCount(), 1)
+        self.assertEqual(editor.table.topLevelItem(0).text(0), "42:1")
         self.assertEqual(editor.table.topLevelItem(0).text(1), "From produced view")
         reopened = self.open_view()
         self.assertIsInstance(reopened.node_view.details.node, int)
@@ -211,12 +213,22 @@ class AnnotationTests(unittest.TestCase):
         QTest.mouseDClick(tree.viewport(), Qt.MouseButton.LeftButton, pos=position)
 
     def edit_consumed_description(
-        self, details, description, *, save=True, identity="0:1", column=1, child=False
+        self,
+        details,
+        description,
+        *,
+        save=True,
+        identity="0:1",
+        column=1,
+        child=False,
+        initial=None,
     ):
         shown = []
 
         def respond(dialog):
             shown.append(dialog.windowTitle())
+            if initial is not None:
+                self.assertEqual(dialog.findChild(QLineEdit).text(), initial)
             dialog.findChild(QLineEdit).setText(description)
             dialog.findChild(QDialogButtonBox).button(
                 QDialogButtonBox.StandardButton.Save
@@ -251,8 +263,18 @@ class AnnotationTests(unittest.TestCase):
             load_annotations("test", 43)["consumedEvents"]["0:1"], "Light lamp"
         )
         save_metadata("test", state)
+        saved = self.annotations.load(42)
+        saved["consumedEvents"].update(
+            {"10:1": "Ten", "2:10": "Second", "2:2": "First"}
+        )
+        self.annotations.save(saved, 42)
         reopened = self.open_view()
         offline = reopened.node_view.details
+        tree = offline.node_events.consumed_table
+        self.assertEqual(
+            [tree.topLevelItem(row).text(0) for row in range(tree.topLevelItemCount())],
+            ["0:1", "2:2", "2:10", "10:1"],
+        )
         self.assertIsInstance(offline.node, int)
         self.assertEqual(offline.node_name.text(), "West yard")
         self.assertTrue(offline.node_name.isEnabled())
@@ -379,8 +401,55 @@ class AnnotationTests(unittest.TestCase):
         )
         self.edit_consumed_description(details, "")
         self.assertNotIn("0:1", load_annotations("test", 42)["consumedEvents"])
-        self.assertEqual(details.node_events.consumed_table.topLevelItem(0).text(1), "")
+        self.assertEqual(
+            details.node_events.consumed_table.topLevelItem(0).text(1), "Layout name"
+        )
         self.assertEqual(connection.sent, [])
+
+    def test_consumed_layout_fallback_refresh_edit_and_offline_restart(self):
+        from workbench.node_backup_files import node_backup, save_backup
+
+        state = self.show_state()
+        details = self.view.node_view.details
+        tree = details.node_events.consumed_table
+        self.assertEqual(tree.topLevelItem(0).text(1), "")
+        layout_names = {"events": {"0:1": "Layout route", "99:9": "Unconsumed"}}
+        self.annotations.save(layout_names)
+        self.assertEqual(tree.topLevelItemCount(), 1)
+        self.assertEqual(tree.topLevelItem(0).text(1), "Layout route")
+        self.assertEqual(load_annotations("test", 42), {})
+        self.edit_consumed_description(
+            details, "Discarded", save=False, initial="Layout route"
+        )
+        self.assertEqual(load_annotations("test", 42), {})
+        self.edit_consumed_description(details, "Node route", initial="Layout route")
+        self.assertEqual(
+            load_annotations("test", 42), {"consumedEvents": {"0:1": "Node route"}}
+        )
+        self.assertEqual(load_annotations("test"), layout_names)
+        self.annotations.save({"events": {"0:1": "Updated layout route"}})
+        self.assertEqual(tree.topLevelItem(0).text(1), "Node route")
+        self.edit_consumed_description(details, "", initial="Node route")
+        self.assertEqual(tree.topLevelItem(0).text(1), "Updated layout route")
+        save_metadata("test", state)
+        save_backup("test", node_backup(state))
+        reopened = self.open_view()
+        offline = reopened.node_view.details
+        offline_tree = offline.node_events.consumed_table
+        self.assertEqual(offline_tree.topLevelItem(0).text(1), "Updated layout route")
+        self.assertEqual(load_annotations("test", 42), {})
+        self.annotations.save({"events": {"0:1": "Offline layout route"}})
+        self.assertEqual(offline_tree.topLevelItem(0).text(1), "Offline layout route")
+        self.edit_consumed_description(
+            offline, "Offline node route", initial="Offline layout route"
+        )
+        self.assertEqual(
+            load_annotations("test", 42),
+            {"consumedEvents": {"0:1": "Offline node route"}},
+        )
+        self.assertEqual(
+            load_annotations("test"), {"events": {"0:1": "Offline layout route"}}
+        )
 
     def test_consumed_description_failed_save_keeps_draft_and_saved_value(self):
         self.annotations.save({"consumedEvents": {"0:1": "Saved"}}, 42)

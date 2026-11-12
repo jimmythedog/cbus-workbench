@@ -160,6 +160,24 @@ def layout_settings_for_storage(layouts: dict[str, dict]) -> dict[str, dict]:
     }
 
 
+def validate_layout_input(settings: dict, layouts: dict, current_name=None) -> None:
+    """Validate New/Edit dialog values using the normal persisted contract."""
+    name = settings["name"]
+    if not name or not settings["logical_layout"]:
+        raise SettingsError("Layout name and logical layout are required")
+    if any(
+        existing.casefold() == name.casefold()
+        for existing in layouts
+        if existing != current_name
+    ):
+        raise SettingsError("A layout with that name already exists")
+    proposed = {key: value for key, value in layouts.items() if key != current_name}
+    proposed[name] = settings
+    validate_settings(
+        {"default_layout": name, "layouts": layout_settings_for_storage(proposed)}
+    )
+
+
 def load_settings(path: Path | None = None) -> dict:
     """Load settings; a missing file represents a new, empty configuration."""
     path = settings_path() if path is None else Path(path)

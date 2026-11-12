@@ -2,6 +2,7 @@
 
 import os
 import unittest
+from copy import deepcopy
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QListWidgetItem
@@ -139,6 +140,7 @@ class LiveNodeEventsTests(unittest.TestCase):
         details.tabs.setCurrentWidget(details.produced_events_page)
         self.app.processEvents()
         self.assertGreater(events.produced_table.width(), details.tabs.width() * 0.9)
+        self.assertTrue(events.produced_table.verticalHeader().isHidden())
         self.assertFalse(details.events_edit_button.isVisible())
         events.produced_table.selectRow(0)
         details.tabs.setCurrentWidget(details.consumed_events_page)
@@ -167,6 +169,57 @@ class LiveNodeEventsTests(unittest.TestCase):
             ],
             [("EV 1", "8"), ("EV 2", "0")],
         )
+
+    def test_consumed_events_sort_numerically_and_keep_evs_when_editing(self):
+        node = Pnn(258, 13, 34, 0x03)
+        identities = {1: (10, 1), 4: (2, 10), 7: (0, 100), 9: (2, 2)}
+        values = {1: {1: 11}, 4: {1: 44}, 7: {1: 77}, 9: {1: 99}}
+        state = NodeState(
+            node,
+            parameters={5: 1},
+            event_identities=deepcopy(identities),
+            ev_values=deepcopy(values),
+        )
+        self.states[258] = state
+        self.view.details.node_events.events.update({2: {10: {"description": "Route"}}})
+        self.view.show_identity(node)
+        events = self.view.details.node_events
+        tree = events.consumed_table
+        self.assertEqual(
+            [
+                (
+                    tree.topLevelItem(i).text(0),
+                    tree.topLevelItem(i).text(1),
+                    tree.topLevelItem(i).child(0).text(1),
+                )
+                for i in range(4)
+            ],
+            [
+                ("0:100", "", "77"),
+                ("2:2", "", "99"),
+                ("2:10", "Route", "44"),
+                ("10:1", "", "11"),
+            ],
+        )
+        desired = {
+            "nvs": [],
+            "events": [
+                {
+                    "nodeNumber": nn,
+                    "eventNumber": en,
+                    "eventVariables": [values[slot][1]],
+                }
+                for slot, (nn, en) in identities.items()
+            ],
+        }
+        events.begin_configuration_edit(desired)
+        tree.topLevelItem(2).child(0).setText(1, "45")
+        self.assertEqual(
+            [event["eventVariables"] for event in desired["events"]],
+            [[11], [45], [77], [99]],
+        )
+        self.assertEqual(state.event_identities, identities)
+        self.assertEqual(state.ev_values, values)
 
     def test_discovery_refresh_and_node_change_replace_visible_events(self):
         first = Pnn(258, 13, 34, 0x03)

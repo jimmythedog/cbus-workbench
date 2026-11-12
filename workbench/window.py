@@ -17,17 +17,20 @@ from PySide6.QtWidgets import (
 
 from .annotations import Annotations
 from .app_settings import (
+    SettingsError,
     layout_settings_for_storage,
     layout_settings_for_ui,
     load_settings,
     save_settings,
+    validate_layout_input,
 )
 from .application_directories_dialog import ApplicationDirectoriesDialog
 from .cbus_service import CbusService, DiscoveryStatus
 from .diagnostics import Diagnostics
-from .layout_settings import LayoutSettingsDialog
+from .layout_settings import LayoutSettingsDialog, collect_layout_settings
 from .layout_view import LayoutView
 from .logging_config import TRACE, trace
+from .mmc_import_dialog import MmcImportDialog
 from .node_metadata import save_metadata
 from .observed_events import EventIdentity, ObservedEvents, decode_event
 from .pnn import Pnn
@@ -134,6 +137,13 @@ class MainWindow(QMainWindow):
             lambda: self.error_reporter.run("Could not create layout", self.new_layout)
         )
         self.layout_menu.addAction(new_action)
+
+        import_action = self.layout_menu.addAction("Import MMC layouts…")
+        import_action.triggered.connect(
+            lambda: self.error_reporter.run(
+                "Could not import MMC layouts", self.import_mmc_layouts
+            )
+        )
 
         self.edit_action = QAction("&Edit…", self)
         self.edit_action.triggered.connect(
@@ -755,76 +765,107 @@ class MainWindow(QMainWindow):
         )
 
     def validate_layout_settings(self, settings, current_name=None):
-        name = settings["name"]
-
-        if not name or not settings["logical_layout"]:
-            layout_logger.debug(
-                "Layout settings rejected: required field missing",
-                extra={"fields": {"layout": name}},
-            )
-            self.statusBar().showMessage(
-                "Layout name and logical layout are required", 5000
-            )
+        try:
+            validate_layout_input(settings, self.layout_settings, current_name)
+        except SettingsError as error:
+            layout_logger.debug("Layout settings rejected: %s", error)
+            self.statusBar().showMessage(str(error), 5000)
             return False
-
-        if any(
-            existing.casefold() == name.casefold()
-            for existing in self.layouts
-            if existing != current_name
-        ):
-            layout_logger.debug(
-                "Layout settings rejected: duplicate name",
-                extra={"fields": {"layout": name}},
-            )
-            self.statusBar().showMessage("A layout with that name already exists", 5000)
-            return False
-
         return True
+
+    def import_mmc_layouts(self):
+        dialog = MmcImportDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        plan = dialog.result_plan
+        proposed = layout_settings_for_ui(plan.settings["layouts"])
+        for name in tuple(self.layouts):
+            if self.layout_settings[name] != proposed[name]:
+                action = next(
+                    action
+                    for action in self.layout_group.actions()
+                    if action.data() == name
+                )
+                self._apply_saved_layout_edit(
+                    name, proposed[name], plan.settings["default_layout"], action
+                )
+                service = self.cbus_services.get(name)
+                if service is not None:
+                    service.set_node_poll_seconds(proposed[name]["node_poll_seconds"])
+        self.layout_settings = proposed
+        self.default_layout = plan.settings["default_layout"]
+        for target in plan.targets:
+            if target.new:
+                self.add_saved_layout(target.name, self.layout_settings[target.name])
+        # Notify all views sharing a destination, without starting any service.
+        affected = {target.logical_layout for target in plan.targets}
+        # The importer saved through its own ObservedEvents instances. Reload once
+        # per destination, then bind every view sharing that logical layout.
+        for logical_layout in affected:
+            self.observed_events.pop(logical_layout, None)
+        for name, settings in self.layout_settings.items():
+            if settings["logical_layout"] in affected:
+                self.bind_observed_events(name)
+                self.layouts[name].node_view.details.logical_layout = settings[
+                    "logical_layout"
+                ]
+                self.layouts[name].node_view.show_saved_nodes(
+                    settings["logical_layout"]
+                )
+                self.layouts[name].annotations_changed(-1)
+                for target in plan.targets:
+                    if target.logical_layout == settings["logical_layout"]:
+                        for number in target.source.nodes:
+                            self.layouts[name].annotations_changed(number)
+        self.update_default_indicator()
+        if plan.targets:
+            selected = next(
+                action
+                for action in self.layout_group.actions()
+                if action.data() == plan.targets[-1].name
+            )
+            selected.setChecked(True)
+            self.select_layout(selected)
+        self.update_layout_actions()
+        self.statusBar().showMessage(
+            f"Imported {len(plan.targets)} MMC layout(s)", 5000
+        )
+
+    def add_saved_layout(self, name: str, settings: dict) -> QAction:
+        """Register a successfully saved layout without opening a connection."""
+        view = LayoutView(empty=True)
+        self.layouts[name] = view
+        self.layout_settings[name] = settings
+        self.layout_stack.addWidget(view)
+        self.connection_states[name] = "Disconnected"
+        action = QAction(name, self)
+        action.setCheckable(True)
+        action.setData(name)
+        self.layout_group.addAction(action)
+        self.layout_menu.addAction(action)
+        return action
 
     def new_layout(self):
         trace(layout_logger, "Entering new_layout")
-        dialog = LayoutSettingsDialog(
-            self,
-            logical_layouts=sorted(
-                {
-                    settings["logical_layout"]
-                    for settings in self.layout_settings.values()
-                }
-            ),
-        )
-
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            trace(layout_logger, "New layout cancelled")
+        try:
+            settings = collect_layout_settings(self, self.layout_settings)
+        except SettingsError as error:
+            layout_logger.debug("New layout rejected: %s", error)
+            self.statusBar().showMessage(str(error), 5000)
             return
-
-        settings = dialog.settings()
+        if settings is None:
+            return
         name = settings["name"]
-
-        if not self.validate_layout_settings(settings):
-            trace(
-                layout_logger, "New layout rejected", extra={"fields": {"layout": name}}
-            )
-            return
 
         default_layout = self.default_layout if self.layouts else name
         proposed = self.layout_settings.copy()
         proposed[name] = settings
         self.save_layouts(proposed, default_layout)
 
-        view = LayoutView(empty=True)
         self.default_layout = default_layout
-        self.layouts[name] = view
-        self.layout_settings[name] = settings
-        self.layout_stack.addWidget(view)
-
-        action = QAction(name, self)
-        action.setCheckable(True)
-        action.setData(name)
-        self.layout_group.addAction(action)
-        self.layout_menu.addAction(action)
+        action = self.add_saved_layout(name, settings)
 
         action.setChecked(True)
-        self.connection_states[name] = "Disconnected"
         self.select_layout(action)
         self.update_default_indicator()
         self.update_layout_actions()

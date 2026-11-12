@@ -22,8 +22,17 @@ class EventDescriptionDialog(DescriptionDialog):
             current.setdefault(self.key, {})[identity] = text
             annotations.save(current, number)
 
+        fallback = (
+            annotations.load().get("events", {}).get(identity, "")
+            if number is not None
+            else ""
+        )
         super().__init__(
-            parent, "event", identity, data.get(self.key, {}).get(identity, ""), save
+            parent,
+            "event",
+            identity,
+            data.get(self.key, {}).get(identity, fallback),
+            save,
         )
         trace(
             logger,

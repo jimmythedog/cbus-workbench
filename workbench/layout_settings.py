@@ -1,3 +1,5 @@
+import logging
+
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -11,6 +13,57 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QVBoxLayout,
 )
+
+from .app_settings import validate_layout_input
+from .logging_config import trace
+
+logger = logging.getLogger("workbench.layouts")
+
+
+def collect_layout_settings(
+    parent,
+    layouts: dict,
+    initial: dict | None = None,
+    *,
+    allow_auto_connect=True,
+    allow_existing=False,
+) -> dict | None:
+    """Collect and validate settings without saving a layout or annotations."""
+    dialog = LayoutSettingsDialog(
+        parent,
+        logical_layouts=sorted({value["logical_layout"] for value in layouts.values()}),
+        **(initial or {}),
+    )
+    if not allow_auto_connect:
+        dialog.auto_connect_check.setEnabled(False)
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        trace(logger, "Layout settings cancelled")
+        return None
+    settings = dialog.settings()
+    current_name = (
+        next(
+            (
+                name
+                for name in layouts
+                if name.casefold() == settings["name"].casefold()
+            ),
+            None,
+        )
+        if allow_existing
+        else None
+    )
+    if not allow_auto_connect and current_name is None:
+        settings["auto_connect"] = False
+    validate_layout_input(settings, layouts, current_name)
+    if current_name is not None:
+        settings["name"] = current_name
+    trace(
+        logger,
+        "Layout settings collected name=%s id=%s",
+        settings["name"],
+        settings["logical_layout"],
+    )
+    return settings
 
 
 class LayoutSettingsDialog(QDialog):

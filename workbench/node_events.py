@@ -103,6 +103,7 @@ class NodeEvents(QWidget):
         produced_layout = QVBoxLayout(produced)
 
         self.produced_table = QTableWidget(0, 2)
+        self.produced_table.verticalHeader().hide()
         self.produced_table.setHorizontalHeaderLabels(["Event", "Description"])
         self.produced_table.horizontalHeader().setStretchLastSection(True)
         self.produced_table.setEditTriggers(
@@ -164,7 +165,10 @@ class NodeEvents(QWidget):
 
         self.show_produced_events(node.number)
 
-        for event, description in node.consumed_events.items():
+        for event, description in sorted(
+            node.consumed_events.items(),
+            key=lambda entry: tuple(map(int, entry[0].split(":"))),
+        ):
             parent = QTreeWidgetItem(self.consumed_table, [event, description])
             parent.setExpanded(event in expanded_events)
 
@@ -211,14 +215,24 @@ class NodeEvents(QWidget):
     def show_produced_events(self, node_number: int) -> None:
         # Network observations belong to the layout, not node configuration.
         names = self.annotations.load().get("events", {}) if self.annotations else {}
-        produced = [
-            (
-                f"{node_number}:{number}",
-                names.get(f"{node_number}:{number}", details.get("description", "")),
-            )
-            for number, details in self.events.get(node_number, {}).items()
-            if node_number != 0
-        ]
+        observations = getattr(self, "observed_events", None)
+        if observations is not None:
+            produced = [
+                (identity.label(), names.get(identity.label(), ""))
+                for identity in sorted(observations.events)
+                if identity.node_number == node_number and node_number != 0
+            ]
+        else:
+            produced = [
+                (
+                    f"{node_number}:{number}",
+                    names.get(
+                        f"{node_number}:{number}", details.get("description", "")
+                    ),
+                )
+                for number, details in self.events.get(node_number, {}).items()
+                if node_number != 0
+            ]
         self.produced_table.setRowCount(len(produced))
         for row, (event, description) in enumerate(produced):
             event_item = QTableWidgetItem(event)
@@ -281,7 +295,10 @@ class NodeEvents(QWidget):
             else []
         )
         ev_count = state.parameters.get(5)
-        for index, (event_node, event_number) in sorted(state.event_identities.items()):
+        # Order displayed identities, retaining each discovery slot's EV values.
+        for index, (event_node, event_number) in sorted(
+            state.event_identities.items(), key=lambda entry: entry[1]
+        ):
             description = (
                 self.events.get(event_node, {})
                 .get(event_number, {})
@@ -329,14 +346,17 @@ class NodeEvents(QWidget):
         if not self.annotations:
             return
         names = self.annotations.load(number).get("consumedEvents", {})
+        # Layout names are display defaults only; they never create consumed rows.
+        descriptions = self.annotations.load().get("events", {}) | names
         # Saved names are useful offline even without a current hardware table.
         if self.live_state is None:
             self.consumed_table.clear()
             for identity in sorted(
-                set(names) | getattr(self, "offline_identities", set())
+                set(names) | getattr(self, "offline_identities", set()),
+                key=lambda identity: tuple(map(int, identity.split(":"))),
             ):
                 item = QTreeWidgetItem(
-                    self.consumed_table, [identity, names.get(identity, "")]
+                    self.consumed_table, [identity, descriptions.get(identity, "")]
                 )
                 item.setData(
                     0, Qt.ItemDataRole.UserRole, tuple(map(int, identity.split(":")))
@@ -344,7 +364,7 @@ class NodeEvents(QWidget):
         else:
             for row in range(self.consumed_table.topLevelItemCount()):
                 item = self.consumed_table.topLevelItem(row)
-                item.setText(1, names.get(item.text(0), ""))
+                item.setText(1, descriptions.get(item.text(0), ""))
 
         for row in range(self.consumed_table.topLevelItemCount()):
             self.consumed_table.topLevelItem(row).setToolTip(

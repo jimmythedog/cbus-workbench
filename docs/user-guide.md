@@ -8,6 +8,7 @@ and running instructions.
 ## Contents
 
 - [Layouts and connections](#layouts-and-connections)
+- [Importing MMC layouts](#importing-mmc-layouts)
 - [Connecting and discovering nodes](#connecting-and-discovering-nodes)
 - [Understanding discovery status](#understanding-discovery-status)
 - [Viewing node information](#viewing-node-information)
@@ -53,6 +54,54 @@ to change it. A star marks the default; the radio indicator marks the current
 selection. Selecting a layout during a session does not change the default.
 Renaming the default preserves that choice; deleting it chooses another layout.
 
+## Importing MMC layouts
+
+Choose **Layouts → Import MMC layouts…**, then **Browse directory…** to select
+MMC's `layouts/` directory or a single layout directory. **Browse file…** accepts
+one `layoutData.json`. The chooser starts in MMC's effective layouts directory:
+`~/MMC-SERVER/layouts` on Linux/macOS or `C:\ProgramData\MMC-SERVER\layouts` on
+Windows, respecting `CUSTOM` user-data settings in the default base's
+`appSettings.json`. If unavailable, it starts in your home directory. MMC files
+are only read.
+
+Check the layouts to import and edit each **CW layout name** as needed. A name
+matching an existing CW layout (ignoring case) imports into that layout using its
+existing settings as the initial proposal. Clicking **Import** always opens
+Layout Settings for each selected MMC layout. Existing names start with their CW
+settings and logical layout ID; new names start with the MMC details. Review or
+amend the settings. The confirmed **Logical layout** ID determines where the
+annotations are imported, including when you select an existing logical layout.
+New layouts keep auto-connect disabled. Cancelling any settings review returns
+to the preview without creating layouts or importing annotations from the batch.
+Choose distinct destinations within one import. Review the added, replaced and
+preserved annotation counts. Select a row to see its destination, node count,
+connection settings and skipped categories in the word-wrapped details area below
+the table; scroll that area if needed.
+
+**Overwrite existing annotations** is unchecked initially. Existing names and
+token overrides are preserved unless you check it; unrelated annotations always
+remain. Blank MMC names never erase saved values. Import includes node names,
+channel/token overrides and layout event names. Each imported event name also adds
+its identity to the observed-event catalogue, so it appears immediately in **Events**
+and in the matching node's **Produced Events**. Existing identities are retained;
+repeat imports do not add duplicates. The overwrite option controls descriptions,
+not event membership. Node entries are saved offline until normal discovery finds
+them. Token names remain stored even when an MDF is not yet available to display them.
+
+Existing destinations start with their current CW connection settings rather than
+MMC's settings. Settings you confirm are saved through the normal layout persistence.
+Hardware metadata and backups are not changed by import.
+Missing or unsupported MMC connection settings do not block import; configure the
+connection through **Layouts → Edit…** before connecting. Import itself neither
+connects nor sends CBUS traffic. After success, the last imported destination becomes
+the selected layout, displaying its nodes and events. If import is cancelled or fails,
+the previous selection is preserved.
+
+Subtitles, groups, colours, module identity hints, MMC UI/runtime settings and
+indexed-event relationships are skipped and reported. Backups, NVs, EVs and hardware
+configuration are not imported. Invalid input is reported before saving; ordinary
+save failures undo completed annotation changes and leave new layouts unpublished.
+
 ## Connecting and discovering nodes
 
 Select the layout, then choose **Layouts → Connect**. Workbench automatically
@@ -74,8 +123,11 @@ Online status does not replace Restore's fresh pre-write safety checks.
 
 ## Observed events
 
-The layout **Events** tab lists distinct ON/OFF event identities received while
-connected. Events are shown as `nodeNumber:eventNumber`; short events use node
+The layout **Events** tab lists identities in the observed-event catalogue, populated
+by ON/OFF events received while connected and by named events imported from MMC.
+Saved layout event names supply descriptions where available.
+Annotations alone never add entries.
+Events are shown as `nodeNumber:eventNumber`; short events use node
 number zero. New identities are saved immediately and appear again after restarting
 Workbench. Repeated sightings do not add rows or rewrite the saved catalogue.
 Double-click an event's **Description** cell in this view or in **Node → Produced
@@ -112,11 +164,15 @@ remain saved but have no labels from which to edit them. Offline EV labels requi
 an existing presentation; use **Refresh Node** to inspect EV forms that are not available.
 Token editing is unavailable during NV/EV configuration editing or hardware writes.
 
+Consumed events are listed numerically by node number, then event number.
 On **Consumed Events**, double-click an event's **Description** cell to open a
 small editor with **Save** and **Cancel**. Saving immediately updates that cell;
 blank text clears the annotation. This works offline and never writes to hardware.
-The annotation belongs to this consuming node: two nodes can name the same event differently.
-They are separate from the layout's produced/observed event name. Offline entries
+A node's consumed-event annotation takes precedence; otherwise the matching layout
+event description is displayed, or blank if neither exists. Editing a fallback
+saves a node-specific annotation without changing the layout description. Clearing
+a node-specific annotation restores the fallback. Displaying a fallback never saves it.
+Two nodes can name the same event differently. Offline entries
 come from saved names and the latest node backup when available.
 
 All annotation editing works offline, sends no CBUS traffic, and survives
