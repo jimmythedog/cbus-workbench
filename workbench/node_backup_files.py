@@ -1,6 +1,7 @@
 """The issue #44 node configuration format and its timestamped files."""
 
 import logging
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -184,10 +185,36 @@ def load_layout_node(manifest_path: Path, number: int) -> dict:
         / "backups"
         / manifest_path.name
     )
+    if not path.exists():
+        path = manifest_path.parent / "nodes" / str(number) / manifest_path.name
     node = load_node_backup(path)
     if node["node"] != number or not node["partOfLayoutBackup"]:
         raise ValueError(f"Node backup does not belong to manifest: {path}")
     return node
+
+
+def forget_node(logical_layout: str, number: int) -> None:
+    """Delete local node state, preserving layout members outside its directory."""
+    directory = backup_directory(logical_layout, number).parent
+    fields = {"layout": logical_layout, "node_number": number, "path": str(directory)}
+    trace(logger, "Forgetting saved node", extra={"fields": fields})
+    try:
+        # Copy before deletion: even a failed deletion must leave historical
+        # layout snapshots readable. Manifests and snapshot contents stay intact.
+        for manifest in backup_directory(logical_layout).glob("*.yaml"):
+            source = directory / "backups" / manifest.name
+            if source.is_file():
+                destination = manifest.parent / "nodes" / str(number) / manifest.name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if not destination.exists():
+                    temporary = destination.with_suffix(".yaml.tmp")
+                    shutil.copy2(source, temporary)
+                    temporary.replace(destination)
+        shutil.rmtree(directory)
+    except OSError:
+        logger.exception("Cannot forget saved node", extra={"fields": fields})
+        raise
+    logger.info("Saved node forgotten", extra={"fields": fields})
 
 
 def validate_backup(backup: dict) -> None:

@@ -2,12 +2,18 @@ import logging
 from collections.abc import Callable
 
 from PySide6.QtCore import QSignalBlocker, Qt
-from PySide6.QtWidgets import QListWidget, QListWidgetItem, QSplitter
+from PySide6.QtWidgets import (
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
+    QMessageBox,
+    QSplitter,
+)
 
 from .cbus_service import DiscoveryStatus, NodeState
 from .logging_config import trace
 from .mdfs import MdfError, MdfRepository
-from .node_backup_files import saved_node_numbers
+from .node_backup_files import forget_node, saved_node_numbers
 from .node_details import NodeDetails
 from .node_metadata import load_metadata
 from .parameter_names import module_name
@@ -34,6 +40,8 @@ class NodeView(QSplitter):
 
         self.node_list = QListWidget()
         self.node_list.setSortingEnabled(True)
+        self.node_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.node_list.customContextMenuRequested.connect(self.show_node_menu)
 
         self.details = NodeDetails(events)
         self.mdf_repository = MdfRepository()
@@ -50,6 +58,57 @@ class NodeView(QSplitter):
         self.addWidget(self.node_list)
         self.addWidget(self.details)
         self.setSizes([250, 750])
+
+    def show_node_menu(self, position):
+        item = self.node_list.itemAt(position)
+        if (
+            item is None
+            or not isinstance(item.data(Qt.ItemDataRole.UserRole), int)
+            or self.details.logical_layout is None
+            or self.discovering
+            or self.editing
+        ):
+            return
+        menu = QMenu(self)
+        action = menu.addAction("Forget Node")
+        if menu.exec(self.node_list.viewport().mapToGlobal(position)) == action:
+            self.forget_saved_node(item)
+
+    def forget_saved_node(self, item):
+        number = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(number, int) or self.discovering or self.editing:
+            return
+        logical_layout = self.details.logical_layout
+        fields = {"layout": logical_layout, "node_number": number}
+        answer = QMessageBox.question(
+            self,
+            "Forget Node",
+            f"Forget {item.text()}?\n\n"
+            "Its local persisted directory, annotations and node backups will be "
+            "permanently deleted. Historical layout backups will be preserved.\n\n"
+            "No CBUS commands will be sent. Normal discovery can add this node again.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            trace(logger, "Forget node cancelled", extra={"fields": fields})
+            return
+        # The confirmation runs a Qt event loop; discovery may have made it live.
+        if not isinstance(item.data(Qt.ItemDataRole.UserRole), int) or self.discovering:
+            trace(
+                logger,
+                "Forget node stopped: discovery changed",
+                extra={"fields": fields},
+            )
+            return
+        try:
+            forget_node(logical_layout, number)
+        except OSError as error:
+            QMessageBox.warning(self, "Cannot forget node", str(error))
+            return
+        self.saved_metadata.pop(number, None)
+        self.node_list.takeItem(self.node_list.row(item))
+        trace(logger, "Forgotten node removed from navigator", extra={"fields": fields})
 
     def refresh_annotation_names(self, number=-1):
         annotations = self.details.annotations

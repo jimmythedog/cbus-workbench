@@ -336,6 +336,12 @@ MDF selections are not saved. The **Module descriptor** label reports live looku
 saved-only nodes can use their remembered parameters to locate MDF token defaults.
 Remembered details do not make a node eligible for hardware configuration.
 
+Right-click an offline node and choose **Forget Node** to remove it from the
+navigator. Confirmation permanently deletes its local directory, annotations and
+node backups. Historical layout backups remain available. Forget sends no CBUS
+commands; normal discovery can add the node again later. A storage failure is
+reported and leaves the node listed.
+
 Choose **Compare** while connected to compare a node backup with current discovered
 values. Events are matched by node number and event number. Unknown values make
 the result inconclusive rather than definite differences; complete backups

@@ -351,6 +351,11 @@ Offline metadata is loaded independently of connections and shown in the existin
 details fields. It never seeds live discovery or hardware-write eligibility.
 Missing nodes are retained, and backup-only directories remain supported.
 Selecting a saved node also loads the ordinary backup list.
+Forgetting an offline entry deletes its node directory only after copying its
+historical layout snapshots unchanged to `backups/nodes/<number>/<filename>`.
+`load_layout_node()` falls back to that location so layout view, compare and
+restore still work without recreating a saved node. Manifests remain unchanged.
+The UI removes the entry only after successful deletion; no service calls occur.
 Discovery replaces that entry with a live identity after reconnection. Saved View
 reads files directly; New and Compare are guarded while disconnected.
 
