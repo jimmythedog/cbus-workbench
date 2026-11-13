@@ -240,13 +240,14 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertIsNone(view.details.live_state)
         self.assertFalse(self.results[-1][1])
 
-    def test_save_keeps_working_copy_and_progress_during_discovery(self):
+    def test_events_save_keeps_working_copy_and_progress_during_discovery(self):
         view = self.live_view()
         details = view.details
         details.start_editing()
         details.raw_values.item(0, 1).setText("10")
+        details.node_events.consumed_table.topLevelItem(0).child(1).setText(1, "13")
         desired = deepcopy(details.desired_configuration)
-        details.save_editing()
+        details.save_events_editing()
         self.run_node(stop_when=lambda: view.node_list.currentItem() is None)
         self.assertEqual(details.desired_configuration, desired)
         self.assertTrue(details.saving_configuration)
@@ -1221,7 +1222,7 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertTrue(details.events_edit_button.isEnabled())
         self.service.restore.check(258, node_backup(self.state))
 
-    def test_failed_save_rediscovery_updates_raw_and_mdf_views(self):
+    def test_failed_events_save_rediscovery_updates_raw_and_mdf_views(self):
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QListWidgetItem
 
@@ -1250,7 +1251,8 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertEqual(details.desired_configuration["nvs"], [7, 11, 10])
         self.assertEqual(self.state.nv_values, {1: 7, 2: 8, 3: 9})
         self.change_earlier_nv = True
-        details.save_button.click()
+        details.node_events.consumed_table.topLevelItem(0).child(1).setText(1, "13")
+        details.events_save_button.click()
         self.run_node()
         self.assertEqual(len(self.results), 1)
         self.assertFalse(self.results[0][1])
@@ -1512,7 +1514,8 @@ class NodeRestoreTests(unittest.TestCase):
         self.results.clear()
         details.edit_button.click()
         details.raw_values.item(2, 1).setText("10")
-        details.save_button.click()
+        details.node_events.consumed_table.topLevelItem(0).child(1).setText(1, "15")
+        details.events_save_button.click()
         self.assertTrue(self.service.writes_busy())
         self.run_node()
         self.assertFalse(self.service.writes_busy())

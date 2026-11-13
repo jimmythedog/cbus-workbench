@@ -125,8 +125,10 @@ class CbusService(QObject):
         self.refreshing_layout = False
         # Import after the service types are defined; serializers also use them.
         from .node_restore import NodeRestore
+        from .nv_save import NvSave
 
         self.restore = NodeRestore(self)
+        self.nv_save = NvSave(self)
         connection.frame_received.connect(self._receive_frame)
 
     def close(self) -> None:
@@ -151,6 +153,7 @@ class CbusService(QObject):
         self._set_discovery_status(DiscoveryStatus.DISCONNECTED)
         self.connection.frame_received.disconnect(self._receive_frame)
         self.restore.disconnect()
+        self.nv_save.disconnect()
         self.nv_write.disconnect()
         self.ev_write.disconnect()
         self._request_timer.stop()
@@ -193,6 +196,7 @@ class CbusService(QObject):
             )
             or self._request_queue
             or self.restore.active
+            or self.nv_save.active
             or self.nv_write.active
             or self.nv_write.refreshing
             or self.ev_write.active
@@ -328,6 +332,7 @@ class CbusService(QObject):
     def writes_busy(self) -> bool:
         return bool(
             self.restore.active
+            or self.nv_save.active
             or self.nv_write.active
             or self.nv_write.refreshing
             or self.ev_write.active
@@ -524,7 +529,7 @@ class CbusService(QObject):
         """Read the entire selected node afresh, retaining its confirmed identity."""
         if self._closed or self.connection.state != "Connected":
             raise ValueError("Rediscovery requires an active connection")
-        if self.nv_write.active or self.ev_write.active:
+        if self.nv_save.active or self.nv_write.active or self.ev_write.active:
             raise ValueError("Wait for hardware writes and learn-mode cleanup")
         state = self.node_states[node_number]
         self._set_discovery_status(DiscoveryStatus.DISCOVERING)
@@ -563,7 +568,7 @@ class CbusService(QObject):
         owner=None,
     ) -> None:
         """Validate one coordinator-owned NV transaction before transmission."""
-        if owner is not self.restore or not self.restore.active:
+        if owner not in (self.restore, self.nv_save) or not owner.active:
             raise ValueError(
                 "NV writes require active configuration application ownership"
             )

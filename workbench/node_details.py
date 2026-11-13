@@ -56,6 +56,7 @@ class NodeDetails(QWidget):
         self.desired_configuration = None
         self.failure_report = None
         self.saving_configuration = False
+        self.saving_nvs = False
         self.layout_restoring = False
 
         layout = QVBoxLayout(self)
@@ -251,23 +252,37 @@ class NodeDetails(QWidget):
         self.node_events.refresh_configuration_controls()
 
     def save_editing(self):
-        """Submit the whole desired configuration to the existing Restore path."""
+        """Use targeted NV Save; event edits retain the existing application path."""
         if self.desired_configuration is None or self.saving_configuration:
             return
         number = self.desired_configuration["node"]
+        self.saving_nvs = (
+            self.desired_configuration["events"]
+            == self.original_configuration["events"]
+        )
         self.set_configuration_saving(True)
         self.show_configuration_result("Saving node configuration…")
         trace(
             logger,
-            "Submitting shared node configuration",
+            "Submitting NV editing Save"
+            if self.saving_nvs
+            else "Submitting shared node configuration",
             extra={"fields": {"node_number": number}},
         )
         try:
-            self.cbus_service.restore.begin(number, self.desired_configuration)
+            if self.saving_nvs:
+                self.cbus_service.nv_save.begin(
+                    number,
+                    self.desired_configuration,
+                    pre_edit=self.original_configuration["nvs"],
+                )
+            else:
+                self.cbus_service.restore.begin(number, self.desired_configuration)
         except ValueError as error:
             # Validation failed before application began. Keep the edits available
-            # for review or Cancel; Restore remains responsible for all checks.
+            # for review or Cancel; the coordinator owns the safety checks.
             self.set_configuration_saving(False)
+            self.saving_nvs = False
             self.show_configuration_result(f"Node {number}: {error}")
             trace(
                 logger,
@@ -862,6 +877,11 @@ class NodeDetails(QWidget):
         message = message.replace("after restoration.", f"after {action}.")
         if self.failure_report is not None and self.failure_report.running:
             self.failure_report.completed(success, message)
+            if self.failure_report.coordinator is self.cbus_service.nv_save:
+                self.show_nv_values()
+                self.node_events.show_live_state(
+                    self.live_state, self.node_events.live_mdf
+                )
         elif not success:
             if self.failure_report is not None:
                 self.failure_report.dialog.close()
@@ -883,6 +903,7 @@ class NodeDetails(QWidget):
             self.show_configuration_result(f"Node {node_number}: {message}")
             self.events_edit_button.setEnabled(self.can_edit_configuration())
             self.update_backup_buttons()
+            self.saving_nvs = False
             return
         self.restore_result.setText(f"Node {node_number}: {message}")
         self.editing_changed.emit(False)

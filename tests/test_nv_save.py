@@ -1,0 +1,330 @@
+"""Targeted editing Save through confirmed, observable wire exchanges."""
+
+import unittest
+from unittest.mock import patch
+
+from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QListWidgetItem
+from test_nv_write import Connection
+
+from workbench.cbus_service import CbusService, DiscoveryProgress, NodeState
+from workbench.node_backup_files import node_backup
+from workbench.node_view import NodeView
+from workbench.pnn import Pnn
+
+
+class NvSaveTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.connection = Connection()
+        self.service = CbusService(self.connection, 126)
+        done = DiscoveryProgress.COMPLETE
+        self.state = NodeState(
+            Pnn(258, 13, 34, 4),
+            parameters={6: 3},
+            nv_values={1: 7, 2: 8, 3: 9},
+            parameter_progress=done,
+            nv_progress=done,
+            event_progress=DiscoveryProgress.SKIPPED,
+            ev_progress=DiscoveryProgress.SKIPPED,
+            can_id=2,
+        )
+        self.service.nodes[258] = self.state.identity
+        self.service.node_states[258] = self.state
+        self.backup = node_backup(self.state)
+        self.results = []
+        self.service.nv_save.finished.connect(lambda *args: self.results.append(args))
+        self.addCleanup(self.service.close)
+
+    def reply(self, payload):
+        self.connection.frame_received.emit(f":SB040N{payload};".encode())
+
+    def save(self, values):
+        self.backup["nvs"] = values
+        self.service.nv_save.begin(258, self.backup)
+        self.app.processEvents()
+
+    def verified(self, index, value):
+        self.reply("590102")
+        self.reply(f"970102{index:02X}{value:02X}")
+
+    def payloads(self):
+        return [frame.decode().split("N")[1][:-1] for frame in self.connection.sent]
+
+    def test_unchanged_values_send_nothing(self):
+        self.save([7, 8, 9])
+        self.assertTrue(self.results[-1][1])
+        self.assertEqual(self.connection.sent, [])
+
+    def test_single_edit_reads_only_higher_nvs_and_accepts_firmware_changes(self):
+        self.save([10, 8, 9])
+        self.verified(1, 10)
+        self.reply("9701020280")
+        self.reply("970102030B")
+        self.app.processEvents()
+        self.assertTrue(self.results[-1][1])
+        self.assertEqual(self.state.nv_values, {1: 10, 2: 128, 3: 11})
+        self.assertEqual(
+            self.payloads(), ["960102010A", "71010201", "71010202", "71010203"]
+        )
+        self.assertFalse(self.service.restore.active)
+        self.assertEqual(self.backup["nvs"], [10, 8, 9])  # Caller owns its copy.
+
+    def test_multiple_edits_keep_explicit_values_after_firmware_changes(self):
+        self.save([10, 12, 9])
+        self.verified(1, 10)
+        self.reply("9701020280")
+        self.reply("970102030B")
+        self.app.processEvents()
+        self.assertEqual(self.payloads()[-1], "960102020C")
+        self.verified(2, 12)
+        self.reply("970102030D")
+        self.app.processEvents()
+        self.assertTrue(self.results[-1][1])
+        self.assertEqual(self.state.nv_values, {1: 10, 2: 12, 3: 13})
+        self.assertEqual(
+            self.payloads(),
+            [
+                "960102010A",
+                "71010201",
+                "71010202",
+                "71010203",
+                "960102020C",
+                "71010202",
+                "71010203",
+            ],
+        )
+
+    def test_explicit_edit_already_satisfied_by_firmware_is_not_written(self):
+        self.save([10, 12, 9])
+        self.verified(1, 10)
+        self.reply("970102020C")
+        self.reply("9701020309")
+        self.app.processEvents()
+        self.assertTrue(self.results[-1][1])
+        self.assertEqual(len(self.connection.sent), 4)
+
+    def test_last_nv_edit_has_no_follow_on_discovery(self):
+        self.save([7, 8, 10])
+        self.verified(3, 10)
+        self.app.processEvents()
+        self.assertTrue(self.results[-1][1])
+        self.assertEqual(self.payloads(), ["960102030A", "71010203"])
+
+    def test_verification_mismatch_stops_later_writes_and_records_actual_value(self):
+        self.save([10, 12, 9])
+        self.reply("590102")
+        self.reply("9701020106")
+        self.assertFalse(self.results[-1][1])
+        self.assertIn("readback was 6", self.results[-1][2])
+        self.assertEqual(self.state.nv_values, {1: 6, 2: 8, 3: 9})
+        self.assertEqual(self.payloads(), ["960102010A", "71010201"])
+
+    def test_rejected_write_stops_without_discovery(self):
+        self.save([10, 12, 9])
+        self.reply("6F010201")
+        self.assertFalse(self.results[-1][1])
+        self.assertIn("CMDERR", self.results[-1][2])
+        self.assertEqual(self.payloads(), ["960102010A"])
+
+    def wait_for_result(self):
+        for _ in range(50):
+            if self.results:
+                return
+            QTest.qWait(10)
+        self.fail("Save did not finish")
+
+    def test_verification_timeout_keeps_safety_block_and_ignores_late_readback(self):
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):
+            self.save([10, 12, 9])
+            self.reply("590102")
+            self.wait_for_result()
+        self.assertFalse(self.results[-1][1])
+        self.reply("970102010A")
+        self.assertEqual(self.state.nv_values[1], 7)
+        self.assertEqual(self.payloads(), ["960102010A", "71010201", "71010201"])
+        with self.assertRaisesRegex(ValueError, "Protocol safety unresolved"):
+            self.service.nv_save.begin(258, self.backup)
+
+    def test_higher_nv_read_timeout_prevents_remaining_edits(self):
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):
+            self.save([10, 8, 12])
+            self.verified(1, 10)
+            self.reply("9701020280")
+            self.wait_for_result()
+        self.assertFalse(self.results[-1][1])
+        self.assertIn("Higher NV reads incomplete", self.results[-1][2])
+        self.assertIn("1 NV writes verified", self.results[-1][2])
+        self.assertEqual(self.state.nv_progress, DiscoveryProgress.INCOMPLETE)
+        self.assertEqual(self.state.nv_values[2], 128)
+        self.assertEqual(self.state.nv_values[3], 9)  # Unread cache is retained.
+        # Only NV2's reply is fresh. Its firmware change is accepted; the
+        # explicit NV3 request remains pending despite the cached value.
+        self.assertEqual(self.service.nv_save.backup["nvs"], [10, 128, 12])
+        self.assertEqual(
+            self.payloads(),
+            ["960102010A", "71010201", "71010202", "71010203", "71010203"],
+        )
+
+    def test_missing_acknowledgement_never_confirms_a_write(self):
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):
+            self.save([10, 8, 9])
+            self.wait_for_result()
+        self.assertFalse(self.results[-1][1])
+        self.assertIn("WRACK", self.results[-1][2])
+        self.assertEqual(self.state.nv_values[1], 7)
+        self.assertEqual(self.payloads(), ["960102010A"])
+
+    def test_disconnect_reports_one_result_and_no_follow_on_requests(self):
+        self.save([10, 8, 9])
+        self.service.close()
+        self.assertEqual(len(self.results), 1)
+        self.assertFalse(self.results[0][1])
+        self.assertIn("Connection ended", self.results[0][2])
+        self.assertEqual(self.state.nv_values[1], 7)
+        self.assertEqual(self.payloads(), ["960102010A"])
+
+    def test_operation_ownership_excludes_other_writes_and_refresh(self):
+        self.save([10, 8, 9])
+        for action in (
+            lambda: self.service.nv_save.begin(258, self.backup),
+            lambda: self.service.restore.begin(258, self.backup),
+            lambda: self.service.refresh_node(258),
+            lambda: self.service.write_nvs(258, {2: 12}),
+        ):
+            with self.assertRaises(ValueError):
+                action()
+        self.assertEqual(self.payloads(), ["960102010A"])
+
+    def editing_view(self):
+        view = NodeView({})
+        self.addCleanup(view.close)
+        details = view.details
+        details.connected = True
+        details.cbus_service = self.service
+        view.state_lookup = lambda number: self.service.node_states.get(number)
+        self.service.node_state_updated.connect(view.refresh_state)
+        self.service.discovery_status_changed.connect(view.discovery_status_changed)
+        self.service.nv_save.changed.connect(details.show_restore_progress)
+        self.service.nv_save.finished.connect(details.finish_restore)
+        item = QListWidgetItem()
+        item.setData(Qt.ItemDataRole.UserRole, self.state.identity)
+        view.node_list.addItem(item)
+        view.node_list.setCurrentItem(item)
+        details.start_editing()
+        details.raw_values.item(0, 1).setText("10")
+        return view, item
+
+    def retry_after_refresh(self, report, values):
+        """Answer Retry's explicit read-only refresh, stopping at its first write."""
+        cursor = len(self.connection.sent)
+        report.dialog.retry_button.click()
+        parameters = {0: 8, 1: 13, 2: 97, 3: 34, 4: 0, 5: 0, 6: 3, 7: 1, 8: 4}
+        for _ in range(100):
+            self.app.processEvents()
+            if cursor == len(self.connection.sent):
+                QTest.qWait(1)
+                continue
+            payload = self.payloads()[cursor]
+            cursor += 1
+            opcode = payload[:2]
+            if opcode == "96":
+                return
+            index = int(payload[6:8], 16)
+            if opcode == "73":
+                self.reply(f"9B0102{index:02X}{parameters[index]:02X}")
+            else:
+                self.assertEqual(opcode, "71")
+                self.reply(f"970102{index:02X}{values[index - 1]:02X}")
+        self.fail(
+            f"Retry did not reach its first write: {report.dialog.message.text()}"
+        )
+
+    def test_repeated_retry_preserves_explicit_edits_and_accepts_untouched_firmware_values(
+        self,
+    ):
+        view, _item = self.editing_view()
+        details = view.details
+        details.raw_values.item(1, 1).setText("12")
+        details.save_button.click()
+        self.app.processEvents()
+        self.verified(1, 6)  # Confirmed mismatch permits an explicit Retry.
+        report = details.failure_report
+        self.addCleanup(report.dialog.close)
+
+        # NV2 already matches the explicit edit during each refresh. It must
+        # still retain that intention if writing NV1 subsequently resets it.
+        self.retry_after_refresh(report, [6, 12, 42])
+        self.verified(1, 5)  # A second failure must not replace the original set.
+        self.assertFalse(self.results[-1][1])
+        self.retry_after_refresh(report, [5, 12, 43])
+        retry_start = len(self.connection.sent) - 1
+        self.verified(1, 10)
+        self.reply("9701020280")
+        self.reply("970102032C")
+        self.app.processEvents()
+        self.assertEqual(self.payloads()[-1], "960102020C")
+        self.verified(2, 12)
+        self.reply("970102032D")
+        self.app.processEvents()
+        self.assertTrue(self.results[-1][1])
+        self.assertEqual(self.state.nv_values, {1: 10, 2: 12, 3: 45})
+        self.assertEqual(report.requested["nvs"], [10, 12, 45])
+        self.assertEqual(
+            self.payloads()[retry_start:],
+            [
+                "960102010A",
+                "71010201",
+                "71010202",
+                "71010203",
+                "960102020C",
+                "71010202",
+                "71010203",
+            ],
+        )
+
+    def test_ui_keeps_selection_and_shows_confirmed_values_on_completion(self):
+        view, item = self.editing_view()
+        details = view.details
+        details.events_save_button.click()  # NV-only edits use either tab's Save.
+        self.app.processEvents()
+        self.assertIs(view.node_list.currentItem(), item)
+        self.assertFalse(details.save_button.isEnabled())
+        self.verified(1, 10)
+        self.reply("9701020280")
+        self.reply("9701020309")
+        self.app.processEvents()
+        self.assertIs(view.node_list.currentItem(), item)
+        self.assertEqual(details.raw_values.item(1, 1).text(), "128")
+        self.assertTrue(details.edit_button.isEnabled())
+        self.assertIsNone(details.desired_configuration)
+        self.assertIn("saved successfully", details.nv_result.text())
+
+    def test_ui_failure_reports_requested_and_actual_without_automatic_discovery(self):
+        view, _item = self.editing_view()
+        details = view.details
+        details.save_button.click()
+        self.app.processEvents()
+        self.reply("590102")
+        self.reply("9701020106")
+        self.app.processEvents()
+        report = details.failure_report
+        self.addCleanup(report.dialog.close)
+        self.assertIn("readback was 6", report.dialog.message.text())
+        self.assertTrue(report.dialog.retry_button.isEnabled())
+        self.assertEqual(details.raw_values.item(0, 1).text(), "6")
+        self.assertTrue(details.variables.isEnabled())
+        self.assertIsNone(details.desired_configuration)
+        self.assertEqual(self.payloads(), ["960102010A", "71010201"])
+        # A later Restore owns a new request; the old NV report cannot retry it.
+        self.service.restore.begin(258, node_backup(self.state))
+        self.assertFalse(report.dialog.retry_button.isEnabled())
+        self.assertIn("replaced this request", report.dialog.retry_status.text())
+
+
+if __name__ == "__main__":
+    unittest.main()

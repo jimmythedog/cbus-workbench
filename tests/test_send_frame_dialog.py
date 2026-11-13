@@ -357,7 +357,7 @@ class SendFrameDialogTests(unittest.TestCase):
             details.events_edit_button.click()
             details.raw_values.item(0, 1).setText("9")
             results = []
-            service.restore.finished.connect(lambda *args: results.append(args))
+            service.nv_save.finished.connect(lambda *args: results.append(args))
             details.events_save_button.click()
             self.wait_for(lambda: self.peer.bytesAvailable() > 0)
             self.assertIn(b"N9601020109", bytes(self.peer.readAll()))

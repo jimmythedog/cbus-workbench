@@ -180,6 +180,11 @@ class NodeView(QSplitter):
 
     def begin_discovery(self) -> None:
         """Suspend selection and MDF work without disturbing editors or progress."""
+        service = self.details.cbus_service
+        if service is not None and service.nv_save.active:
+            # Editing Save changes values only; it retains the selected MDF and
+            # updates these views once, without a whole-navigator completion pass.
+            return
         if self.discovering:
             return
         current = self.node_list.currentItem()
@@ -374,6 +379,9 @@ class NodeView(QSplitter):
 
     def refresh_state(self, node_number: int) -> None:
         """Refresh the navigator identity and selected details from service state."""
+        service = self.details.cbus_service
+        if service is not None and service.nv_save.active:
+            return
         if self.state_lookup is None:
             return
         state = self.state_lookup(node_number)

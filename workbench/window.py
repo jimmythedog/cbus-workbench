@@ -378,6 +378,8 @@ class MainWindow(QMainWindow):
         self.layouts[name].layout_events.cbus_service = service
         service.restore.changed.connect(node_view.details.show_restore_progress)
         service.restore.finished.connect(node_view.details.finish_restore)
+        service.nv_save.changed.connect(node_view.details.show_restore_progress)
+        service.nv_save.finished.connect(node_view.details.finish_restore)
         node_view.details.logical_layout = self.layout_settings[name]["logical_layout"]
         node_view.state_lookup = lambda node_number: service.node_states.get(
             node_number

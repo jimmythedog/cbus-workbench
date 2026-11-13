@@ -294,7 +294,7 @@ forms when its presentation constructs are supported.
     NodeView lookup -> NodeDetails -> MdfNodeVariables definitions
     confirmed NodeState.nv_values ------> both raw tables and MDF forms
     Edit -> desired_configuration["nvs"] -> both raw tables and MDF forms
-    Cancel -> confirmed values; Save -> existing NodeRestore verification
+    Cancel -> confirmed values; NV-only Save -> NvSave; event Save -> NodeRestore
 
 No presentation-owned NV copy is created. Discovery updates refresh the confirmed
 view; an active Edit keeps its existing definitions and desired working copy.
@@ -711,8 +711,9 @@ The final full configuration discovery after event restoration remains required;
 EV teaching that changes an NV cannot produce a successful result.
 
 TRACE records comparisons, refresh ranges, verified write counts and failures.
-Editor Save and backup Restore both continue through event reconciliation and
-final verification; neither has a separate application mode.
+Save involving event edits and backup Restore continue through event
+reconciliation and final verification. NV-only editing Save uses the targeted
+workflow described below; the Restore engine is unchanged.
 
 `node_restore_events` plans each backed-up event from the latest post-NV or
 post-write discovery. It stops
@@ -784,7 +785,7 @@ from the old connection cannot retry on a replacement service. Otherwise:
 Retry -> connection/identity/ownership/safety checks
       -> full node rediscovery (no writes)
       -> repeat checks after discovery releases the wire
-      -> NodeRestore.begin(original requested dictionary)
+      -> initiating coordinator.begin(requested dictionary)
       -> existing reconciliation/writers -> same updated comparison dialog
 ```
 
@@ -867,11 +868,13 @@ connection's service, independently of its logical layout. Two single-shot Qt
 timers provide a QNN response boundary and defer status aggregation until reply
 handlers finish queuing dependent work; neither timer polls. Discovery starts are
 announced synchronously before intermediate state updates or requests. Each
-`NodeView` follows this same status for Connect, Save and node/layout restore,
+`NodeView` follows this same status for Connect, event Save and node/layout restore,
 reusing its discovery guard to defer MDF presentation. List selection is cleared
 with Qt signals blocked, preserving visible details, editor copies and progress.
 On ready/incomplete, selection returns and confirmed state is refreshed; disconnect
 clears the live display instead. Editing and discovery both lock the navigator.
+NV-only Save retains selection and the existing descriptor, deferring value
+presentation until its completion without starting this navigator refresh cycle.
 
     service busy -> suspend selection/MDF updates (retain details and progress)
                  -> chained requests and verification
@@ -913,7 +916,7 @@ complete discovery -> Edit on either tab -> original + desired copy
                                            | NV tab -> desired["nvs"]
                                            | Events -> desired["events"]
                                            + Cancel on either tab -> discard
-                                           + Save on either tab
+                                           + Save with pending event edits
                                                -> NodeRestore.begin(node, desired)
                                                -> both editors locked
                                                -> writes + rediscovery + verification
@@ -921,21 +924,51 @@ complete discovery -> Edit on either tab -> original + desired copy
                                                -> display confirmed state
 ```
 
-Save submits the same complete dictionary as a loaded YAML backup directly to
+Save involving events submits the same complete dictionary as a loaded YAML backup directly to
 `NodeRestore.begin()`; the reconciliation algorithm does not distinguish its
 origin. `NodeDetails` holds its saving flag until `restore.finished`, so writer
 completion and intermediate discovery cannot unlock the editors. Progress and
 final results are mirrored on both tabs. A validation rejection preserves edits;
 application completion (including failure) replaces them with confirmed state.
-The editor observes only the coordinator's completion. `NvWrite.write_finished`
+The editor observes only its coordinator's completion. `NvWrite.write_finished`
 and `discovery_finished`, and `EvWrite.finished`, report transaction results to
 the coordinator, never to the editor. Disconnect therefore produces one final
 application result even though writer cleanup may finish afterwards.
 
-`CbusService.write_nvs()` and `write_evs()` validate coordinator-owned transaction
-data and pass it to the verified writers. They perform no independent comparison:
-NV reconciliation and event planning in `NodeRestore` determine the writes from
-confirmed hardware state. There is no NV-only Save mode or ordinary EV Save path.
+NV-only Save from either tab uses `NvSave`, retaining the existing session and
+confirmed descriptor. It captures the pre-edit and desired NV lists and a fixed
+set of explicitly edited indices. After each verified write it uses `NvWrite`'s
+existing higher-NV discovery, with event refresh disabled. It accepts changed
+hardware values for untouched higher NVs and preserves explicit desired edits.
+The next comparison starts through a zero-delay Qt timer after queue cleanup.
+
+```text
+Save (no event edits) -> capture original, desired, explicit edits
+  -> ascending comparison -> equal: skip
+                          -> different: NVSET -> WRACK -> NVRD -> matching NVANS
+                            -> read only higher NVs sequentially
+                            -> accept untouched changes / preserve explicit edits
+                            -> next comparison
+  -> completion -> replace editors with confirmed values
+  -> failure/timeout -> stop further writes, retain evidence and safety markers
+```
+
+There is no final all-NV pass, parameter/event/EV discovery or full rediscovery.
+This editing policy assumes side effects requiring reconciliation affect higher
+NV indices. Earlier changes are outside its verification scope; explicit Refresh
+Node remains available. Restore retains its stronger full verification policy.
+While `NvSave` owns the operation, `NodeView` skips intermediate presentation and
+the selection-suspension/completion sweep. Completion updates the existing NV
+views and NV-dependent event presentation without navigator MDF lookups.
+
+`CbusService.write_nvs()` accepts active `NvSave` or `NodeRestore` ownership;
+`write_evs()` remains Restore-owned. Both use the existing verified writers.
+NV-only failures reuse `NodeFailureReport`, including its explicit refresh before
+Retry, but Retry returns to `NvSave` with the original fixed set of explicitly
+edited indices. Comparisons use freshly discovered hardware values; untouched
+NVs adopt that refreshed baseline. Confirmed untouched firmware changes become
+part of its requested NV values, so Retry does not undo them. No targeted EV Save
+has been implemented; event edits retain the existing combined application path.
 
 The Developer's Guide 6b teaching/readback sections define the wire sequence;
 no learn mode is needed. WRACK and CMDERR carry no NV index or transaction ID.

@@ -308,30 +308,41 @@ Annotations are skipped; template labels are displayed literally without substit
 2. Choose **Edit** on either **Node Variables** or **Events**. Both tabs become
    editable and remain accessible in one session.
 3. Enter NV values from 0 to 255. Switch tabs freely; all edits are retained.
-4. Choose **Save** on either tab to apply the complete desired configuration, or
-   **Cancel** to discard the entire session without writing.
+4. For NV-only edits, choose **Save** on either configuration tab. Choose **Cancel**
+   to discard the entire session without writing. If event edits are pending,
+   either Save button retains the existing complete-configuration application.
 
 Both configuration tabs become read-only during Save. Progress and the final result
-appear on both tabs. Save uses the same application and verification process as
-backup restoration: it compares against confirmed hardware state, accounts for
-firmware changes, and verifies the complete resulting configuration. Unchanged
-values remain part of the desired configuration.
+appear on both tabs. NV-only Save compares values in ascending NV order and
+writes only differences. Each write requires WRACK followed by matching NV
+readback. It then reads only higher-numbered NVs before continuing. Firmware
+changes to untouched higher NVs are accepted; values explicitly edited by you
+keep their requested value unless hardware already matches it.
+
+This editing workflow assumes dependent firmware changes affect higher-numbered
+NVs. It does not reread earlier NVs, parameters, events or EVs, and does not
+perform final full-node discovery. The display returns to confirmed values on
+completion. Use **Refresh Node** when you need a complete configuration reread.
+Backup Restore and Save involving events retain their complete-configuration
+reconciliation and final verification. Targeted EV Save is deferred.
 
 If an acknowledged NV write's verification read times out, Workbench makes one
 additional read without repeating the write. A matching value allows application
 to continue, and the final result reports that verification required recovery.
-If the additional read fails or differs, application stops and refreshes the
-resulting state as described below.
+If the additional read fails or differs, NV-only Save stops without automatic
+rediscovery. A failed higher-NV read also stops remaining writes. The result and
+comparison report show the failure; cached values remain last-confirmed evidence.
 
 Automatic NV discovery and refresh also make one additional read after a timeout,
 including during Save and Restore. Workbench waits for that NV before continuing;
 if the second read times out, discovery remains incomplete. These reads never
 repeat a write or change the response timeout.
 
-Applying the complete target can remove firmware-created events or reconstruct
-an event to clear EVs. There is no rollback. Do not use another configuration tool
-on the network during application. Failure stops further writes and refreshes the
-resulting state; earlier writes may remain applied. Use **Refresh Node** or
+Applying a complete target through Events Save or Restore can remove
+firmware-created events or reconstruct an event to clear EVs. NV-only Save does
+not write or reread events. There is no rollback. Do not use another configuration tool
+on the network during application. Earlier writes may remain applied after
+failure. Use **Refresh Node** or
 **Layouts → Refresh**, when safe, to reread hardware and compare before
 retrying. Refreshing does not retry failed writes or clear protocol safety blocks.
 A disconnect during Save reports a partial, unverified result; resolve the connection
