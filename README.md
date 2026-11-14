@@ -15,10 +15,13 @@ Early development. Currently implemented:
   until discovery ends. When
   discovery ends, the previous node is restored if found; otherwise the first
   discovered node is selected, including when discovery is incomplete.
-- Reading node variables (NVs), stored events and event variables (EVs), with one
-  shared editing session. NV-only Save verifies each changed NV and reads only
-  higher NVs, accepting firmware changes to untouched values. Save involving event
-  edits and Restore retain complete-configuration application and verification.
+- Reading node variables (NVs), stored events and event variables (EVs), with separate
+  NV and Events Edit/Save/Cancel actions. Only one editor is active at a time; the
+  other tab stays available for read-only browsing. NV Save verifies each write,
+  reads only MDF-linked NVs and preserves outstanding edits. After verified NV
+  writes, stored events and EVs are refreshed, including after a partial Save when
+  safe. Events Save and Node Restore retain complete-configuration application
+  and verification until the targeted Events writer is implemented.
 - Separate full-width Produced Events and Consumed Events tabs.
   Live EV rows show supported MDF controls alongside their raw values.
   Supported MDF controls and raw values edit the same desired configuration;

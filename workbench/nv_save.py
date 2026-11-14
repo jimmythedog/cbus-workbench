@@ -1,4 +1,4 @@
-"""Apply NV edits, accepting firmware changes to untouched higher NVs."""
+"""Apply NV edits, refresh MDF-linked NVs, then rediscover stored events."""
 
 import logging
 from copy import deepcopy
@@ -67,9 +67,13 @@ class NvSave(QObject):
         *,
         pre_edit: list[int] | None = None,
         user_edited: set[int] | None = None,
+        mdf: dict | None = None,
     ) -> None:
         self.check(number, backup)
         state = self.service.node_states[number]
+        self.mdf = deepcopy(mdf or {})
+        self.event_refresh = False
+        self.events_refreshed = False
         self.backup = deepcopy(backup)
         self.edited = list(backup["nvs"])
         self.pre_edit = (
@@ -121,6 +125,7 @@ class NvSave(QObject):
                 self.next_index += 1
                 if self.edited[index] == self.pre_edit[index]:
                     continue
+                self.linked_indices = linked_nvs(self.mdf, index + 1, len(self.edited))
                 self.changed.emit(self.node_number, f"Saving NV {index + 1}…")
                 self.service.write_nvs(
                     self.node_number, {index + 1: self.edited[index]}, owner=self
@@ -139,21 +144,33 @@ class NvSave(QObject):
             self.finish(False, message)
             return
         self.pre_edit[self.next_index - 1] = self.edited[self.next_index - 1]
-        self.changed.emit(number, "Reading higher-numbered NVs…")
+        self.changed.emit(number, "Reading MDF-linked NVs…")
 
     def refreshed(self, number: int, message: str) -> None:
         if not self.active or number != self.node_number:
             return
         state = self.service.node_states[number]
-        # Only higher-numbered dependencies are reconciled by editing Save.
-        # Explicit edits keep their desired value; untouched NVs follow firmware.
-        for index in range(self.next_index, len(self.edited)):
+        if self.event_refresh:
+            self.event_refresh = False
+            complete = (DiscoveryProgress.COMPLETE, DiscoveryProgress.SKIPPED)
+            success, result = self.pending_result
+            if (
+                state.event_progress not in complete
+                or state.ev_progress not in complete
+            ):
+                success = False
+                result += " Stored event/EV refresh incomplete."
+            self.finish(success, result)
+            return
+        # Explicit edits retain their desired value while live state follows hardware.
+        for nv_index in self.linked_indices:
+            index = nv_index - 1
             actual = state.nv_values.get(index + 1)
             if actual is None:
                 continue
             if actual != self.pre_edit[index]:
                 self.log(
-                    "Higher NV changed",
+                    "Linked NV refreshed",
                     nv_index=index + 1,
                     actual=actual,
                     user_edited=index in self.user_edited,
@@ -164,7 +181,7 @@ class NvSave(QObject):
                     self.backup["nvs"][index] = actual
         if state.nv_progress != DiscoveryProgress.COMPLETE:
             self.finish(
-                False, "Higher NV reads incomplete; remaining edits were not written."
+                False, "Linked NV reads incomplete; remaining edits were not written."
             )
             return
         self.timer.start(0)
@@ -175,6 +192,34 @@ class NvSave(QObject):
 
     def finish(self, success: bool, message: str) -> None:
         self.timer.stop()
+        service = self.service
+        # A resolved rejection/mismatch leaves the wire safe for read-only event
+        # discovery. An ambiguous write keeps its existing protocol safety block.
+        safe = (
+            not service._closed
+            and service.connection.state == "Connected"
+            and not service.nv_write.unverified
+            and not service.ev_write.blocked
+            and not any(
+                state.identity.flags & 0x20 or state.parameters.get(8, 0) & 0x20
+                for state in service.node_states.values()
+            )
+        )
+        if self.verified and not self.events_refreshed:
+            self.events_refreshed = True
+            if safe:
+                self.pending_result = success, message
+                self.event_refresh = True
+                service.nv_write.refreshing = True
+                service.nv_write.refresh_events = True
+                self.changed.emit(self.node_number, "Refreshing stored events and EVs…")
+                self.log(
+                    "Refreshing stored events after verified NV writes", success=success
+                )
+                service._restart_event_discovery(self.node_number)
+                service._send_next_request()
+                return
+            message += " Stored events were not refreshed because discovery is unsafe or the connection ended."
         self.active = False
         if not success:
             message = f"Partial Save: {self.verified} NV writes verified. {message} No rollback was performed. Use Refresh Node when safe to reread hardware; refreshing does not retry failed writes or clear protocol safety blocks."
@@ -198,3 +243,25 @@ class NvSave(QObject):
                 }
             },
         )
+
+
+def linked_nvs(mdf: dict, written: int, count: int) -> list[int]:
+    """Find links in the existing nested MDF presentation; never infer dependencies."""
+    result = []
+
+    def visit(value):
+        if isinstance(value, dict):
+            if value.get("nodeVariableIndex") == written:
+                for index in value.get("linkedVariables", {}).get("NV", []):
+                    if type(index) is not int or not 1 <= index <= count:
+                        raise ValueError(f"Invalid MDF-linked NV index: {index}")
+                    if index != written and index not in result:
+                        result.append(index)
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(mdf.get("nodeVariables", []))
+    return result

@@ -395,11 +395,13 @@ class MdfSettings(QScrollArea):
         parent_conditions=(),
         source_definitions=None,
         token_editor=None,
+        allow_undefined: bool = False,
     ):
         super().__init__()
         self.rows = []
         self.token_editor = token_editor
         self.editing = False
+        self.allow_undefined = allow_undefined
         self.values = None
         self.labels = {}
         contents = QWidget()
@@ -438,7 +440,11 @@ class MdfSettings(QScrollArea):
         index = definition["nodeVariableIndex"]
         current = nv_value(self.values, index)
         if current is None:
-            return  # A partial field cannot preserve bits of an unread byte.
+            if not self.allow_undefined:
+                return  # NV edits still require the original byte.
+            # An explicit first EV edit establishes a byte. There are no known
+            # bits to preserve yet; subsequent masked edits preserve that byte.
+            current = 0
         if isinstance(control, QComboBox):
             replacement = control.currentData()
             if replacement is None:
@@ -783,7 +789,7 @@ class MdfSettings(QScrollArea):
             self.set_row_visible(control, visible)
             control.setEnabled(
                 self.editing
-                and value is not None
+                and (value is not None or self.allow_undefined)
                 and not visibility_message
                 and definition["type"] != "NodeVariableDual"
                 and (not isinstance(control, MdfNumericValue) or bool(control.scale))

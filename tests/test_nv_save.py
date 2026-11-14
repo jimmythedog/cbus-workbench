@@ -1,6 +1,7 @@
 """Targeted editing Save through confirmed, observable wire exchanges."""
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from PySide6.QtCore import Qt
@@ -36,6 +37,14 @@ class NvSaveTests(unittest.TestCase):
         self.service.nodes[258] = self.state.identity
         self.service.node_states[258] = self.state
         self.backup = node_backup(self.state)
+        self.mdf = {
+            "nodeVariables": [
+                {"nodeVariableIndex": 1, "linkedVariables": {"NV": [2, 3]}},
+                {"nodeVariableIndex": 2, "linkedVariables": {"NV": [3]}},
+            ]
+        }
+        self.observed = []
+        self.service.event_received.connect(self.observed.append)
         self.results = []
         self.service.nv_save.finished.connect(lambda *args: self.results.append(args))
         self.addCleanup(self.service.close)
@@ -45,7 +54,7 @@ class NvSaveTests(unittest.TestCase):
 
     def save(self, values):
         self.backup["nvs"] = values
-        self.service.nv_save.begin(258, self.backup)
+        self.service.nv_save.begin(258, self.backup, mdf=self.mdf)
         self.app.processEvents()
 
     def verified(self, index, value):
@@ -60,7 +69,7 @@ class NvSaveTests(unittest.TestCase):
         self.assertTrue(self.results[-1][1])
         self.assertEqual(self.connection.sent, [])
 
-    def test_single_edit_reads_only_higher_nvs_and_accepts_firmware_changes(self):
+    def test_linked_reads_accept_firmware_changes(self):
         self.save([10, 8, 9])
         self.verified(1, 10)
         self.reply("9701020280")
@@ -108,6 +117,152 @@ class NvSaveTests(unittest.TestCase):
         self.assertTrue(self.results[-1][1])
         self.assertEqual(len(self.connection.sent), 4)
 
+    def test_absent_and_empty_links_read_only_written_nv(self):
+        for definition in (
+            {},
+            {"linkedVariables": {}},
+            {"linkedVariables": {"NV": []}},
+        ):
+            with self.subTest(definition=definition):
+                self.connection.sent.clear()
+                self.state.nv_values[1] = 7
+                self.mdf = {"nodeVariables": [{"nodeVariableIndex": 1, **definition}]}
+                self.save([10, 8, 9])
+                self.verified(1, 10)
+                self.app.processEvents()
+                self.assertTrue(self.results[-1][1])
+                self.assertEqual(self.payloads(), ["960102010A", "71010201"])
+
+    def test_link_can_refresh_a_lower_nv_without_reading_unrelated_nvs(self):
+        self.mdf = {
+            "nodeVariables": [
+                {
+                    "type": "NodeVariableTabs",
+                    "tabPanels": [
+                        {
+                            "items": [
+                                {
+                                    "type": "NodeVariableGroup",
+                                    "groupItems": [
+                                        {
+                                            "nodeVariableIndex": 3,
+                                            "linkedVariables": {"NV": [1]},
+                                        }
+                                    ],
+                                }
+                            ]
+                        }
+                    ],
+                }
+            ]
+        }
+        self.save([7, 8, 10])
+        self.verified(3, 10)
+        self.reply("970102012A")
+        self.app.processEvents()
+        self.assertTrue(self.results[-1][1])
+        self.assertEqual(self.state.nv_values, {1: 42, 2: 8, 3: 10})
+        self.assertEqual(self.payloads(), ["960102030A", "71010203", "71010201"])
+
+    def consumer(self):
+        self.state.identity = Pnn(258, 13, 34, 5)
+        self.service.nodes[258] = self.state.identity
+        self.state.parameters[5] = 1
+        self.state.stored_event_count = 2
+        self.state.event_identities = {1: (1, 2), 2: (3, 4)}
+        self.state.ev_values = {1: {1: 5}, 2: {1: 6}}
+        self.state.event_progress = self.state.ev_progress = DiscoveryProgress.COMPLETE
+        self.backup = node_backup(self.state)
+        self.mdf = {}
+
+    def answer_events(self):
+        self.assertEqual(self.payloads()[-1], "580102")
+        self.reply("74010202")
+        self.assertEqual(self.payloads()[-1], "570102")
+        self.reply("F201020003000407")
+        self.reply("F201020005000608")
+        self.reply("B5010207012A")
+        self.reply("B5010208012B")
+        self.app.processEvents()
+        self.assertEqual(self.state.event_identities, {7: (3, 4), 8: (5, 6)})
+        self.assertEqual(self.state.ev_values, {7: {1: 42}, 8: {1: 43}})
+
+    def test_nv_save_refreshes_added_removed_and_changed_events(self):
+        self.consumer()
+        view, _item = self.editing_view()
+        details = view.details
+        details.save_editing()
+        self.app.processEvents()
+        self.verified(1, 10)
+        self.app.processEvents()
+        self.assertFalse(self.results)
+        self.answer_events()
+        self.assertTrue(self.results[-1][1])
+        self.assertEqual(self.observed, [])
+        tree = details.node_events.consumed_table
+        self.assertEqual(tree.topLevelItemCount(), 2)
+        self.assertEqual(
+            [tree.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole) for i in range(2)],
+            [(3, 4), (5, 6)],
+        )
+        self.assertEqual(
+            self.payloads(),
+            ["960102010A", "71010201", "580102", "570102", "9C01020701", "9C01020801"],
+        )
+
+    def test_partial_save_refreshes_events_after_resolved_failure(self):
+        self.consumer()
+        self.save([10, 12, 9])
+        self.verified(1, 10)
+        self.app.processEvents()
+        self.reply("6F010201")
+        self.answer_events()
+        self.assertFalse(self.results[-1][1])
+        self.assertIn("1 NV writes verified", self.results[-1][2])
+
+    def test_linked_read_failure_still_refreshes_events_after_verified_write(self):
+        self.consumer()
+        self.mdf = {
+            "nodeVariables": [{"nodeVariableIndex": 1, "linkedVariables": {"NV": [2]}}]
+        }
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 50):
+            self.save([10, 8, 12])
+            self.verified(1, 10)
+            for _ in range(30):
+                if self.payloads()[-1] == "580102":
+                    break
+                QTest.qWait(10)
+            self.answer_events()
+        self.assertFalse(self.results[-1][1])
+        self.assertIn("Linked NV reads incomplete", self.results[-1][2])
+        self.assertNotIn("960102030C", self.payloads())
+
+    def test_partial_save_with_uncertain_write_does_not_start_discovery(self):
+        self.consumer()
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):
+            self.save([10, 12, 9])
+            self.verified(1, 10)
+            self.app.processEvents()
+            self.wait_for_result()
+        self.assertFalse(self.results[-1][1])
+        self.assertNotIn("580102", self.payloads())
+
+    def test_unchanged_consumer_does_not_refresh_events(self):
+        self.consumer()
+        self.save([7, 8, 9])
+        self.assertTrue(self.results[-1][1])
+        self.assertEqual(self.connection.sent, [])
+
+    def test_event_refresh_failure_reports_partial_save(self):
+        self.consumer()
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):
+            self.save([10, 8, 9])
+            self.verified(1, 10)
+            self.wait_for_result()
+        self.assertFalse(self.results[-1][1])
+        self.assertIn("event", self.results[-1][2].lower())
+        self.assertEqual(self.state.event_progress, DiscoveryProgress.INCOMPLETE)
+
     def test_last_nv_edit_has_no_follow_on_discovery(self):
         self.save([7, 8, 10])
         self.verified(3, 10)
@@ -150,14 +305,14 @@ class NvSaveTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Protocol safety unresolved"):
             self.service.nv_save.begin(258, self.backup)
 
-    def test_higher_nv_read_timeout_prevents_remaining_edits(self):
+    def test_linked_nv_read_timeout_prevents_remaining_edits(self):
         with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):
             self.save([10, 8, 12])
             self.verified(1, 10)
             self.reply("9701020280")
             self.wait_for_result()
         self.assertFalse(self.results[-1][1])
-        self.assertIn("Higher NV reads incomplete", self.results[-1][2])
+        self.assertIn("Linked NV reads incomplete", self.results[-1][2])
         self.assertIn("1 NV writes verified", self.results[-1][2])
         self.assertEqual(self.state.nv_progress, DiscoveryProgress.INCOMPLETE)
         self.assertEqual(self.state.nv_values[2], 128)
@@ -215,6 +370,7 @@ class NvSaveTests(unittest.TestCase):
         item.setData(Qt.ItemDataRole.UserRole, self.state.identity)
         view.node_list.addItem(item)
         view.node_list.setCurrentItem(item)
+        details.live_mdf = SimpleNamespace(data=self.mdf)
         details.start_editing()
         details.raw_values.item(0, 1).setText("10")
         return view, item
@@ -290,7 +446,7 @@ class NvSaveTests(unittest.TestCase):
     def test_ui_keeps_selection_and_shows_confirmed_values_on_completion(self):
         view, item = self.editing_view()
         details = view.details
-        details.events_save_button.click()  # NV-only edits use either tab's Save.
+        details.save_button.click()
         self.app.processEvents()
         self.assertIs(view.node_list.currentItem(), item)
         self.assertFalse(details.save_button.isEnabled())

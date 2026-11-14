@@ -14,7 +14,7 @@ from test_cbus_service import ConnectionStub
 
 from workbench.cbus_service import CbusService, DiscoveryProgress, NodeState
 from workbench.layout_view import LayoutView
-from workbench.node_backup_files import backup_directory, save_backup
+from workbench.node_backup_files import backup_directory, node_backup, save_backup
 from workbench.node_metadata import save_metadata
 from workbench.pnn import Pnn
 
@@ -202,13 +202,26 @@ class RefreshNodeTests(unittest.TestCase):
         self.assertEqual(self.outcomes[-1][1], "Refresh Node incomplete")
         self.assertFalse(self.service.discovery_pending())
 
+    def test_safe_refresh_reads_state_but_preserves_ev_write_safety_block(self):
+        identity = Pnn(42, 13, 34, 5)
+        self.service.nodes[42] = identity
+        self.service.node_states[42] = NodeState(identity, can_id=2)
+        self.service.ev_write.blocked = True
+        self.assertEqual(self.service.refresh_unavailable_reason(), "")
+        self.service.refresh_node(42)
+        answer_refresh(self.connection)
+        self.app.processEvents()
+        self.assertEqual(self.outcomes[-1], (42, "Refresh Node complete"))
+        self.assertEqual(self.service.node_states[42].ev_values, {7: {1: 11}})
+        with self.assertRaisesRegex(ValueError, "Protocol safety unresolved"):
+            self.service.restore.check(42, node_backup(self.service.node_states[42]))
+
     def test_refresh_refuses_incompatible_owners_without_sending(self):
         for owner, attribute in (
             (self.service.restore, "active"),
             (self.service.nv_write, "active"),
             (self.service.ev_write, "active"),
             (self.service.ev_write, "refreshing"),
-            (self.service.ev_write, "blocked"),
         ):
             with self.subTest(owner=type(owner).__name__, attribute=attribute):
                 setattr(owner, attribute, True)

@@ -91,7 +91,7 @@ class EventMdfTests(unittest.TestCase):
         self.assertFalse(row.isHidden())
         self.assertEqual(form.raw_value.text(), "")
         self.assertFalse(form.raw_value.isReadOnly())
-        self.assertFalse(self.control(row, QComboBox).isEnabled())
+        self.assertTrue(self.control(row, QComboBox).isEnabled())
         form.raw_value.setText("255")
         form.update_raw_value()
         self.assertEqual(desired["events"][0]["eventVariables"], [0, 255])
@@ -99,6 +99,91 @@ class EventMdfTests(unittest.TestCase):
         row = self.events.consumed_table.topLevelItem(0).child(1)
         self.assertEqual(row.text(1), "")
         self.assertTrue(row.isHidden())
+
+    def test_all_editable_ev_controls_establish_undefined_values_and_sync_raw(self):
+        cases = (
+            (
+                "Select",
+                {"bitMask": 15, "options": [{"label": "Three", "value": 3}]},
+                3,
+                5,
+            ),
+            ("Number", {"startBit": 1, "endBit": 3}, 6, 10),
+            ("Slider", {"startBit": 1, "endBit": 3, "max": 7}, 6, 10),
+            ("BitSingle", {"bit": 7}, 128, 0),
+            (
+                "BitArray",
+                {"bitCollection": [{"bitPosition": 7, "label": "Flag"}]},
+                128,
+                0,
+            ),
+        )
+        for kind, properties, expected, raw_value in cases:
+            with self.subTest(kind=kind):
+                self.state.parameters[5] = 4
+                self.state.ev_values[1] = {1: 65, 2: None, 3: None, 4: None}
+                definition = {
+                    "type": "EventVariable" + kind,
+                    "eventVariableIndex": 4,
+                    "displayTitle": kind,
+                    **properties,
+                }
+                if kind == "Select":
+                    definition["options"].append({"label": "Five", "value": 5})
+                event = self.show({"eventVariables": [definition]})
+                row = event.child(3)
+                form = self.events.consumed_table.itemWidget(row, 1)
+                control_type = (
+                    QComboBox
+                    if kind == "Select"
+                    else QDoubleSpinBox
+                    if kind in ("Number", "Slider")
+                    else QCheckBox
+                )
+                control = self.control(row, control_type)
+                self.assertFalse(control.isEnabled())
+                desired = {
+                    "nvs": [],
+                    "events": [
+                        {"nodeNumber": 0, "eventNumber": 45, "eventVariables": [65]}
+                    ],
+                }
+                self.events.begin_configuration_edit(desired)
+                self.assertTrue(control.isEnabled())
+                self.assertEqual(form.raw_value.text(), "")
+                if kind == "Select":
+                    self.assertEqual(control.currentIndex(), -1)
+                    control.setCurrentIndex(control.findData(3))
+                elif kind in ("Number", "Slider"):
+                    self.assertEqual(control.text(), "")
+                    control.setValue(3)
+                else:
+                    self.assertEqual(
+                        control.checkState(), Qt.CheckState.PartiallyChecked
+                    )
+                    control.click()
+                self.assertEqual(
+                    desired["events"][0]["eventVariables"], [65, 0, 0, expected]
+                )
+                self.assertEqual(row.text(1), str(expected))
+                self.assertEqual(form.raw_value.text(), str(expected))
+                self.assertEqual(event.child(1).text(1), "0")
+                form.raw_value.setText(str(raw_value))
+                form.update_raw_value()
+                if kind == "Select":
+                    self.assertEqual(control.currentData(), raw_value)
+                elif kind in ("Number", "Slider"):
+                    self.assertEqual(control.value(), 5)
+                else:
+                    self.assertFalse(control.isChecked())
+                self.assertEqual(self.state.ev_values[1][4], None)
+                self.events.cancel_edit()
+                self.assertFalse(
+                    self.control(
+                        self.events.consumed_table.topLevelItem(0).child(3),
+                        control_type,
+                    ).isEnabled()
+                )
 
     def test_collapsed_refresh_uses_latest_values_and_visibility_on_expansion(self):
         group = self.mdf["eventVariables"][0]

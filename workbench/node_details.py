@@ -54,6 +54,7 @@ class NodeDetails(QWidget):
         self.cbus_service = None
         self.original_configuration = None
         self.desired_configuration = None
+        self.editing_session = None
         self.failure_report = None
         self.saving_configuration = False
         self.saving_nvs = False
@@ -252,21 +253,21 @@ class NodeDetails(QWidget):
         self.node_events.refresh_configuration_controls()
 
     def save_editing(self):
-        """Use targeted NV Save; event edits retain the existing application path."""
-        if self.desired_configuration is None or self.saving_configuration:
+        """Save only the active NV session through its verified writer."""
+        if self.editing_session != "nvs" or self.saving_configuration:
             return
+        self.save_configuration()
+
+    def save_configuration(self):
         number = self.desired_configuration["node"]
-        self.saving_nvs = (
-            self.desired_configuration["events"]
-            == self.original_configuration["events"]
-        )
+        self.saving_nvs = self.editing_session == "nvs"
         self.set_configuration_saving(True)
         self.show_configuration_result("Saving node configuration…")
         trace(
             logger,
             "Submitting NV editing Save"
             if self.saving_nvs
-            else "Submitting shared node configuration",
+            else "Submitting event configuration",
             extra={"fields": {"node_number": number}},
         )
         try:
@@ -275,6 +276,7 @@ class NodeDetails(QWidget):
                     number,
                     self.desired_configuration,
                     pre_edit=self.original_configuration["nvs"],
+                    mdf=self.live_mdf.data if self.live_mdf else None,
                 )
             else:
                 self.cbus_service.restore.begin(number, self.desired_configuration)
@@ -286,16 +288,16 @@ class NodeDetails(QWidget):
             self.show_configuration_result(f"Node {number}: {error}")
             trace(
                 logger,
-                "Shared node configuration rejected",
+                "Node configuration rejected",
                 extra={"fields": {"node_number": number, "reason": str(error)}},
             )
 
     def set_configuration_saving(self, saving: bool) -> None:
-        """Lock both editors until the coordinator's final completion."""
+        """Lock the active editor; the other tab remains readable."""
         self.saving_configuration = saving
-        self.variables.setEnabled(not saving)
-        self.node_events.setEnabled(not saving)
-        self.produced_events_page.setEnabled(not saving)
+        self.variables.setEnabled(not saving or self.editing_session != "nvs")
+        self.node_events.setEnabled(not saving or self.editing_session != "events")
+        self.produced_events_page.setEnabled(True)
         for button in (
             self.save_button,
             self.events_save_button,
@@ -305,14 +307,17 @@ class NodeDetails(QWidget):
             button.setEnabled(not saving)
 
     def show_configuration_result(self, message: str) -> None:
-        self.nv_result.setText(message)
-        self.events_result.setText(message)
+        result = (
+            self.events_result if self.editing_session == "events" else self.nv_result
+        )
+        result.setText(message)
 
     def can_edit_configuration(self) -> bool:
         state = self.live_state
         service = self.cbus_service
         return bool(
             self.connected
+            and self.desired_configuration is None
             and not self.annotation_editing
             and service is not None
             and state is not None
@@ -401,14 +406,20 @@ class NodeDetails(QWidget):
             current.setText(label)
 
     def cancel_editing(self):
+        if self.editing_session != "nvs":
+            return
+        self.cancel_configuration()
+
+    def cancel_configuration(self):
         if self.saving_configuration:
             return
         if self.desired_configuration is not None:
             trace(
                 logger,
-                "Discarding shared node configuration edits",
+                "Discarding active node configuration edits",
                 extra={"fields": {"node_number": self.desired_configuration["node"]}},
             )
+            self.editing_session = None
             self.original_configuration = None
             self.desired_configuration = None
             self.node_events.cancel_edit()
@@ -416,25 +427,34 @@ class NodeDetails(QWidget):
         self.stop_editing()
 
     def start_editing(self):
+        self.begin_configuration_edit("nvs")
+
+    def begin_configuration_edit(self, session):
         if not self.can_edit_configuration() or self.desired_configuration is not None:
             return
+        self.editing_session = session
         node = self.nv_display_node()
         self.show_configuration_result("")
         self.set_editing(True)
         self.editing_changed.emit(True)
-        # Both views share copies. Only verified readback changes live state.
+        # Only the owning tab edits this snapshot; hardware values stay separate.
         trace(
             logger,
-            "Beginning shared node configuration editing",
+            f"Beginning {session} editing",
             extra={"fields": {"node_number": self.live_state.identity.node_number}},
         )
         self.original_configuration = node_backup(self.live_state)
         self.desired_configuration = deepcopy(self.original_configuration)
-        self.node_events.begin_configuration_edit(self.desired_configuration)
-        self.events_buttons.setCurrentIndex(1)
-        for button in (self.save_button, self.events_save_button):
-            button.setEnabled(True)
-            button.setToolTip("")
+        self.edit_button.setEnabled(False)
+        self.events_edit_button.setEnabled(False)
+        if session == "events":
+            self.node_events.begin_configuration_edit(self.desired_configuration)
+            self.events_buttons.setCurrentIndex(1)
+            self.events_save_button.setEnabled(True)
+            self.events_save_button.setToolTip("")
+            return
+        self.save_button.setEnabled(True)
+        self.save_button.setToolTip("")
         self.raw_values.show_node(node, self.desired_configuration["nvs"])
         self.mdf_values.show_node(node, self.desired_configuration["nvs"])
         self.raw_values.set_editing(True)
@@ -455,6 +475,7 @@ class NodeDetails(QWidget):
         self.set_editing(False)
         self.editing_changed.emit(False)
         self.edit_button.setEnabled(self.can_edit_configuration())
+        self.events_edit_button.setEnabled(self.can_edit_configuration())
 
     def set_editing(self, editing):
         self.tabs.setTabEnabled(self.tabs.indexOf(self.details_page), not editing)
@@ -464,7 +485,7 @@ class NodeDetails(QWidget):
 
     def start_events_editing(self):
         if self.live_state is not None:
-            self.start_editing()
+            self.begin_configuration_edit("events")
             return
         self.events_result.clear()
         self.events_save_button.setEnabled(True)
@@ -473,14 +494,15 @@ class NodeDetails(QWidget):
         self.events_buttons.setCurrentIndex(1)
 
         self.tabs.setTabEnabled(self.tabs.indexOf(self.details_page), False)
-        self.tabs.setTabEnabled(self.tabs.indexOf(self.variables_page), False)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.variables_page), True)
         self.tabs.setTabEnabled(self.tabs.indexOf(self.node_backups), False)
 
         self.editing_changed.emit(True)
 
     def cancel_events_editing(self):
-        if self.desired_configuration is not None:
-            self.cancel_editing()
+        if self.live_state is not None:
+            if self.editing_session == "events":
+                self.cancel_configuration()
             return
         self.node_events.cancel_edit()
         self.finish_events_editing()
@@ -495,7 +517,8 @@ class NodeDetails(QWidget):
 
     def save_events_editing(self):
         if self.live_state is not None:
-            self.save_editing()
+            if self.editing_session == "events" and not self.saving_configuration:
+                self.save_configuration()
             return
         self.node_events.save_edit()
         self.finish_events_editing()
@@ -568,7 +591,7 @@ class NodeDetails(QWidget):
             "-" if state.stored_event_count is None else str(state.stored_event_count)
         )
         self.edit_button.setEnabled(self.can_edit_configuration())
-        if self.desired_configuration is None:
+        if self.editing_session != "nvs":
             self.show_nv_values()
         self.node_events.token_editor = (
             self.token_label_editor if self.annotations else None
@@ -607,7 +630,7 @@ class NodeDetails(QWidget):
         if self.node_events.editing_values is not None:
             self.cancel_events_editing()
         if self.desired_configuration is not None:
-            self.cancel_editing()
+            self.cancel_configuration()
         if self.annotation_editing:
             self.node_name_edit.cancel()
             self.event_name_edit.cancel()
@@ -711,7 +734,7 @@ class NodeDetails(QWidget):
             and self.desired_configuration is not None
             and not self.saving_configuration
         ):
-            self.cancel_editing()
+            self.cancel_configuration()
             message = (
                 "Connection ended; node configuration edits discarded without writing."
             )
@@ -889,7 +912,7 @@ class NodeDetails(QWidget):
         if self.saving_configuration:
             trace(
                 logger,
-                "Shared node configuration application finished",
+                "Node configuration application finished",
                 extra={
                     "fields": {
                         "node_number": node_number,
@@ -899,8 +922,8 @@ class NodeDetails(QWidget):
                 },
             )
             self.set_configuration_saving(False)
-            self.cancel_editing()  # Replace both working views with confirmed state.
             self.show_configuration_result(f"Node {node_number}: {message}")
+            self.cancel_configuration()
             self.events_edit_button.setEnabled(self.can_edit_configuration())
             self.update_backup_buttons()
             self.saving_nvs = False

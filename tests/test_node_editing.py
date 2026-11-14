@@ -1,4 +1,4 @@
-"""One complete backup-format working copy across both configuration tabs."""
+"""Independent NV and Events sessions using backup-format working copies."""
 
 import unittest
 from copy import deepcopy
@@ -127,16 +127,15 @@ class NodeEditingTests(unittest.TestCase):
             if tree.topLevelItem(i).text(0) == address
         )
 
-    def test_combined_edit_matches_yaml_loaded_configuration(self):
-        self.details.edit_button.click()
-        self.details.raw_values.item(0, 1).setText("99")
+    def test_events_edit_matches_yaml_loaded_configuration(self):
+        self.details.events_edit_button.click()
         self.event().child(0).setText(1, "4")
         self.event().child(1).setText(1, "")
         with TemporaryDirectory() as directory:
             path = Path(directory) / "node.yaml"
             path.write_text(
                 "format_version: 1\ncomplete: true\npartOfLayoutBackup: false\n"
-                "node: 258\nnvs: [99, 8]\nevents:\n"
+                "node: 258\nnvs: [7, 8]\nevents:\n"
                 "  - nodeNumber: 0\n    eventNumber: 1000\n"
                 "    eventVariables: [4, null, 0]\n"
                 "  - nodeNumber: 259\n    eventNumber: 45\n"
@@ -150,15 +149,32 @@ class NodeEditingTests(unittest.TestCase):
         self.assertIsNone(values[1])
         self.assertIs(type(values[2]), int)
 
-    def test_either_edit_and_cancel_button_controls_both_tabs(self):
+    def test_only_one_editor_is_active_and_other_tab_actions_preserve_draft(self):
         details = self.details
         original = node_backup(self.state)
-        for edit, cancel in (
-            (details.edit_button, details.events_cancel_button),
-            (details.events_edit_button, details.cancel_button),
-        ):
-            with self.subTest(edit=edit):
+        for session in ("nvs", "events"):
+            with self.subTest(session=session):
+                nvs = session == "nvs"
+                edit = details.edit_button if nvs else details.events_edit_button
+                cancel = details.cancel_button if nvs else details.events_cancel_button
                 edit.click()
+                expected = deepcopy(original)
+                if nvs:
+                    details.raw_values.item(0, 1).setText("99")
+                    expected["nvs"][0] = 99
+                    details.start_events_editing()
+                    details.save_events_editing()
+                    details.cancel_events_editing()
+                    self.assertIsNone(details.node_events.desired_configuration)
+                    self.assertFalse(details.events_edit_button.isEnabled())
+                else:
+                    self.event().child(1).setText(1, "13")
+                    expected["events"][0]["eventVariables"][1] = 13
+                    details.start_editing()
+                    details.save_editing()
+                    details.cancel_editing()
+                    self.assertFalse(details.raw_values.editTriggers())
+                    self.assertFalse(details.edit_button.isEnabled())
                 for page in (
                     details.variables_page,
                     details.produced_events_page,
@@ -168,27 +184,16 @@ class NodeEditingTests(unittest.TestCase):
                         details.tabs.isTabEnabled(details.tabs.indexOf(page))
                     )
                     details.tabs.setCurrentWidget(page)
-                details.raw_values.item(0, 1).setText("99")
-                self.event().child(1).setText(1, "13")
-                expected = deepcopy(original)
-                expected["nvs"][0] = 99
-                expected["events"][0]["eventVariables"][1] = 13
-                self.assertEqual(details.desired_configuration, expected)
-                self.assertEqual(details.original_configuration, original)
                 details.show_live_state(self.state)
                 self.assertEqual(details.desired_configuration, expected)
-                self.assertEqual(details.raw_values.item(0, 1).text(), "99")
-                self.assertEqual(self.event().child(1).text(1), "13")
-                validate_backup(details.desired_configuration)
                 self.assertEqual(node_backup(self.state), original)
+                self.assertEqual(self.connection.sent, [])
                 cancel.click()
                 self.assertIsNone(details.desired_configuration)
-                self.assertIsNone(details.original_configuration)
                 self.assertEqual(details.raw_values.item(0, 1).text(), "7")
                 self.assertEqual(self.event().child(1).text(1), "12")
-                self.assertEqual(details.buttons.currentIndex(), 0)
-                self.assertEqual(details.events_buttons.currentIndex(), 0)
-                self.assertEqual(self.connection.sent, [])
+                self.assertTrue(details.edit_button.isEnabled())
+                self.assertTrue(details.events_edit_button.isEnabled())
 
     def test_clearing_and_zero_preserve_backup_schema_and_other_configuration(self):
         self.details.events_edit_button.click()
@@ -197,12 +202,59 @@ class NodeEditingTests(unittest.TestCase):
         expected["events"][0]["eventVariables"][1] = None
         self.assertEqual(self.details.desired_configuration, expected)
         self.event().child(3).setText(1, "0")
+        expected["events"][0]["eventVariables"][1] = 0
         expected["events"][0]["eventVariables"].append(0)
         self.assertEqual(self.details.desired_configuration, expected)
         self.event().child(3).setText(1, "")
         expected["events"][0]["eventVariables"].pop()
         self.assertEqual(self.details.desired_configuration, expected)
         validate_backup(self.details.desired_configuration)
+
+    def test_numeric_ev_edit_fills_only_preceding_undefined_positions(self):
+        from workbench.mdfs import Mdf
+
+        self.state.ev_values[9] = {1: 65, 2: None, 3: 12, 4: None}
+        mdf = Mdf(
+            Path("test.json"),
+            {
+                "nodeVariables": [],
+                "eventVariables": [
+                    {
+                        "type": "EventVariableNumber",
+                        "eventVariableIndex": 2,
+                        "displayTitle": "EV2",
+                    }
+                ],
+            },
+        )
+        self.details.show_live_state(self.state, mdf)
+        self.details.start_events_editing()
+        event = self.event()
+        event.setExpanded(True)
+        event.child(3).setText(1, "3")
+        self.assertEqual(
+            self.details.desired_configuration["events"][0]["eventVariables"],
+            [65, 0, 12, 3],
+        )
+        self.assertEqual(event.child(1).text(1), "0")
+        form = self.details.node_events.consumed_table.itemWidget(event.child(1), 1)
+        self.assertEqual(form.raw_value.text(), "0")
+        self.assertEqual(self.state.ev_values[9], {1: 65, 2: None, 3: 12, 4: None})
+        self.assertEqual(self.connection.sent, [])
+
+    def test_edit_within_existing_range_fills_preceding_gaps_even_for_zero(self):
+        self.state.ev_values[9] = {1: 65, 2: None, 3: None, 4: 12}
+        self.details.show_live_state(self.state)
+        self.details.start_events_editing()
+        event = self.event()
+        event.child(2).setText(1, "0")
+        self.assertEqual(
+            self.details.desired_configuration["events"][0]["eventVariables"],
+            [65, 0, 0, 12],
+        )
+        self.assertEqual(event.child(1).text(1), "0")
+        self.assertEqual(self.state.ev_values[9], {1: 65, 2: None, 3: None, 4: 12})
+        self.assertEqual(self.connection.sent, [])
 
     def test_blank_cell_editor_does_not_invent_zero(self):
         details = self.details

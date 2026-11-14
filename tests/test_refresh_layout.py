@@ -100,7 +100,6 @@ class RefreshLayoutTests(unittest.TestCase):
             (self.service.nv_write, "refreshing"),
             (self.service.ev_write, "active"),
             (self.service.ev_write, "refreshing"),
-            (self.service.ev_write, "blocked"),
         ):
             with self.subTest(owner=type(owner).__name__, attribute=attribute):
                 setattr(owner, attribute, True)

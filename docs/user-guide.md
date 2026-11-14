@@ -305,32 +305,33 @@ unmatched labels are hidden, while unread controlling NVs show “label unknown�
 Annotations are skipped; template labels are displayed literally without substitution.
 
 1. Wait for complete node configuration discovery on a connected FLiM node.
-2. Choose **Edit** on either **Node Variables** or **Events**. Both tabs become
-   editable and remain accessible in one session.
-3. Enter NV values from 0 to 255. Switch tabs freely; all edits are retained.
-4. For NV-only edits, choose **Save** on either configuration tab. Choose **Cancel**
-   to discard the entire session without writing. If event edits are pending,
-   either Save button retains the existing complete-configuration application.
+2. Choose **Edit** on **Node Variables**. Only this editor becomes active;
+   the Events tabs remain available for read-only browsing.
+3. Enter NV values from 0 to 255. Switch tabs freely; your edits are retained.
+4. Choose **Save** or **Cancel** on **Node Variables**. Cancel discards the
+   NV draft without writing. Events actions cannot save or discard this draft.
 
-Both configuration tabs become read-only during Save. Progress and the final result
-appear on both tabs. NV-only Save compares values in ascending NV order and
-writes only differences. Each write requires WRACK followed by matching NV
-readback. It then reads only higher-numbered NVs before continuing. Firmware
-changes to untouched higher NVs are accepted; values explicitly edited by you
-keep their requested value unless hardware already matches it.
+The active editor is locked during Save. Progress and the final result appear
+on its tab. NV Save compares values in ascending NV order and writes only
+explicit changes. Each write requires WRACK followed by matching NV readback.
+It then reads only the NVs linked by that NV's MDF definition. Missing or empty
+links cause no additional NV reads. Firmware changes to untouched linked NVs
+are accepted; explicitly edited values retain their requested values.
 
-This editing workflow assumes dependent firmware changes affect higher-numbered
-NVs. It does not reread earlier NVs, parameters, events or EVs, and does not
-perform final full-node discovery. The display returns to confirmed values on
-completion. Use **Refresh Node** when you need a complete configuration reread.
-Backup Restore and Save involving events retain their complete-configuration
-reconciliation and final verification. Targeted EV Save is deferred.
+After verified NV writes, stored events and EVs are refreshed once so firmware
+changes appear automatically. This also runs after a partial Save when safe.
+No parameters, unrelated NVs or full node discovery are requested. No changed
+NVs means no automatic event refresh. The display returns to confirmed values
+on completion. Use **Refresh Node** for a complete configuration reread.
+Events Save and Backup Restore retain complete-configuration reconciliation
+and final verification. Targeted Events Save is not yet implemented.
 
 If an acknowledged NV write's verification read times out, Workbench makes one
 additional read without repeating the write. A matching value allows application
 to continue, and the final result reports that verification required recovery.
-If the additional read fails or differs, NV-only Save stops without automatic
-rediscovery. A failed higher-NV read also stops remaining writes. The result and
+If the additional read fails or differs, NV Save stops further writes. A failed
+linked-NV read also stops remaining writes. Stored events are refreshed after
+verified writes only when the connection and protocol state permit it. The result and
 comparison report show the failure; cached values remain last-confirmed evidence.
 
 Automatic NV discovery and refresh also make one additional read after a timeout,
@@ -339,8 +340,7 @@ if the second read times out, discovery remains incomplete. These reads never
 repeat a write or change the response timeout.
 
 Applying a complete target through Events Save or Restore can remove
-firmware-created events or reconstruct an event to clear EVs. NV-only Save does
-not write or reread events. There is no rollback. Do not use another configuration tool
+firmware-created events or reconstruct an event to clear EVs. NV Save refreshes stored events and EVs but does not write them. There is no rollback. Do not use another configuration tool
 on the network during application. Earlier writes may remain applied after
 failure. Use **Refresh Node** or
 **Layouts → Refresh**, when safe, to reread hardware and compare before
@@ -358,14 +358,28 @@ The live node's **Events** tab shows known produced events alongside consumed
 events. Expand a consumed event to see its EV values. Normal view shows only
 confirmed numeric EV values, including zero.
 
-Choosing **Edit** on either configuration tab exposes every supported EV position.
-Enter values from 0 to 255. Clearing a numeric EV requests absence in the desired
-configuration; entering `0` requests numeric zero. Unchanged values and event
-identities are preserved alongside NV edits. **Cancel** on either tab discards
-both NV and EV edits. **Save** applies them together as described above.
+Choosing **Edit** on the consumed Events tab exposes every supported EV position.
+The NV tab remains readable, with its editing actions unavailable until this
+session ends. Enter values from 0 to 255. Clearing a numeric EV requests absence
+in the desired configuration; entering `0` requests numeric zero. Unchanged
+values and event identities are preserved. Use this tab's **Cancel** to discard
+the Events draft or **Save** to apply it. Events Save currently uses the complete
+configuration workflow described above.
 
 Unknown and confirmed-absent values can both appear blank during discovery, so
 editing requires complete discovery, including confirmation of every EV position.
+
+Assigning a numeric value to EVn automatically sets any preceding undefined EVs
+to zero and displays those zeros immediately. Existing numeric values are
+preserved. For example, setting EV4 to 3 when only EV1=65 is defined produces
+`[65, 0, 0, 3]`. These zeros are explicit desired values: the writer teaches and
+verifies them normally, without relying on module initialisation. Save and
+Restore retain exact verification, including authoritative absences in complete
+configurations.
+
+Editable MDF controls remain usable for undefined EVs, retaining their unset
+displays until edited. Their edits update Raw Values and initialise preceding
+undefined EVs to zero through the same editor rule.
 
 ## Creating backups
 

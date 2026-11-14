@@ -156,6 +156,7 @@ def add_ev_controls(
                 parent_conditions=conditions,
                 source_definitions=[source],
                 token_editor=token_editor,
+                allow_undefined=True,
             )
             contents = settings.takeWidget()
             # Keep full form labels inside the value column, beside their controls.

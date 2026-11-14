@@ -44,7 +44,9 @@ class NvWrite(QObject):
         *,
         refresh_from: int = 1,
         refresh_events: bool = True,
+        refresh_indices: list[int] | None = None,
     ) -> None:
+        self.refresh_indices = refresh_indices
         self.refresh_from = refresh_from
         self.refresh_events = refresh_events
         self.node_number = node_number
@@ -140,13 +142,12 @@ class NvWrite(QObject):
                     self.stage = "waiting for discovery reply"
                     self.advance()
                 else:
-                    # Reread higher NVs before the coordinator compares the next
-                    # desired value; firmware can reset dependent NVs.
                     self.refreshing = True
                     self.service._start_nv_discovery(
                         self.node_number,
                         self.service.node_states[self.node_number].parameters[6],
                         first=self.refresh_from,
+                        indices=self.refresh_indices,
                     )
                     self.finish(True, "Saving changes…")
         else:

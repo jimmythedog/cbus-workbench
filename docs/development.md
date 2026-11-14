@@ -434,7 +434,9 @@ immediate reachability and identity checks.
 Manual **Refresh Node** acquires the idle connection through
 `refresh_unavailable_reason()` and delegates to the existing `rediscover_node()`
 FIFO. It also honours the UI's polling permission (edit/modal ownership) and
-uncertain EV learn-mode cleanup. A running poll must drain before refresh starts;
+known learn mode. An unresolved EV write-safety block alone does not prevent
+read-only refresh, and refresh does not clear that block. A running poll must
+drain before refresh starts;
 further polls wait until the refresh releases ownership. No QNN is sent.
 RQNPN responses supply fresh identity fields (1, 3, 8) and the sender CAN ID;
 parameter 8 determines whether consumed-event discovery is needed. The prior
@@ -901,74 +903,73 @@ Live editing uses the existing backup dictionary directly. `NodeDetails` capture
 holds a deep copy as `desired_configuration`. The NV widgets edit its `nvs` list;
 `NodeEvents` edits its event records by stable event identity. Clearing an EV
 stores absence (`None`); trailing absences are trimmed as in `node_backup()`.
+Assigning a numeric EV in the editor fills preceding undefined positions with
+explicit zeros in the desired copy and immediately updates raw/MDF presentation.
+This module-independent editor rule does not infer hardware storage behaviour;
+the ordinary writer teaches and verifies the zeros. The shared Restore planner,
+backup contents and exact post-discovery comparison remain unchanged, including
+authoritative absences in complete backups.
 MDF controls are editors of those raw values, not a second configuration model.
 Select, Number, Slider, BitSingle and BitArray edits update the desired bytes and
 notify both raw NV tables and existing MDF forms. Refresh blocks widget signals
 so displaying a value cannot cause another edit. Masked edits merge into the
-current desired byte, preserving unrelated bits. Unknown bytes stay unknown and
-cannot be edited through partial MDF fields. Dual-byte MDF controls remain
+current desired byte, preserving unrelated bits. Undefined EV controls remain
+editable with their existing unset displays; the first edit starts other bits
+at zero. Unknown NV bytes remain read-only through partial MDF fields. Dual-byte MDF controls remain
 read-only. Visibility and overloaded labels use desired values during Edit.
-Both tabs' existing buttons control the same session. Live discovery updates do
-not replace the editable copy, and Cancel or disconnect discards it.
+NVs and Events have separate Edit/Save/Cancel actions. Only one session can own
+`desired_configuration` at a time; the other tab remains available for read-only
+browsing. Its actions cannot save or discard the owning tab's draft. Live updates
+do not replace the editable copy. Cancel or disconnect discards the active draft.
+
+Events Save still submits a complete snapshot to `NodeRestore.begin()`; Stage 2A
+does not introduce an Events writer. Node Restore remains a separate comprehensive
+operation. The active editor stays locked until its coordinator finishes;
+progress and results belong to the initiating tab. Validation rejection preserves
+the draft, while application completion displays confirmed hardware state.
+
+NV Save uses `NvSave`, capturing pre-edit and desired NV lists, the selected MDF,
+and a fixed set of explicitly edited indices. After each verified write,
+`linkedVariables.NV` from that NV's MDF definitions supplies the additional read
+indices. Nested MDF panels are searched directly; missing/empty links cause no
+additional reads. The normal discovery FIFO performs these targeted reads with
+its existing timeout/recovery handling. Live values follow hardware; untouched
+draft values adopt firmware changes, while outstanding explicit edits retain their
+requested values. No higher-index fallback or final all-NV pass is performed.
 
 ```text
-complete discovery -> Edit on either tab -> original + desired copy
-                                           | NV tab -> desired["nvs"]
-                                           | Events -> desired["events"]
-                                           + Cancel on either tab -> discard
-                                           + Save with pending event edits
-                                               -> NodeRestore.begin(node, desired)
-                                               -> both editors locked
-                                               -> writes + rediscovery + verification
-                                               -> one final result on both tabs
-                                               -> display confirmed state
+NV Edit -> original + desired + explicit edits + MDF
+  -> Save -> ascending comparison -> equal: skip
+                                  -> NVSET -> WRACK -> NVRD -> matching NVANS
+                                    -> read MDF-linked NVs only
+                                    -> reconcile untouched values, preserve edits
+                                    -> next comparison
+  -> success or first failure -> stop writes
+    -> any verified writes and safe connection?
+       yes -> NNEVN -> NERD (if events exist) -> REVAL for current slots/EVs
+       no  -> retain evidence and protocol safety markers
+    -> one final result, display confirmed values
 ```
 
-Save involving events submits the same complete dictionary as a loaded YAML backup directly to
-`NodeRestore.begin()`; the reconciliation algorithm does not distinguish its
-origin. `NodeDetails` holds its saving flag until `restore.finished`, so writer
-completion and intermediate discovery cannot unlock the editors. Progress and
-final results are mirrored on both tabs. A validation rejection preserves edits;
-application completion (including failure) replaces them with confirmed state.
-The editor observes only its coordinator's completion. `NvWrite.write_finished`
-and `discovery_finished`, and `EvWrite.finished`, report transaction results to
-the coordinator, never to the editor. Disconnect therefore produces one final
-application result even though writer cleanup may finish afterwards.
+Event refresh reuses `CbusService._restart_event_discovery()`, clearing only the
+node's stored event count, identities and EV values before normal event discovery.
+It does not request parameters, unrelated NVs, QNN or change the layout's observed
+events catalogue. It runs once after verified writes, including partial saves
+with resolved failures. Ambiguous writes, protocol blocks, known learn mode or
+disconnection prevent this refresh and are reported. Event/EV read failures use
+the existing partial-save report. No changed NVs means no event refresh.
 
-NV-only Save from either tab uses `NvSave`, retaining the existing session and
-confirmed descriptor. It captures the pre-edit and desired NV lists and a fixed
-set of explicitly edited indices. After each verified write it uses `NvWrite`'s
-existing higher-NV discovery, with event refresh disabled. It accepts changed
-hardware values for untouched higher NVs and preserves explicit desired edits.
-The next comparison starts through a zero-delay Qt timer after queue cleanup.
-
-```text
-Save (no event edits) -> capture original, desired, explicit edits
-  -> ascending comparison -> equal: skip
-                          -> different: NVSET -> WRACK -> NVRD -> matching NVANS
-                            -> read only higher NVs sequentially
-                            -> accept untouched changes / preserve explicit edits
-                            -> next comparison
-  -> completion -> replace editors with confirmed values
-  -> failure/timeout -> stop further writes, retain evidence and safety markers
-```
-
-There is no final all-NV pass, parameter/event/EV discovery or full rediscovery.
-This editing policy assumes side effects requiring reconciliation affect higher
-NV indices. Earlier changes are outside its verification scope; explicit Refresh
-Node remains available. Restore retains its stronger full verification policy.
 While `NvSave` owns the operation, `NodeView` skips intermediate presentation and
-the selection-suspension/completion sweep. Completion updates the existing NV
-views and NV-dependent event presentation without navigator MDF lookups.
+the selection-suspension/completion sweep. Completion updates the existing NV and
+event views without navigator MDF lookups. `NvWrite.write_finished` and
+`discovery_finished` report to the coordinator, never directly to the editor.
 
 `CbusService.write_nvs()` accepts active `NvSave` or `NodeRestore` ownership;
 `write_evs()` remains Restore-owned. Both use the existing verified writers.
-NV-only failures reuse `NodeFailureReport`, including its explicit refresh before
-Retry, but Retry returns to `NvSave` with the original fixed set of explicitly
-edited indices. Comparisons use freshly discovered hardware values; untouched
-NVs adopt that refreshed baseline. Confirmed untouched firmware changes become
-part of its requested NV values, so Retry does not undo them. No targeted EV Save
-has been implemented; event edits retain the existing combined application path.
+NV failures reuse `NodeFailureReport`, including its explicit refresh before
+Retry. Retry returns to `NvSave` with the original explicit edits and MDF linkage.
+Comparisons use freshly discovered hardware values; untouched NVs adopt that
+baseline so Retry does not undo confirmed firmware changes.
 
 The Developer's Guide 6b teaching/readback sections define the wire sequence;
 no learn mode is needed. WRACK and CMDERR carry no NV index or transaction ID.
@@ -1154,7 +1155,7 @@ complete node configuration discovery while the connection is active.
 Node details has separate full-width Produced Events and Consumed Events tabs.
 `NodeEvents` coordinates the existing produced table and consumed tree for both
 configured and live nodes; moving between tabs does not rebuild either view.
-The consumed tab retains the shared configuration Edit/Save/Cancel actions;
+The consumed tab has its own Events Edit/Save/Cancel actions;
 produced descriptions use the same contextual editor as the layout event list,
 with their shared layout annotations. Consumed descriptions select the node's
 annotation scope. Local saves notify both produced views without CBUS traffic.

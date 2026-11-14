@@ -25,6 +25,7 @@ class NodeFailureReport(QObject):
         self.number = self.coordinator.node_number
         self.operation_backup = self.coordinator.backup
         self.requested = deepcopy(self.operation_backup)
+        self.mdf = deepcopy(service.nv_save.mdf) if parent.saving_nvs else None
         self.user_edited = (
             set(self.coordinator.user_edited)
             if self.coordinator is service.nv_save
@@ -188,7 +189,10 @@ class NodeFailureReport(QObject):
         try:
             if self.coordinator is self.service.nv_save:
                 self.coordinator.begin(
-                    self.number, self.requested, user_edited=self.user_edited
+                    self.number,
+                    self.requested,
+                    user_edited=self.user_edited,
+                    mdf=self.mdf,
                 )
             else:
                 self.coordinator.begin(

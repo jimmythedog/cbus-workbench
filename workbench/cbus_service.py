@@ -456,7 +456,6 @@ class CbusService(QObject):
             self.writes_busy()
             or self.discovery_pending()
             or self._discovery_window.isActive()
-            or self.ev_write.blocked
             or not self.polling_allowed()
             or any(
                 state.identity.flags & 0x20 or state.parameters.get(8, 0) & 0x20
@@ -600,12 +599,13 @@ class CbusService(QObject):
                 raise ValueError("NV value must be between 0 and 255")
             if index not in state.nv_values:
                 raise ValueError(f"NV {index} has no confirmed original value")
-        # Preserve the coordinator's ascending pass: reread higher NVs only.
+        # Editing Save uses MDF links; Node Restore retains its complete checking.
         self.nv_write.begin(
             node_number,
             values,
             refresh_from=next(iter(values)) + 1 if values else 1,
             refresh_events=False,
+            refresh_indices=owner.linked_indices if owner is self.nv_save else None,
         )
 
     def write_evs(
@@ -1118,7 +1118,12 @@ class CbusService(QObject):
         self._finish_request("parameter", node_number)
 
     def _start_nv_discovery(
-        self, node_number: int, count: int, *, first: int = 1
+        self,
+        node_number: int,
+        count: int,
+        *,
+        first: int = 1,
+        indices: list[int] | None = None,
     ) -> None:
         self._set_discovery_status(DiscoveryStatus.DISCOVERING)
         self._nv_started[node_number] = count
@@ -1126,12 +1131,11 @@ class CbusService(QObject):
             # Even an empty range has a new completion transition. This also
             # starts event refresh for a node with no NVs during final checking.
             self._set_progress("nv", node_number, DiscoveryProgress.IN_PROGRESS)
-        if first > count:
+        requested = range(first, count + 1) if indices is None else indices
+        if not requested:
             self._set_progress("nv", node_number, DiscoveryProgress.COMPLETE)
             return
-        self._request_queue.extend(
-            ("nv", node_number, index) for index in range(first, count + 1)
-        )
+        self._request_queue.extend(("nv", node_number, index) for index in requested)
         trace(
             logger,
             "Automatic NV discovery queued",
@@ -1141,6 +1145,7 @@ class CbusService(QObject):
                     "node_number": node_number,
                     "count": count,
                     "first_index": first,
+                    "indices": indices,
                 }
             },
         )

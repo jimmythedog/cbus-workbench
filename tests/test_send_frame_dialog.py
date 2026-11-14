@@ -353,12 +353,12 @@ class SendFrameDialogTests(unittest.TestCase):
             view.show_identity(state.identity)
             service.discovery_status_changed.emit("Configuration ready")
             details = view.details
-            details.tabs.setCurrentWidget(details.consumed_events_page)
-            details.events_edit_button.click()
+            details.tabs.setCurrentWidget(details.variables_page)
+            details.edit_button.click()
             details.raw_values.item(0, 1).setText("9")
             results = []
             service.nv_save.finished.connect(lambda *args: results.append(args))
-            details.events_save_button.click()
+            details.save_button.click()
             self.wait_for(lambda: self.peer.bytesAvailable() > 0)
             self.assertIn(b"N9601020109", bytes(self.peer.readAll()))
             self.peer.close()  # Full window/service/selection teardown.
@@ -368,7 +368,7 @@ class SendFrameDialogTests(unittest.TestCase):
             expected = details.nv_result.text()
             self.assertTrue(expected.startswith("Node 258: Partial Save:"))
             self.assertIn("Connection ended", expected)
-            self.assertEqual(details.events_result.text(), expected)
+            self.assertEqual(details.events_result.text(), "")
             self.assertEqual(view.node_list.currentItem().text(), "258 (Offline)")
             self.assertIsNone(details.desired_configuration)
             self.assertFalse(details.saving_configuration)
