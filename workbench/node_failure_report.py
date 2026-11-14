@@ -16,11 +16,18 @@ class NodeFailureReport(QObject):
     def __init__(self, parent, service, message):
         super().__init__(parent)
         self.service = service
-        self.coordinator = service.nv_save if parent.saving_nvs else service.restore
-        self.other_coordinator = (
-            service.restore if parent.saving_nvs else service.nv_save
+        self.coordinator = (
+            service.nv_save
+            if parent.saving_nvs
+            else service.event_save
+            if parent.saving_configuration
+            else service.restore
         )
-        self.other_backup = getattr(self.other_coordinator, "backup", None)
+        self.other_backups = [
+            (coordinator, getattr(coordinator, "backup", None))
+            for coordinator in (service.nv_save, service.event_save, service.restore)
+            if coordinator is not self.coordinator
+        ]
         self.saving = parent.saving_configuration
         self.number = self.coordinator.node_number
         self.operation_backup = self.coordinator.backup
@@ -29,6 +36,11 @@ class NodeFailureReport(QObject):
         self.user_edited = (
             set(self.coordinator.user_edited)
             if self.coordinator is service.nv_save
+            else None
+        )
+        self.event_edits = (
+            deepcopy(self.coordinator.edits)
+            if self.coordinator is service.event_save
             else None
         )
         self.succeeded = False
@@ -57,6 +69,8 @@ class NodeFailureReport(QObject):
             (service.discovery_status_changed, self.update_retry),
             (service.restore.changed, self.update_retry),
             (service.nv_save.changed, self.update_retry),
+            (service.event_save.changed, self.update_retry),
+            (service.event_save.refreshed, self.refreshed),
             (service.connection.state_changed, self.update_retry),
         )
         for signal, slot in self.connections:
@@ -68,8 +82,8 @@ class NodeFailureReport(QObject):
     def description(self, message):
         outcome = "" if message == self.original_reason else f"\n\n{message}"
         progress = (
-            "Further NV writes stopped at the first failure. "
-            if self.coordinator is self.service.nv_save
+            "Further writes stopped at the first failure. "
+            if self.coordinator in (self.service.nv_save, self.service.event_save)
             else "Independent changes were attempted while safe; blocked or dependent work may remain. "
         )
         return (
@@ -96,9 +110,9 @@ class NodeFailureReport(QObject):
         service = self.service
         if self.succeeded:
             return "Requested configuration verified; no Retry needed."
-        if (
-            self.coordinator.backup is not self.operation_backup
-            or getattr(self.other_coordinator, "backup", None) is not self.other_backup
+        if self.coordinator.backup is not self.operation_backup or any(
+            getattr(coordinator, "backup", None) is not backup
+            for coordinator, backup in self.other_backups
         ):
             return "Another configuration operation has replaced this request."
         state = service.node_states.get(self.number)
@@ -169,7 +183,10 @@ class NodeFailureReport(QObject):
             self.description("Refreshing hardware before Retry…")
         )
         try:
-            self.service.rediscover_node(self.number)
+            if self.coordinator is self.service.event_save:
+                self.coordinator.refresh_for_retry(self.number)
+            else:
+                self.service.rediscover_node(self.number)
         except ValueError as error:
             self.completed(False, str(error))
 
@@ -194,6 +211,10 @@ class NodeFailureReport(QObject):
                     user_edited=self.user_edited,
                     mdf=self.mdf,
                 )
+            elif self.coordinator is self.service.event_save:
+                self.coordinator.begin(
+                    self.number, self.requested, edits=self.event_edits
+                )
             else:
                 self.coordinator.begin(
                     self.number,
@@ -207,11 +228,11 @@ class NodeFailureReport(QObject):
     def completed(self, success, message):
         self.timer.stop()
         if (
-            self.coordinator is self.service.nv_save
+            self.coordinator in (self.service.nv_save, self.service.event_save)
             and self.coordinator.backup is self.operation_backup
         ):
-            # Accepted firmware changes are part of the NV request, not failed
-            # user edits to display as differences or undo on a later Retry.
+            # Untouched values follow fresh hardware, rather than becoming
+            # differences to display or changes to undo on a later Retry.
             self.requested = deepcopy(self.coordinator.backup)
         self.last_message = message
         self.succeeded = success

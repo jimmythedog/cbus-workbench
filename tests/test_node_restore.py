@@ -44,6 +44,9 @@ class NodeRestoreTests(unittest.TestCase):
         self.backup["events"][0]["eventVariables"][1] = 13
         self.results = []
         self.service.restore.finished.connect(lambda *args: self.results.append(args))
+        self.service.event_save.finished.connect(
+            lambda *args: self.results.append(args)
+        )
         self.addCleanup(self.close_service)
         self.nvs = {1: 7, 2: 8, 3: 9}
         self.events = {(0, 1000): {1: 0, 2: 12, 3: None}}
@@ -216,6 +219,8 @@ class NodeRestoreTests(unittest.TestCase):
         self.service.node_state_updated.connect(view.refresh_state)
         self.service.restore.changed.connect(view.details.show_restore_progress)
         self.service.restore.finished.connect(view.details.finish_restore)
+        self.service.event_save.changed.connect(view.details.show_restore_progress)
+        self.service.event_save.finished.connect(view.details.finish_restore)
         return view
 
     def test_restore_suspends_selected_details_until_final_discovery(self):
@@ -249,14 +254,15 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertIsNone(view.details.live_state)
         self.assertFalse(self.results[-1][1])
 
-    def test_events_save_keeps_working_copy_and_progress_during_discovery(self):
+    def test_events_save_keeps_working_copy_and_selection_until_verified(self):
         view = self.live_view()
         details = view.details
         details.start_events_editing()
         details.node_events.consumed_table.topLevelItem(0).child(1).setText(1, "13")
         desired = deepcopy(details.desired_configuration)
         details.save_events_editing()
-        self.run_node(stop_when=lambda: view.node_list.currentItem() is None)
+        self.app.processEvents()
+        self.assertIsNotNone(view.node_list.currentItem())
         self.assertEqual(details.desired_configuration, desired)
         self.assertTrue(details.saving_configuration)
         self.assertFalse(details.cancel_button.isEnabled())
@@ -266,7 +272,7 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertTrue(self.results[-1][1], self.results)
         self.assertIsNone(details.desired_configuration)
         self.assertTrue(view.node_list.isEnabled())
-        self.assertIn("saved and fully verified", details.events_result.text())
+        self.assertIn("saved and verified", details.events_result.text())
         self.assertEqual(details.raw_values.item(0, 1).text(), "7")
 
     def test_complete_restore_skips_matching_nvs_then_matches_events_after_slot_change(
@@ -767,12 +773,14 @@ class NodeRestoreTests(unittest.TestCase):
         details = self.backup_details()
         self.service.restore.changed.connect(details.show_restore_progress)
         self.service.restore.finished.connect(details.finish_restore)
+        self.service.event_save.changed.connect(details.show_restore_progress)
+        self.service.event_save.finished.connect(details.finish_restore)
         self.service.node_state_updated.connect(
             lambda _n: details.show_live_state(self.state)
         )
         return details
 
-    def test_event_edit_extends_ev1_to_ev4_then_ev7_and_displays_fresh_zeros(self):
+    def test_event_edit_extends_sparse_evs_without_teaching_gaps(self):
         details = self.prepare_ev_extension()
         for index, value in ((4, 3), (7, 9)):
             with self.subTest(ev=index):
@@ -782,19 +790,19 @@ class NodeRestoreTests(unittest.TestCase):
                 event.child(index - 1).setText(1, str(value))
                 desired = details.desired_configuration["events"][0]["eventVariables"]
                 self.assertEqual(
-                    desired, [65, 0, 0, 3] if index == 4 else [65, 0, 0, 3, 0, 0, 9]
+                    desired,
+                    [65, None, None, 3]
+                    if index == 4
+                    else [65, None, None, 3, None, None, 9],
                 )
-                self.assertEqual(event.child(1).text(1), "0")
+                self.assertEqual(event.child(1).text(1), "")
                 before = len(self.connection.sent)
                 details.events_save_button.click()
                 self.run_node()
                 self.assertTrue(self.results[-1][1], self.results)
                 self.assertEqual(
                     {f for f in self.connection.sent[before:] if b"ND2" in f},
-                    {
-                        f":SBFC0ND20102013B{i:02X}{desired[i - 1]:02X};".encode()
-                        for i in (range(2, 5) if index == 4 else range(5, 8))
-                    },
+                    {f":SBFC0ND20102013B{index:02X}{value:02X};".encode()},
                 )
                 confirmed = self.state.ev_values[
                     next(iter(self.state.event_identities))
@@ -802,33 +810,98 @@ class NodeRestoreTests(unittest.TestCase):
                 self.assertEqual(confirmed[1], 65)
                 self.assertEqual(confirmed[index], value)
                 self.assertTrue(
-                    all(confirmed[i] == 0 for i in range(2, index) if i != 4)
+                    all(confirmed[i] is None for i in range(2, index) if i != 4)
                 )
                 event = details.node_events.consumed_table.topLevelItem(0)
-                self.assertEqual(event.child(1).text(1), "0")
+                self.assertEqual(event.child(1).text(1), "")
                 self.assertEqual(event.child(index - 1).text(1), str(value))
                 self.assertEqual(self.service.refresh_unavailable_reason(), "")
                 self.assertIsNone(details.failure_report)
 
-    def test_extension_detects_changed_previously_confirmed_ev_and_allows_retry(self):
+    def test_events_save_does_not_reapply_untouched_configuration(self):
         details = self.prepare_ev_extension()
         self.teach_changes_first_ev = True
+        self.ev_resets_nv = True
         details.start_events_editing()
         details.node_events.consumed_table.topLevelItem(0).child(3).setText(1, "3")
         details.events_save_button.click()
         self.run_node()
+        self.assertTrue(self.results[-1][1], self.results)
+        self.assertEqual(self.events[(258, 315)][1], 99)
+        self.assertEqual(self.nvs[1], 99)
+        payloads = [f.decode().split("N")[1][:-1] for f in self.connection.sent]
+        self.assertEqual(
+            payloads,
+            [
+                "530102",
+                "73010208",
+                "D20102013B0403",
+                "B20102013B04",
+                "540102",
+                "73010208",
+            ],
+        )
+
+    def test_events_retry_refreshes_only_events_and_applies_remaining_edits(self):
+        details = self.prepare_ev_extension()
+        details.start_events_editing()
+        event = details.node_events.consumed_table.topLevelItem(0)
+        event.child(0).setText(1, "66")
+        event.child(3).setText(1, "3")
+        self.reject_ev = (258, 315, 4)
+        details.events_save_button.click()
+        self.run_node()
         self.assertFalse(self.results[-1][1])
-        self.assertIn(("EV 1", "65", "99"), self.report_rows(details))
+        self.assertEqual(self.events[(258, 315)][1], 66)
         report = details.failure_report
+        self.addCleanup(report.dialog.close)
         self.assertTrue(report.dialog.retry_button.isEnabled())
-        self.assertEqual(self.service.refresh_unavailable_reason(), "")
-        self.teach_changes_first_ev = False
+        self.reject_ev = False
+        # Fresh hardware already satisfies EV1, while an untouched sparse EV
+        # has changed since Edit. Retry must preserve it and only teach EV4.
+        self.events[(258, 315)][7] = 44
         self.results.clear()
+        before = len(self.connection.sent)
         report.dialog.retry_button.click()
         self.run_node()
         self.assertTrue(self.results[-1][1], self.results)
-        self.assertEqual(self.events[(258, 315)][1], 65)
-        self.assertEqual(self.events[(258, 315)][4], 3)
+        frames = self.connection.sent[before:]
+        self.assertEqual(
+            [f for f in frames if b"ND2" in f], [b":SBFC0ND20102013B0403;"]
+        )
+        self.assertFalse(
+            any(
+                b"N71" in f or b"N96" in f or b"N73010200" in f or b"N95" in f
+                for f in frames
+            )
+        )
+        self.assertEqual(self.events[(258, 315)][7], 44)
+        self.assertEqual(self.state.ev_values[9][7], 44)
+        self.assertFalse(report.dialog.retry_button.isEnabled())
+        self.assertEqual(self.report_rows(details), [("No differences found", "", "")])
+
+    def test_events_save_explicit_zero_and_no_changes_use_minimal_traffic(self):
+        details = self.prepare_ev_extension()
+        details.start_events_editing()
+        details.events_save_button.click()
+        self.run_node()
+        self.assertTrue(self.results[-1][1])
+        self.assertEqual(self.connection.sent, [])
+        self.results.clear()
+        details.start_events_editing()
+        details.node_events.consumed_table.topLevelItem(0).child(3).setText(1, "0")
+        details.events_save_button.click()
+        self.run_node()
+        self.assertTrue(self.results[-1][1])
+        self.assertEqual(self.state.ev_values[4][4], 0)
+        self.assertIsNone(self.state.ev_values[4][2])
+        self.assertEqual(
+            [f for f in self.connection.sent if b"ND2" in f],
+            [b":SBFC0ND20102013B0400;"],
+        )
+        self.assertFalse(
+            any(b"N58" in f or b"N95" in f or b"N71" in f for f in self.connection.sent)
+        )
 
     def test_restore_rejects_unrepresentable_sparse_backup_after_fresh_reads(self):
         details = self.prepare_ev_extension()
@@ -1136,6 +1209,8 @@ class NodeRestoreTests(unittest.TestCase):
         details = self.backup_details()
         self.service.restore.changed.connect(details.show_restore_progress)
         self.service.restore.finished.connect(details.finish_restore)
+        self.service.event_save.changed.connect(details.show_restore_progress)
+        self.service.event_save.finished.connect(details.finish_restore)
         self.service.node_state_updated.connect(
             lambda _n: details.show_live_state(self.state)
         )
@@ -1147,10 +1222,28 @@ class NodeRestoreTests(unittest.TestCase):
         return details
 
     def test_events_session_save_preserves_nvs_and_keeps_nv_tab_readable(self):
+        from tempfile import TemporaryDirectory
+
+        from workbench.annotations import Annotations
+
+        directory = self.enterContext(TemporaryDirectory())
+        self.enterContext(
+            patch(
+                "workbench.annotations.application_directories",
+                return_value={"Data": Path(directory)},
+            )
+        )
+        annotations = Annotations("test")
+        local = {"name": "Consumer", "consumedEvents": {"0:1000": "Signal"}}
+        shared = {"events": {"0:1000": "Shared signal"}}
+        annotations.save(local, 258)
+        annotations.save(shared)
         details = self.editing_details()
+        details.annotations = annotations
+        details.node_events.annotations = annotations
         desired = deepcopy(details.desired_configuration)
         details.events_save_button.click()
-        self.assertTrue(self.service.restore.active)
+        self.assertTrue(self.service.event_save.active)
         self.assertTrue(details.variables.isEnabled())
         self.assertFalse(details.node_events.isEnabled())
         details.save_editing()
@@ -1161,8 +1254,13 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertTrue(self.results[-1][1], self.results)
         self.assertEqual(compare_live_node(self.state, desired), ([], False))
         self.assertEqual(self.nvs, {1: 7, 2: 8, 3: 9})
+        self.assertEqual(annotations.load(258), local)
+        self.assertEqual(annotations.load(), shared)
+        event = details.node_events.consumed_table.topLevelItem(0)
+        self.assertEqual(event.text(0), "0:1000")
+        self.assertEqual(event.text(1), "Signal")
         self.assertEqual(details.nv_result.text(), "")
-        self.assertIn("saved and fully verified", details.events_result.text())
+        self.assertIn("saved and verified", details.events_result.text())
         self.assertIsNone(details.desired_configuration)
         self.assertTrue(details.edit_button.isEnabled())
         self.assertTrue(details.events_edit_button.isEnabled())
@@ -1393,6 +1491,8 @@ class NodeRestoreTests(unittest.TestCase):
         self.assertTrue(details.backup_buttons["Restore"].isEnabled())
         self.service.restore.changed.connect(details.show_restore_progress)
         self.service.restore.finished.connect(details.finish_restore)
+        self.service.event_save.changed.connect(details.show_restore_progress)
+        self.service.event_save.finished.connect(details.finish_restore)
         self.service.node_state_updated.connect(
             lambda _n: details.show_live_state(self.state)
         )
@@ -1582,15 +1682,27 @@ class NodeRestoreTests(unittest.TestCase):
         )
 
     def test_failed_verification_and_disconnect_report_unknown_values(self):
-        details = self.editing_details()
-        self.withhold_final_read = True
-        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 5):
+        details = self.prepare_ev_extension()
+        details.start_events_editing()
+        details.node_events.consumed_table.topLevelItem(0).child(3).setText(1, "3")
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 50):
             details.events_save_button.click()
-            self.run_node()
+            self.app.processEvents()
+            self.reply("9B01020825")
+            self.assertEqual(self.connection.sent[-1], b":SBFC0ND20102013B0403;")
+            # No WRACK: teaching is uncertain even after confirmed learn exit.
+            for _ in range(50):
+                if b":SBFC0N540102;" in self.connection.sent:
+                    break
+                QTest.qWait(10)
+            self.assertIn(b":SBFC0N540102;", self.connection.sent)
+            self.reply("9B01020805")
+        self.assertFalse(self.results[-1][1])
         report = details.failure_report
         self.addCleanup(report.dialog.close)
         self.assertTrue(any(row[2] == "Unknown" for row in self.report_rows(details)))
         self.assertIn("write may have succeeded", report.dialog.message.text())
+        self.assertFalse(report.dialog.retry_button.isEnabled())
         self.close_service()
         self.assertFalse(report.dialog.retry_button.isEnabled())
 

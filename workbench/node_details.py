@@ -279,7 +279,11 @@ class NodeDetails(QWidget):
                     mdf=self.live_mdf.data if self.live_mdf else None,
                 )
             else:
-                self.cbus_service.restore.begin(number, self.desired_configuration)
+                self.cbus_service.event_save.begin(
+                    number,
+                    self.desired_configuration,
+                    original=self.original_configuration,
+                )
         except ValueError as error:
             # Validation failed before application began. Keep the edits available
             # for review or Cancel; the coordinator owns the safety checks.
@@ -900,7 +904,10 @@ class NodeDetails(QWidget):
         message = message.replace("after restoration.", f"after {action}.")
         if self.failure_report is not None and self.failure_report.running:
             self.failure_report.completed(success, message)
-            if self.failure_report.coordinator is self.cbus_service.nv_save:
+            if self.failure_report.coordinator in (
+                self.cbus_service.nv_save,
+                self.cbus_service.event_save,
+            ):
                 self.show_nv_values()
                 self.node_events.show_live_state(
                     self.live_state, self.node_events.live_mdf

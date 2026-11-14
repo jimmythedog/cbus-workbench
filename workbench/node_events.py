@@ -502,8 +502,6 @@ class NodeEvents(QWidget):
         values = event["eventVariables"]
         values.extend([None] * (index + 1 - len(values)))
         values[index] = int(text) if text else None
-        if text:
-            self.initialise_ev_gaps(parent, values, index)
         # Match node_backup(): trailing confirmed absences are omitted.
         while values and values[-1] is None:
             values.pop()
@@ -516,29 +514,6 @@ class NodeEvents(QWidget):
             values[index] if index < len(values) else None,
         )
         self.refresh_configuration_controls()
-
-    def initialise_ev_gaps(self, event, values, edited_index):
-        """Make preceding undefined positions explicit zeros in the desired copy."""
-        # This is an editor rule, not an assumption about module storage.
-        # The ordinary writer must teach and verify these zeros like other EVs.
-        filled = [i for i in range(edited_index) if values[i] is None]
-        tree = self.consumed_table
-        blocked = tree.blockSignals(True)
-        for index in filled:
-            values[index] = 0
-            row = event.child(index)
-            row.setText(1, "0")
-            form = tree.itemWidget(row, 1)
-            if isinstance(form, EvContainer):
-                form.raw_value.setText("0")
-        tree.blockSignals(blocked)
-        trace(
-            logger,
-            "Initialised preceding undefined EVs node=%s event=%s evs=%s value=0",
-            self.node.node_number,
-            event.data(0, Qt.ItemDataRole.UserRole),
-            [i + 1 for i in filled],
-        )
 
     def begin_edit(self):
         """Retain the prototype editor for configured, offline nodes."""

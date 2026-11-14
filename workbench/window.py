@@ -380,6 +380,8 @@ class MainWindow(QMainWindow):
         service.restore.finished.connect(node_view.details.finish_restore)
         service.nv_save.changed.connect(node_view.details.show_restore_progress)
         service.nv_save.finished.connect(node_view.details.finish_restore)
+        service.event_save.changed.connect(node_view.details.show_restore_progress)
+        service.event_save.finished.connect(node_view.details.finish_restore)
         node_view.details.logical_layout = self.layout_settings[name]["logical_layout"]
         node_view.state_lookup = lambda node_number: service.node_states.get(
             node_number
@@ -598,6 +600,7 @@ class MainWindow(QMainWindow):
         service = self.cbus_services.get(name)
         if service is not None and (
             service.restore.active
+            or service.event_save.active
             or service.ev_write.active
             or service.ev_write.refreshing
         ):

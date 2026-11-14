@@ -163,11 +163,11 @@ class EventMdfTests(unittest.TestCase):
                     )
                     control.click()
                 self.assertEqual(
-                    desired["events"][0]["eventVariables"], [65, 0, 0, expected]
+                    desired["events"][0]["eventVariables"], [65, None, None, expected]
                 )
                 self.assertEqual(row.text(1), str(expected))
                 self.assertEqual(form.raw_value.text(), str(expected))
-                self.assertEqual(event.child(1).text(1), "0")
+                self.assertEqual(event.child(1).text(1), "")
                 form.raw_value.setText(str(raw_value))
                 form.update_raw_value()
                 if kind == "Select":

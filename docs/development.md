@@ -903,12 +903,8 @@ Live editing uses the existing backup dictionary directly. `NodeDetails` capture
 holds a deep copy as `desired_configuration`. The NV widgets edit its `nvs` list;
 `NodeEvents` edits its event records by stable event identity. Clearing an EV
 stores absence (`None`); trailing absences are trimmed as in `node_backup()`.
-Assigning a numeric EV in the editor fills preceding undefined positions with
-explicit zeros in the desired copy and immediately updates raw/MDF presentation.
-This module-independent editor rule does not infer hardware storage behaviour;
-the ordinary writer teaches and verifies the zeros. The shared Restore planner,
-backup contents and exact post-discovery comparison remain unchanged, including
-authoritative absences in complete backups.
+Sparse positions stay absent unless explicitly assigned, including numeric zero.
+The Restore planner and exact post-discovery comparison remain unchanged.
 MDF controls are editors of those raw values, not a second configuration model.
 Select, Number, Slider, BitSingle and BitArray edits update the desired bytes and
 notify both raw NV tables and existing MDF forms. Refresh blocks widget signals
@@ -922,11 +918,30 @@ NVs and Events have separate Edit/Save/Cancel actions. Only one session can own
 browsing. Its actions cannot save or discard the owning tab's draft. Live updates
 do not replace the editable copy. Cancel or disconnect discards the active draft.
 
-Events Save still submits a complete snapshot to `NodeRestore.begin()`; Stage 2A
-does not introduce an Events writer. Node Restore remains a separate comprehensive
-operation. The active editor stays locked until its coordinator finishes;
-progress and results belong to the initiating tab. Validation rejection preserves
-the draft, while application completion displays confirmed hardware state.
+Events Save uses `EventSave`, retaining explicit `(event NN, EN, EV)` changes
+between the original and desired snapshots. It overlays those changes on current
+hardware values and calls `plan_event_restore()` for affected events only. Ordinary
+numeric edits use `EvWrite` with post-write event discovery disabled; WRACK plus
+identity-based EVANS and normal learn-mode cleanup complete verification. Clearing
+a defined EV uses the planner's existing reconstruction, including discovery to
+prove removal and verify the reconstructed event. Sparse absences remain distinct
+from numeric zero. No NV writes, NV reads, parameters or full-node discovery run.
+`EvWrite` retains post-write discovery by default for Node and Layout Restore.
+
+```text
+Events Edit -> original + desired -> explicit changed EV positions
+  -> affected event -> planner -> numeric changes -> EVLRN/WRACK/REQEV/EVANS
+                             -> clear EV -> unlearn -> verify absence
+                                         -> teach retained values -> rediscover
+  -> cleanup -> next affected event -> final result on Events tab
+  -> failure -> stop -> report -> Retry (if safe)
+                               -> fresh event/EV discovery
+                               -> overlay explicit edits -> skip matching values
+```
+
+The active editor stays locked until its coordinator finishes. Validation
+rejection preserves the draft; completion displays confirmed hardware state.
+Descriptions and annotations are outside this hardware operation.
 
 NV Save uses `NvSave`, capturing pre-edit and desired NV lists, the selected MDF,
 and a fixed set of explicitly edited indices. After each verified write,
@@ -959,17 +974,20 @@ with resolved failures. Ambiguous writes, protocol blocks, known learn mode or
 disconnection prevent this refresh and are reported. Event/EV read failures use
 the existing partial-save report. No changed NVs means no event refresh.
 
-While `NvSave` owns the operation, `NodeView` skips intermediate presentation and
+While `NvSave` or `EventSave` owns the operation, `NodeView` skips intermediate presentation and
 the selection-suspension/completion sweep. Completion updates the existing NV and
 event views without navigator MDF lookups. `NvWrite.write_finished` and
 `discovery_finished` report to the coordinator, never directly to the editor.
 
 `CbusService.write_nvs()` accepts active `NvSave` or `NodeRestore` ownership;
-`write_evs()` remains Restore-owned. Both use the existing verified writers.
+`write_evs()` accepts active `EventSave` or `NodeRestore` ownership. Both use the existing verified writers.
 NV failures reuse `NodeFailureReport`, including its explicit refresh before
 Retry. Retry returns to `NvSave` with the original explicit edits and MDF linkage.
 Comparisons use freshly discovered hardware values; untouched NVs adopt that
-baseline so Retry does not undo confirmed firmware changes.
+baseline so Retry does not undo confirmed firmware changes. Events Retry uses
+the same report, retaining its explicit changes and refreshing only events/EVs
+before re-planning. It never invokes Node Restore. Resolved failures permit Retry;
+uncertain writes or learn-mode cleanup retain the existing protocol block.
 
 The Developer's Guide 6b teaching/readback sections define the wire sequence;
 no learn mode is needed. WRACK and CMDERR carry no NV index or transaction ID.

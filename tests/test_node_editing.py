@@ -202,7 +202,6 @@ class NodeEditingTests(unittest.TestCase):
         expected["events"][0]["eventVariables"][1] = None
         self.assertEqual(self.details.desired_configuration, expected)
         self.event().child(3).setText(1, "0")
-        expected["events"][0]["eventVariables"][1] = 0
         expected["events"][0]["eventVariables"].append(0)
         self.assertEqual(self.details.desired_configuration, expected)
         self.event().child(3).setText(1, "")
@@ -210,7 +209,7 @@ class NodeEditingTests(unittest.TestCase):
         self.assertEqual(self.details.desired_configuration, expected)
         validate_backup(self.details.desired_configuration)
 
-    def test_numeric_ev_edit_fills_only_preceding_undefined_positions(self):
+    def test_numeric_ev_edit_preserves_sparse_positions(self):
         from workbench.mdfs import Mdf
 
         self.state.ev_values[9] = {1: 65, 2: None, 3: 12, 4: None}
@@ -234,15 +233,15 @@ class NodeEditingTests(unittest.TestCase):
         event.child(3).setText(1, "3")
         self.assertEqual(
             self.details.desired_configuration["events"][0]["eventVariables"],
-            [65, 0, 12, 3],
+            [65, None, 12, 3],
         )
-        self.assertEqual(event.child(1).text(1), "0")
+        self.assertEqual(event.child(1).text(1), "")
         form = self.details.node_events.consumed_table.itemWidget(event.child(1), 1)
-        self.assertEqual(form.raw_value.text(), "0")
+        self.assertEqual(form.raw_value.text(), "")
         self.assertEqual(self.state.ev_values[9], {1: 65, 2: None, 3: 12, 4: None})
         self.assertEqual(self.connection.sent, [])
 
-    def test_edit_within_existing_range_fills_preceding_gaps_even_for_zero(self):
+    def test_explicit_zero_preserves_preceding_absence(self):
         self.state.ev_values[9] = {1: 65, 2: None, 3: None, 4: 12}
         self.details.show_live_state(self.state)
         self.details.start_events_editing()
@@ -250,9 +249,9 @@ class NodeEditingTests(unittest.TestCase):
         event.child(2).setText(1, "0")
         self.assertEqual(
             self.details.desired_configuration["events"][0]["eventVariables"],
-            [65, 0, 0, 12],
+            [65, None, 0, 12],
         )
-        self.assertEqual(event.child(1).text(1), "0")
+        self.assertEqual(event.child(1).text(1), "")
         self.assertEqual(self.state.ev_values[9], {1: 65, 2: None, 3: None, 4: 12})
         self.assertEqual(self.connection.sent, [])
 

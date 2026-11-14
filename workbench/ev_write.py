@@ -53,10 +53,12 @@ class EvWrite(QObject):
         changes: dict[tuple[int, int, int], int],
         *,
         unlearn=None,
+        refresh_events=True,
     ) -> None:
         self.node_number = node_number
         self.changes = sorted(changes.items())
         self.unlearn = unlearn
+        self.refresh_events = refresh_events
         existing = set(self.service.node_states[node_number].event_identities.values())
         creating = {key[:2] for key in changes if key[:2] not in existing}
         if unlearn is not None:
@@ -317,6 +319,22 @@ class EvWrite(QObject):
                 message += " Learn-mode exit cannot be confirmed by this node."
             self.finish(False, message)
             return
+        if not self.refresh_events and self.unlearn is None:
+            self.finish(True, "Changes saved and verified.")
+            return
+        self.start_refresh()
+
+    def refresh_for_retry(self, node_number):
+        """Use ordinary event discovery for a read-only Events Retry baseline."""
+        self.node_number = node_number
+        self.unlearn = None
+        self.changes = []
+        self.failure = ""
+        self.verified = self.total = 0
+        self.resolved = self.exit_confirmed = True
+        self.start_refresh()
+
+    def start_refresh(self):
         self.active = False
         self.refreshing = True
         self.stage = "refreshing events"

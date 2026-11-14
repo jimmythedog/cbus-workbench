@@ -323,8 +323,7 @@ changes appear automatically. This also runs after a partial Save when safe.
 No parameters, unrelated NVs or full node discovery are requested. No changed
 NVs means no automatic event refresh. The display returns to confirmed values
 on completion. Use **Refresh Node** for a complete configuration reread.
-Events Save and Backup Restore retain complete-configuration reconciliation
-and final verification. Targeted Events Save is not yet implemented.
+Backup Restore retains complete-configuration reconciliation and final verification.
 
 If an acknowledged NV write's verification read times out, Workbench makes one
 additional read without repeating the write. A matching value allows application
@@ -339,8 +338,9 @@ including during Save and Restore. Workbench waits for that NV before continuing
 if the second read times out, discovery remains incomplete. These reads never
 repeat a write or change the response timeout.
 
-Applying a complete target through Events Save or Restore can remove
-firmware-created events or reconstruct an event to clear EVs. NV Save refreshes stored events and EVs but does not write them. There is no rollback. Do not use another configuration tool
+Applying a complete target through Restore can remove firmware-created events
+or reconstruct an event to clear EVs. NV Save refreshes stored events and EVs
+but does not write them. There is no rollback. Do not use another configuration tool
 on the network during application. Earlier writes may remain applied after
 failure. Use **Refresh Node** or
 **Layouts → Refresh**, when safe, to reread hardware and compare before
@@ -363,23 +363,34 @@ The NV tab remains readable, with its editing actions unavailable until this
 session ends. Enter values from 0 to 255. Clearing a numeric EV requests absence
 in the desired configuration; entering `0` requests numeric zero. Unchanged
 values and event identities are preserved. Use this tab's **Cancel** to discard
-the Events draft or **Save** to apply it. Events Save currently uses the complete
-configuration workflow described above.
+the Events draft or **Save** to apply it. Ordinary EV changes use targeted
+teaching and identity-based readback, without NV reads or event rediscovery.
+Unchanged events, descriptions and annotations are preserved.
 
 Unknown and confirmed-absent values can both appear blank during discovery, so
 editing requires complete discovery, including confirmation of every EV position.
 
-Assigning a numeric value to EVn automatically sets any preceding undefined EVs
-to zero and displays those zeros immediately. Existing numeric values are
-preserved. For example, setting EV4 to 3 when only EV1=65 is defined produces
-`[65, 0, 0, 3]`. These zeros are explicit desired values: the writer teaches and
-verifies them normally, without relying on module initialisation. Save and
-Restore retain exact verification, including authoritative absences in complete
-configurations.
+Sparse EV positions remain sparse. For example, setting EV4 to 3 when only
+EV1=65 is defined requests `[65, null, null, 3]`; EV2 and EV3 are not written.
+Entering zero explicitly teaches and verifies zero, rather than requesting absence.
+Editable MDF controls work for undefined EVs and update the same raw values.
+The first masked edit starts other bits of that byte at zero; it does not fill
+other EV positions.
 
-Editable MDF controls remain usable for undefined EVs, retaining their unset
-displays until edited. Their edits update Raw Values and initialise preceding
-undefined EVs to zero through the same editor rule.
+Clearing an existing EV requires removing and reconstructing that event through
+the existing verified writer. Other numeric EV values are retained, and event
+rediscovery verifies removal before teaching and checks the reconstructed event.
+A request that cannot safely recreate the event is rejected without removing it.
+Ordinary edits verify only the requested bytes; use **Refresh Node** to inspect
+other firmware side effects.
+
+A partial Events Save stops further writes and opens the existing comparison
+report. **Retry**, when safe, first reads fresh stored events and EVs without
+reading NVs or parameters. It applies only remaining explicit edits; already
+matching edits are skipped and untouched values follow fresh hardware state.
+Ambiguous writes or unconfirmed learn-mode cleanup retain the existing safety
+block. Refreshing does not clear that block. There is no automatic write retry
+or rollback.
 
 ## Creating backups
 

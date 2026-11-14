@@ -20,8 +20,8 @@ Early development. Currently implemented:
   other tab stays available for read-only browsing. NV Save verifies each write,
   reads only MDF-linked NVs and preserves outstanding edits. After verified NV
   writes, stored events and EVs are refreshed, including after a partial Save when
-  safe. Events Save and Node Restore retain complete-configuration application
-  and verification until the targeted Events writer is implemented.
+  safe. Events Save teaches and verifies only explicit EV changes; clearing an
+  existing EV reconstructs that event. Node Restore retains full verification.
 - Separate full-width Produced Events and Consumed Events tabs.
   Live EV rows show supported MDF controls alongside their raw values.
   Supported MDF controls and raw values edit the same desired configuration;

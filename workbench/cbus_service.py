@@ -124,11 +124,13 @@ class CbusService(QObject):
         self.manual_refresh_node: int | None = None
         self.refreshing_layout = False
         # Import after the service types are defined; serializers also use them.
+        from .event_save import EventSave
         from .node_restore import NodeRestore
         from .nv_save import NvSave
 
         self.restore = NodeRestore(self)
         self.nv_save = NvSave(self)
+        self.event_save = EventSave(self)
         connection.frame_received.connect(self._receive_frame)
 
     def close(self) -> None:
@@ -154,6 +156,7 @@ class CbusService(QObject):
         self.connection.frame_received.disconnect(self._receive_frame)
         self.restore.disconnect()
         self.nv_save.disconnect()
+        self.event_save.disconnect()
         self.nv_write.disconnect()
         self.ev_write.disconnect()
         self._request_timer.stop()
@@ -197,6 +200,7 @@ class CbusService(QObject):
             or self._request_queue
             or self.restore.active
             or self.nv_save.active
+            or self.event_save.active
             or self.nv_write.active
             or self.nv_write.refreshing
             or self.ev_write.active
@@ -333,6 +337,7 @@ class CbusService(QObject):
         return bool(
             self.restore.active
             or self.nv_save.active
+            or self.event_save.active
             or self.nv_write.active
             or self.nv_write.refreshing
             or self.ev_write.active
@@ -528,7 +533,12 @@ class CbusService(QObject):
         """Read the entire selected node afresh, retaining its confirmed identity."""
         if self._closed or self.connection.state != "Connected":
             raise ValueError("Rediscovery requires an active connection")
-        if self.nv_save.active or self.nv_write.active or self.ev_write.active:
+        if (
+            self.nv_save.active
+            or self.event_save.active
+            or self.nv_write.active
+            or self.ev_write.active
+        ):
             raise ValueError("Wait for hardware writes and learn-mode cleanup")
         state = self.node_states[node_number]
         self._set_discovery_status(DiscoveryStatus.DISCOVERING)
@@ -617,7 +627,7 @@ class CbusService(QObject):
         unlearn: tuple[int, int] | None = None,
     ) -> None:
         """Validate a coordinator-owned teaching or event reconstruction step."""
-        if owner is not self.restore or not self.restore.active:
+        if owner not in (self.restore, self.event_save) or not owner.active:
             raise ValueError(
                 "EV writes require active configuration application ownership"
             )
@@ -665,7 +675,14 @@ class CbusService(QObject):
                 raise ValueError("EV address is not confirmed by live discovery")
             if type(value) is not int or not 0 <= value <= 255:
                 raise ValueError("EV value must be between 0 and 255")
-        self.ev_write.begin(node_number, values, unlearn=unlearn)
+        self.ev_write.begin(
+            node_number,
+            values,
+            unlearn=unlearn,
+            refresh_events=owner is self.restore
+            or unlearn is not None
+            or any(key[:2] not in identities for key in values),
+        )
 
     def request_nv(self, node_number: int, index: int) -> None:
         """Send NVRD for one numbered node variable (Developer's Guide 6b)."""
