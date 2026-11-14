@@ -1,4 +1,8 @@
-"""Apply explicit EV edits through the existing event planner and writer."""
+"""Apply explicit EV edits through the existing event planner and writer.
+
+Edits may include new event identities, which are taught like Restore's missing
+events. Deleting one consumed event uses the same writer and rediscovery.
+"""
 
 import logging
 from copy import deepcopy
@@ -8,7 +12,11 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from .cbus_service import DiscoveryProgress
 from .logging_config import trace
 from .node_backup_files import node_backup, validate_backup
-from .node_restore_events import event_step_matches, plan_event_restore
+from .node_restore_events import (
+    EventRestoreStep,
+    event_step_matches,
+    plan_event_restore,
+)
 
 logger = logging.getLogger("workbench.cbus")
 
@@ -16,6 +24,9 @@ logger = logging.getLogger("workbench.cbus")
 class EventSave(QObject):
     changed = Signal(int, str)
     finished = Signal(int, bool, str)
+    # Delete Event results go to the Consumed Events view, not the Save editor
+    # or Restore failure report, which are both connected to finished.
+    delete_finished = Signal(int, bool, str)
     refreshed = Signal(int)
 
     def __init__(self, service):
@@ -24,13 +35,15 @@ class EventSave(QObject):
         self.active = False
         self.refreshing = False
         self.node_number = 0
+        self.deleting = False
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self.advance)
         service.ev_write.finished.connect(self.written)
 
-    def check(self, number, backup):
-        validate_backup(backup)
+    def check(self, number, backup=None):
+        if backup is not None:
+            validate_backup(backup)
         service = self.service
         state = service.node_states.get(number)
         if (
@@ -42,7 +55,8 @@ class EventSave(QObject):
             or not state.identity.is_consumer
             or state.can_id is None
             or service.nodes.get(number) != state.identity
-            or backup["node"] != number
+            or backup is not None
+            and backup["node"] != number
         ):
             raise ValueError(
                 "Events Save requires a matching connected FLiM consumer and CAN ID."
@@ -67,12 +81,13 @@ class EventSave(QObject):
             raise ValueError(
                 "Events Save requires confirmed event identities and EV capacity."
             )
-        if any(
+        if backup is not None and any(
             len(e["eventVariables"]) > state.parameters[5] for e in backup["events"]
         ):
             raise ValueError("EV indices exceed the confirmed capacity.")
 
-    def begin(self, number, backup, *, original=None, edits=None):
+    def check_complete(self, number, backup=None):
+        """Events Save checks plus complete discovery, as required for editing."""
         self.check(number, backup)
         state = self.service.node_states[number]
         if (
@@ -80,10 +95,26 @@ class EventSave(QObject):
             or not node_backup(state)["complete"]
         ):
             raise ValueError("Complete discovery is required before Events Save.")
+
+    def begin(self, number, backup, *, original=None, edits=None):
+        self.check_complete(number, backup)
+        state = self.service.node_states[number]
         before = original if original is not None else node_backup(state)
-        self.edits = (
-            deepcopy(edits) if edits is not None else event_edits(before, backup)
-        )
+        edits = deepcopy(edits) if edits is not None else event_edits(before, backup)
+        # A new identity is taught like a missing event in Restore. Some nodes
+        # acknowledge a zero EVLRN without creating the event, so require a
+        # nonzero EV; the writer teaches it first (Restore planning).
+        live = set(state.event_identities.values())
+        requested = {(e["nodeNumber"], e["eventNumber"]) for e in backup["events"]}
+        for identity in sorted(requested - live):
+            if not any(edits.get(key) for key in edits if key[:2] == identity):
+                raise ValueError(
+                    f"New event {label(identity)} needs at least one nonzero EV before Save."
+                )
+        self.edits = edits
+        # Their other EVs keep the node's own defaults, so verify only the
+        # configured EVs of new events after teaching.
+        self.new_identities = requested - live
         self.backup = requested_events(state, backup, self.edits)
         self.identity = (
             state.identity.manufacturer,
@@ -94,9 +125,44 @@ class EventSave(QObject):
         self.pending = list(dict.fromkeys(key[:2] for key in self.edits))
         self.verified = 0
         self.step = None
+        self.deleting = False
         self.active = True
         self.log("Events Save accepted", edits=self.edits)
         self.timer.start(0)
+
+    def delete_event(self, number, identity):
+        """Unlearn one consumed event; rediscovery must then show it absent.
+
+        Uses the Events Save checks, writer ownership and learn-mode handling.
+        The result is emitted through delete_finished, possibly before this
+        method returns if the first transmission fails, so connect first.
+        """
+        self.check_complete(number)
+        state = self.service.node_states[number]
+        if identity not in state.event_identities.values():
+            raise ValueError(f"Node {number} does not consume event {label(identity)}.")
+        self.step = EventRestoreStep(identity, {}, True, None)
+        self.deleting = True
+        self.node_number = number
+        self.identity = (
+            state.identity.manufacturer,
+            state.identity.module_type,
+            state.can_id,
+        )
+        self.edits = {}
+        self.pending = []
+        self.verified = 0
+        self.active = True
+        self.log("Event delete accepted", identity=identity)
+        try:
+            self.service.write_evs(number, {}, owner=self, unlearn=identity)
+        except ValueError:
+            self.active = False
+            self.deleting = False
+            raise
+        # Only once writing has started: a new request object tells any open
+        # failure report that its Retry request is replaced, as a new Save would.
+        self.backup = node_backup(state)
 
     def advance(self):
         if not self.active:
@@ -151,9 +217,21 @@ class EventSave(QObject):
         if not self.active or number != self.node_number or self.step is None:
             return
         self.verified += self.service.ev_write.verified
-        if not success:
+        state = self.service.node_states[number]
+        if self.deleting and not success:
+            # The writer's message may say "Changes saved" when only the
+            # refresh failed; removal is unconfirmed either way.
+            self.finish(False, f"Not confirmed by hardware. {message}")
+        elif not success:
             self.finish(False, message)
-        elif not event_step_matches(self.service.node_states[number], self.step, True):
+        elif self.deleting:
+            if event_step_matches(state, self.step, False):
+                self.finish(True, "Verified by rediscovery.")
+            else:
+                self.finish(False, "Rediscovery still shows the event.")
+        elif not event_step_matches(
+            state, self.step, self.step.identity not in self.new_identities
+        ):
             self.finish(False, "Event did not match after reconstruction.")
         else:
             self.step = None
@@ -183,6 +261,19 @@ class EventSave(QObject):
     def finish(self, success, message):
         self.timer.stop()
         self.active = False
+        if self.deleting:
+            self.deleting = False
+            identity = label(self.step.identity)
+            message = (
+                f"Event {identity} deleted from node {self.node_number}. {message}"
+                if success
+                else f"Could not delete event {identity} on node {self.node_number}. {message}"
+            )
+            self.log("Event delete finished", success=success, result=message)
+            # Refresh views first, so Consumed Events matches the reported result.
+            self.service.node_state_updated.emit(self.node_number)
+            self.delete_finished.emit(self.node_number, success, message)
+            return
         if not success:
             message = f"Partial Save: {self.verified} EV writes verified. {message} No rollback was performed."
         self.log("Events Save finished", success=success, result=message)
@@ -203,6 +294,10 @@ class EventSave(QObject):
         )
 
 
+def label(identity):
+    return f"{identity[0]}:{identity[1]}"
+
+
 def event_edits(original, desired):
     """Retain changed EV positions, including explicit absence and numeric zero."""
     previous = {
@@ -212,7 +307,7 @@ def event_edits(original, desired):
     changes = {}
     for event in desired["events"]:
         identity = (event["nodeNumber"], event["eventNumber"])
-        old = previous[identity]
+        old = previous.get(identity, [])  # A new event starts with no EVs.
         new = event["eventVariables"]
         for i in range(max(len(old), len(new))):
             before = old[i] if i < len(old) else None

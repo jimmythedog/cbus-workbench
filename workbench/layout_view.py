@@ -85,6 +85,7 @@ class LayoutView(QWidget):
         self.tabs.addTab(self.node_view, "Nodes")
 
         self.layout_events = LayoutEvents([], self.events)
+        self.layout_events.teach_requested.connect(self.teach_event)
 
         self.tabs.addTab(self.layout_events, "Events")
 
@@ -205,6 +206,17 @@ class LayoutView(QWidget):
             self.layout_backups.show_live_layout(self.logical_layout)
         if index == self.tabs.indexOf(self.node_view):
             self.node_view.show_selected_node(self.node_view.node_list.currentItem())
+
+    def teach_event(self, number, identity):
+        """Open the target node's Consumed Events editor with a pending event."""
+        self.tabs.setCurrentWidget(self.node_view)
+        node_list = self.node_view.node_list
+        for index in range(node_list.count()):
+            item = node_list.item(index)
+            if node_number(item.data(Qt.ItemDataRole.UserRole)) == number:
+                node_list.setCurrentItem(item)
+                break
+        self.node_view.details.start_new_event(number, identity)
 
     def on_editing_changed(self, editing):
         self.tabs.setTabEnabled(self.tabs.indexOf(self.layout_events), not editing)

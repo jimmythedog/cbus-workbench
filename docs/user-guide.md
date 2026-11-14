@@ -15,6 +15,7 @@ and running instructions.
 - [Observed events](#observed-events)
 - [Editing node variables (NVs)](#editing-node-variables-nvs)
 - [Editing events and event variables (EVs)](#editing-events-and-event-variables-evs)
+- [Teaching and deleting consumed events](#teaching-and-deleting-consumed-events)
 - [Creating backups](#creating-backups)
 - [Backup descriptions and warning icons](#backup-descriptions-and-warning-icons)
 - [Viewing and comparing backups](#viewing-and-comparing-backups)
@@ -391,6 +392,37 @@ matching edits are skipped and untouched values follow fresh hardware state.
 Ambiguous writes or unconfirmed learn-mode cleanup retain the existing safety
 block. Refreshing does not clear that block. There is no automatic write retry
 or rollback.
+
+## Teaching and deleting consumed events
+
+On a connected node's **Consumed Events** tab, **New Event** (also in the
+right-click menu) opens a small dialog for a long or short event identity. On
+**OK** the event is added as a pending row, expanded and selected, with EV1 set
+to 0 and later EVs undefined, and the tab enters its normal **Edit** mode. Configure its EVs with the raw rows or MDF
+controls, then **Save** to teach and verify it through the ordinary Events
+Save, or **Cancel** to discard it without writing anything.
+
+A new event needs at least one nonzero EV before **Save**: CBUS cannot teach an
+event without an EV, and some nodes acknowledge a zero EV without creating the
+event. The nonzero EV is taught first. What each EV does depends on the module.
+EVs you leave blank keep the node's own defaults and are shown after Save.
+
+From the layout **Events** tab, right-click an event and choose
+**Teach to Node…**. The identity is shown read-only; choose an online node by
+node number and name (or module type when unnamed). Only nodes that can be
+edited now are listed. If the chosen node already consumes the event, the dialog
+says so and **OK** is unavailable. Workbench then opens that node's **Consumed
+Events** tab with the event pending, as for **New Event**.
+
+**Delete Event** asks for confirmation, then immediately unlearns the selected
+event, removing all of its EVs from the node. It succeeds only after the node has
+left learn mode and event rediscovery shows the event absent.
+
+Both actions need the same conditions as **Edit**: connected, discovery
+complete and no other Save or Restore running. Success appears in the tab's
+status line and in the refreshed event list. Failures also show a warning (or,
+for Save, the usual comparison report); uncertain learn-mode cleanup keeps the
+existing safety block, which requires reconnecting before further writes.
 
 ## Creating backups
 

@@ -1,5 +1,7 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QDialog,
     QHeaderView,
     QTreeWidget,
     QTreeWidgetItem,
@@ -8,10 +10,14 @@ from PySide6.QtWidgets import (
 )
 
 from .event_description_edit import EventDescriptionDialog
+from .event_teach import TeachEventDialog, teach_targets
 from .send_event_dialog import event_menu
 
 
 class LayoutEvents(QWidget):
+    # Node number and event identity; the layout opens that node's editor.
+    teach_requested = Signal(int, object)
+
     def __init__(self, nodes, events):
         super().__init__()
 
@@ -92,4 +98,31 @@ class LayoutEvents(QWidget):
             if item and item.parent() is None
             else None
         )
-        event_menu(self.table, position, self.cbus_service, identity)
+        if identity is None:
+            return
+        service = self.cbus_service
+        teach = QAction("Teach to Node…", self.table)
+        teach.setEnabled(
+            service is not None
+            and service.connection.state == "Connected"
+            and not service.writes_busy()
+        )
+        teach.triggered.connect(lambda: self.teach_to_node(identity))
+        event_menu(self.table, position, service, identity, (teach,))
+
+    def teach_to_node(self, identity):
+        """Choose a target node, then hand over to its Events Edit workflow."""
+        service = self.cbus_service
+        if service is None:
+            return
+        dialog = TeachEventDialog(
+            self,
+            "Teach to Node",
+            identity,
+            targets=teach_targets(service, self.annotations),
+        )
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        identity, number = dialog.identity(), dialog.target_number()
+        dialog.deleteLater()
+        if accepted and number is not None:
+            self.teach_requested.emit(number, identity)

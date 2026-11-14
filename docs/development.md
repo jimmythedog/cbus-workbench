@@ -746,6 +746,32 @@ slot is invented for new events; rediscovery obtains their current slots. The
 coordinator checks each event's known values (or removal) after refresh, then
 performs the final full-node comparison.
 
+New Event and Teach to Node… only choose an identity (and target). They start
+the ordinary Events Edit session with a pending event appended to the desired
+configuration (`NodeEvents.add_pending_event()`), so the existing raw/MDF EV
+controls, `EventSave.begin()`, Restore event planning and `EvWrite` teach it.
+`EventSave.begin()` requires each new identity to have a nonzero edited EV:
+hardware testing showed a legacy node acknowledging a zero EVLRN with WRACK
+without creating the event (REQEV then returned CMDERR 7, invalid event), as
+the nonzero-first rule used by Restore already allows for. EVs left blank keep
+the node's defaults, so a new event's step is verified against its configured
+EVs only. REQEV stays inside learn mode: legacy CBUSlib `FliM.c` handles REQEV
+and EVLRN only in learn mode, so readback after NNULN would go unanswered.
+
+Delete Event is an immediate, confirmed `EventSave.delete_event()`: the same
+checks (`check_complete()`), `write_evs()` ownership and learn-mode handling,
+with success only on rediscovered absence. Its result uses `delete_finished`, so
+neither the editor Save result nor the Restore failure report is involved.
+Teach to Node… lists only online nodes passing `check_complete()`.
+
+```text
+New Event / Teach to Node -> identity dialog -> Events Edit with pending event
+  -> Save -> EventSave.begin() (new event needs a nonzero EV)
+  -> NNLRN -> EVLRN(nonzero EV first) -> WRACK -> REQEV -> EVANS
+  -> remaining EVs -> NNULN -> event rediscovery -> configured EVs match?
+Delete Event -> confirm -> NNLRN -> EVULN -> NNULN -> rediscovery -> absent?
+```
+
 Protocol: CBUS Guide 6b §7.2.7 and VLCB Opcode §3.5.14/§3.7.8 specify EVULN and
 EVLRN. EVULN removes all EVs; there is no individual EV removal command. EVLRN
 requires an EV index from 1 through capacity, so an empty event cannot be taught

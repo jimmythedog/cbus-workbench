@@ -3,7 +3,9 @@ from copy import deepcopy
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -17,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from .cbus_service import NodeState
 from .event_description_edit import NodeEventNameEditor
+from .event_teach import TeachEventDialog, confirm_delete, start_delete_event
 from .logging_config import trace
 from .mdf_tokens import substitute_tokens
 from .mdfs import Mdf
@@ -164,9 +167,22 @@ class NodeDetails(QWidget):
         self.events_edit_button.setEnabled(False)
         self.events_edit_button.clicked.connect(self.start_events_editing)
 
+        # New Event starts an Events Edit session with a pending event; Save
+        # teaches it. Delete Event is an immediate, confirmed operation.
+        self.new_event_action = QAction("New Event…", self)
+        self.new_event_action.triggered.connect(self.new_event)
+        self.delete_event_action = QAction("Delete Event…", self)
+        self.delete_event_action.triggered.connect(self.delete_event)
+        self.new_event_button = QPushButton("New Event")
+        self.new_event_button.clicked.connect(self.new_event_action.trigger)
+        self.delete_event_button = QPushButton("Delete Event")
+        self.delete_event_button.clicked.connect(self.delete_event_action.trigger)
+
         view_buttons = QWidget()
         view_layout = QHBoxLayout(view_buttons)
         view_layout.addStretch()
+        view_layout.addWidget(self.new_event_button)
+        view_layout.addWidget(self.delete_event_button)
         view_layout.addWidget(self.events_edit_button)
 
         self.events_save_button = QPushButton("Save")
@@ -194,6 +210,14 @@ class NodeDetails(QWidget):
         self.tabs.addTab(self.variables_page, "Node Variables")
 
         self.node_events = NodeEvents(events)
+        self.node_events.consumed_actions = (
+            self.new_event_action,
+            self.delete_event_action,
+        )
+        self.node_events.consumed_table.currentItemChanged.connect(
+            self.update_membership_actions
+        )
+        self.update_membership_actions()
         self.event_name_edit = NodeEventNameEditor(self)
         self.produced_events_page = self.node_events.produced_page
         self.consumed_events_page = self.node_events
@@ -451,6 +475,7 @@ class NodeDetails(QWidget):
         self.desired_configuration = deepcopy(self.original_configuration)
         self.edit_button.setEnabled(False)
         self.events_edit_button.setEnabled(False)
+        self.update_membership_actions()
         if session == "events":
             self.node_events.begin_configuration_edit(self.desired_configuration)
             self.events_buttons.setCurrentIndex(1)
@@ -480,6 +505,7 @@ class NodeDetails(QWidget):
         self.editing_changed.emit(False)
         self.edit_button.setEnabled(self.can_edit_configuration())
         self.events_edit_button.setEnabled(self.can_edit_configuration())
+        self.update_membership_actions()
 
     def set_editing(self, editing):
         self.tabs.setTabEnabled(self.tabs.indexOf(self.details_page), not editing)
@@ -802,6 +828,79 @@ class NodeDetails(QWidget):
         self.summary_can_id.setText(f"CAN ID: {text}")
         self.status.setText(status)
         self.summary_status.setText(f"Status: {status}")
+        self.update_membership_actions()
+
+    def update_membership_actions(self, *_args) -> None:
+        """New/Delete Event need the same idle, safe, complete state as Edit."""
+        state = self.live_state
+        allowed = (
+            state is not None
+            and state.identity.is_consumer
+            and self.can_edit_configuration()
+        )
+        selected = self.node_events.selected_identity() is not None
+        self.new_event_action.setEnabled(allowed)
+        self.delete_event_action.setEnabled(allowed and selected)
+        self.new_event_button.setEnabled(allowed)
+        self.delete_event_button.setEnabled(allowed and selected)
+
+    def new_event(self) -> None:
+        if not self.new_event_action.isEnabled():
+            return
+        number = self.live_state.identity.node_number
+        dialog = TeachEventDialog(
+            self,
+            f"New Event — Node {number}",
+            consumed=set(self.live_state.event_identities.values()),
+        )
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        identity = dialog.identity()
+        dialog.deleteLater()
+        if accepted:
+            self.start_new_event(number, identity)
+
+    def start_new_event(self, number, identity) -> None:
+        """Begin Events Edit with a pending event; Save teaches and verifies it."""
+        state = self.live_state
+        if state is None or state.identity.node_number != number:
+            return
+        self.begin_configuration_edit("events")
+        if self.desired_configuration is None:
+            self.events_result.setText(
+                f"Node {number}: cannot edit events now; new event not added."
+            )
+            return
+        self.tabs.setCurrentWidget(self.consumed_events_page)
+        self.node_events.add_pending_event(identity)
+        self.show_configuration_result(
+            f"New event {identity[0]}:{identity[1]}: set at least one nonzero EV, "
+            "then Save to teach it, or Cancel."
+        )
+
+    def delete_event(self) -> None:
+        identity = self.node_events.selected_identity()
+        if not self.delete_event_action.isEnabled() or identity is None:
+            return
+        number = self.live_state.identity.node_number
+        if not confirm_delete(self, number, identity):
+            return
+        self.events_result.setText(f"Deleting event {identity[0]}:{identity[1]}…")
+        started = start_delete_event(
+            self,
+            self.cbus_service,
+            number,
+            identity,
+            finished=self.finish_delete_event,
+        )
+        if not started:
+            self.events_result.clear()
+        self.events_edit_button.setEnabled(self.can_edit_configuration())
+        self.update_membership_actions()
+
+    def finish_delete_event(self, _success: bool, message: str) -> None:
+        self.events_result.setText(message)
+        self.events_edit_button.setEnabled(self.can_edit_configuration())
+        self.update_membership_actions()
 
     def update_backup_buttons(self):
         selected = bool(self.node_backups.selectedItems())
@@ -887,6 +986,7 @@ class NodeDetails(QWidget):
         self.editing_changed.emit(True)
         self.edit_button.setEnabled(False)
         self.events_edit_button.setEnabled(False)
+        self.update_membership_actions()
 
     def finish_restore(self, node_number: int, success: bool, message: str) -> None:
         if self.layout_restoring:
@@ -932,6 +1032,7 @@ class NodeDetails(QWidget):
             self.show_configuration_result(f"Node {node_number}: {message}")
             self.cancel_configuration()
             self.events_edit_button.setEnabled(self.can_edit_configuration())
+            self.update_membership_actions()
             self.update_backup_buttons()
             self.saving_nvs = False
             return
@@ -939,6 +1040,7 @@ class NodeDetails(QWidget):
         self.editing_changed.emit(False)
         self.edit_button.setEnabled(self.can_edit_configuration())
         self.events_edit_button.setEnabled(self.can_edit_configuration())
+        self.update_membership_actions()
         self.update_backup_buttons()
 
     def delete_backup(self):

@@ -125,6 +125,7 @@ class NodeEvents(QWidget):
 
         layout.addWidget(consumed)
         self.cbus_service = None
+        self.consumed_actions = ()
         for table in (self.produced_table, self.consumed_table):
             table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             table.customContextMenuRequested.connect(
@@ -133,15 +134,28 @@ class NodeEvents(QWidget):
 
     def show_event_menu(self, table, position):
         item = table.itemAt(position)
+        if table is self.consumed_table:
+            # New/Delete Event actions are owned by NodeDetails, beside its buttons.
+            if item is not None and item.parent() is not None:
+                return
+            # Delete Event acts on the current item: make it the clicked row.
+            self.consumed_table.setCurrentItem(item)
+            identity = item.data(0, Qt.ItemDataRole.UserRole) if item else None
+            event_menu(
+                table, position, self.cbus_service, identity, self.consumed_actions
+            )
+            return
         if item is None:
             return
-        if table is self.consumed_table:
-            if item.parent() is not None:
-                return
-            identity = item.data(0, Qt.ItemDataRole.UserRole)
-        else:
-            identity = tuple(map(int, table.item(item.row(), 0).text().split(":")))
+        identity = tuple(map(int, table.item(item.row(), 0).text().split(":")))
         event_menu(table, position, self.cbus_service, identity)
+
+    def selected_identity(self):
+        """The selected consumed event's identity, or None for EV/detail rows."""
+        item = self.consumed_table.currentItem()
+        if item is None or item.parent() is not None:
+            return None
+        return item.data(0, Qt.ItemDataRole.UserRole)
 
     def show_node(self, node):
         self.ev_presentation = None
@@ -442,6 +456,37 @@ class NodeEvents(QWidget):
         self.desired_configuration = desired
         self.set_editing(True)
         self.refresh_configuration_controls()
+
+    def add_pending_event(self, identity):
+        """Add a new identity to the Events draft; Save teaches, Cancel discards.
+
+        EV1 starts at 0; later EVs stay undefined until edited. Save still
+        requires a nonzero EV. Its rows and expanded MDF controls are the
+        ordinary ones and edit the same desired configuration as existing events.
+        """
+        nn, en = identity
+        self.desired_configuration["events"].append(
+            {"nodeNumber": nn, "eventNumber": en, "eventVariables": [0]}
+        )
+        parent = QTreeWidgetItem(self.consumed_table, [f"{nn}:{en}", "New event"])
+        parent.setData(0, Qt.ItemDataRole.UserRole, identity)
+        rows = {}
+        for ev_index in range(1, self.live_state.parameters[5] + 1):
+            text = "0" if ev_index == 1 else ""
+            item = QTreeWidgetItem(parent, [f"EV {ev_index}", text])
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+            item.setData(0, Qt.ItemDataRole.UserRole, ev_index == 1)
+            rows[ev_index] = item
+        self.pending_ev_controls[identity] = (rows, {1: 0})
+        self.consumed_table.setCurrentItem(parent)
+        # Expansion builds the MDF controls from the desired configuration.
+        parent.setExpanded(True)
+        trace(
+            logger,
+            "Pending new event added node=%s event=%s",
+            self.node.node_number,
+            identity,
+        )
 
     def configuration_context(self, identity):
         desired = self.desired_configuration

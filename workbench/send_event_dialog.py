@@ -94,19 +94,25 @@ class SendEventDialog(QDialog):
         self.status.setText("ON frame sent" if on else "OFF frame sent")
 
 
-def event_menu(table, position, service, identity):
-    """Show send actions only for an event row on its own layout connection."""
-    if identity is None:
+def event_menu(table, position, service, identity, extra_actions=()):
+    """Show send actions for an event row, followed by any view actions."""
+    if identity is None and not extra_actions:
         return
     menu = QMenu(table)
-    for on in (True, False):
-        action = menu.addAction("Send ON" if on else "Send OFF")
-        action.setEnabled(
-            service is not None and service.connection.state == "Connected"
-        )
-        action.triggered.connect(
-            lambda _checked=False, on=on: send_existing(table, service, identity, on)
-        )
+    if identity is not None:
+        for on in (True, False):
+            action = menu.addAction("Send ON" if on else "Send OFF")
+            action.setEnabled(
+                service is not None and service.connection.state == "Connected"
+            )
+            action.triggered.connect(
+                lambda _checked=False, on=on: send_existing(
+                    table, service, identity, on
+                )
+            )
+    if extra_actions:
+        menu.addSeparator()
+        menu.addActions(list(extra_actions))
     menu.exec(table.viewport().mapToGlobal(position))
 
 
