@@ -143,7 +143,9 @@ jobs:
           kill -0 "$pid"
           kill "$pid"
           wait "$pid" || true
-          hdiutil detach "$PWD/dmg-mount"
+          # macOS can hold the volume briefly after the app exits; the image is
+          # read-only, so forcing the unmount is safe.
+          hdiutil detach -force "$PWD/dmg-mount"
 
       - name: Upload installer
         uses: actions/upload-artifact@v7
