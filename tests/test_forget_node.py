@@ -137,8 +137,66 @@ class ForgetNodeTests(unittest.TestCase):
         self.assertEqual(offered, ["Refresh Node", "Forget Node"])
         offered.clear()
         self.nodes.show_identity(self.identity)
+        self.service.set_presence(42, True)
         timer.start(0)
         self.nodes.show_node_menu(position)
         self.nodes.show_node_menu(QPoint(-1, -1))
         timer.stop()
         self.assertEqual(offered, ["Refresh Node"])
+        # A discovered node that goes offline keeps its PNN item but is forgettable.
+        offered.clear()
+        self.service.set_presence(42, False)
+        timer.start(0)
+        self.nodes.show_node_menu(position)
+        timer.stop()
+        self.assertEqual(offered, ["Refresh Node", "Forget Node"])
+        self.assertIn("(Offline)", self.item.text())
+        with patch(
+            "workbench.node_view.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ):
+            self.nodes.forget_saved_node(self.item)
+        self.assertFalse(self.directory.exists())
+        self.assertEqual(self.nodes.node_list.count(), 0)
+        self.assertEqual(self.connection.sent, [])
+
+    def test_node_coming_online_during_confirmation_is_not_forgotten(self):
+        def node_responds(*_args):
+            self.service.set_presence(42, True)
+            return QMessageBox.StandardButton.Yes
+
+        def layout_disconnects(*_args):
+            self.view.set_connected(False)
+            return QMessageBox.StandardButton.Yes
+
+        for confirm in (node_responds, layout_disconnects):
+            with patch("workbench.node_view.QMessageBox.question", confirm):
+                self.nodes.forget_saved_node(self.item)
+            self.assertTrue(self.directory.exists())
+            self.assertEqual(self.nodes.node_list.count(), 1)
+            self.assertEqual(self.view.annotations.load(42), {"name": "Yard lights"})
+
+    def test_disconnected_layout_inspects_but_cannot_forget_offline_node(self):
+        self.view.set_connected(False)
+        self.view.show()
+        self.app.processEvents()
+        position = self.nodes.node_list.visualItemRect(self.item).center()
+        offered = []
+
+        def dismiss_menu():
+            menu = self.app.activePopupWidget()
+            offered.extend(action.text() for action in menu.actions())
+            menu.close()
+
+        QTimer.singleShot(0, dismiss_menu)
+        self.nodes.show_node_menu(position)
+        self.assertEqual(offered, ["Refresh Node"])
+        self.assertEqual(self.nodes.details.node, 42)
+        self.assertIn("(Offline)", self.item.text())
+        with patch(
+            "workbench.node_view.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ):
+            self.nodes.forget_saved_node(self.item)
+        self.assertTrue(self.directory.exists())
+        self.assertEqual(self.nodes.node_list.count(), 1)

@@ -83,11 +83,7 @@ class NodeView(QSplitter):
         refresh.setToolTip(reason or "Reread this node from hardware")
         menu.setToolTipsVisible(True)
         forget = None
-        if (
-            isinstance(item.data(Qt.ItemDataRole.UserRole), int)
-            and not self.discovering
-            and not self.editing
-        ):
+        if self.can_forget(item):
             forget = menu.addAction("Forget Node")
         chosen = menu.exec(self.node_list.viewport().mapToGlobal(position))
         if chosen == refresh:
@@ -101,9 +97,29 @@ class NodeView(QSplitter):
         elif forget is not None and chosen == forget:
             self.forget_saved_node(item)
 
+    def is_online(self, item) -> bool:
+        """Online status shown in the navigator, independent of the item's data type."""
+        service = self.details.cbus_service
+        if service is None:
+            return isinstance(item.data(Qt.ItemDataRole.UserRole), Pnn)
+        return service.presence.get(
+            node_number(item.data(Qt.ItemDataRole.UserRole)), False
+        )
+
+    def can_forget(self, item) -> bool:
+        # Without a connection every saved node shows Offline, so Offline is
+        # only trustworthy while the layout is connected.
+        return (
+            self.details.connected
+            and self.details.cbus_service is not None
+            and not self.is_online(item)
+            and not self.discovering
+            and not self.editing
+        )
+
     def forget_saved_node(self, item):
-        number = item.data(Qt.ItemDataRole.UserRole)
-        if not isinstance(number, int) or self.discovering or self.editing:
+        number = node_number(item.data(Qt.ItemDataRole.UserRole))
+        if not self.can_forget(item):
             return
         logical_layout = self.details.logical_layout
         fields = {"layout": logical_layout, "node_number": number}
@@ -120,11 +136,12 @@ class NodeView(QSplitter):
         if answer != QMessageBox.StandardButton.Yes:
             trace(logger, "Forget node cancelled", extra={"fields": fields})
             return
-        # The confirmation runs a Qt event loop; discovery may have made it live.
-        if not isinstance(item.data(Qt.ItemDataRole.UserRole), int) or self.discovering:
+        # The confirmation runs a Qt event loop; the layout may have disconnected
+        # or the node may have come online.
+        if not self.can_forget(item):
             trace(
                 logger,
-                "Forget node stopped: discovery changed",
+                "Forget node stopped: disconnected, node online or busy",
                 extra={"fields": fields},
             )
             return
@@ -149,13 +166,7 @@ class NodeView(QSplitter):
             name = annotations.load(nn).get("name", "") if annotations else ""
             label = name or item.module_label
             base = f"{nn} - {label}" if label else str(nn)
-            service = self.details.cbus_service
-            online = (
-                service.presence.get(nn, False)
-                if service is not None
-                else isinstance(item.data(Qt.ItemDataRole.UserRole), Pnn)
-            )
-            base += " (Online)" if online else " (Offline)"
+            base += " (Online)" if self.is_online(item) else " (Offline)"
             item.setText(base)
         if (
             not self.discovering
