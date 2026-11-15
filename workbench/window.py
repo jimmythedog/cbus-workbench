@@ -35,6 +35,7 @@ from .layout_view import LayoutView
 from .logging_config import TRACE, trace
 from .mmc_import_dialog import MmcImportDialog
 from .node_metadata import save_metadata
+from .node_number_dialog import NodeNumberDialog
 from .observed_events import EventIdentity, ObservedEvents, decode_event
 from .pnn import Pnn
 from .send_event_dialog import SendEventDialog
@@ -75,6 +76,9 @@ class MainWindow(QMainWindow):
         self.layout_settings = {}
         self.connections: dict[str, TcpConnection | SerialConnection] = {}
         self.cbus_services: dict[str, CbusService] = {}
+        # One node-number assignment at a time: SNN reaches every module in
+        # setup mode, and two connections may share one physical network.
+        self.node_number_dialog: NodeNumberDialog | None = None
         self.pending_ev_disconnects: set[str] = set()
 
         saved_settings = {"default_layout": None, "layouts": {}}
@@ -410,6 +414,9 @@ class MainWindow(QMainWindow):
                 f"Layout '{name}': {outcome}", 10000
             )
         )
+        service.node_number.requested.connect(
+            lambda layout=name: self.show_node_number_dialog(layout)
+        )
         self.cbus_services[name] = service
         service.discovery_status_changed.connect(self.update_discovery_status)
         service.discovery_status_changed.connect(node_view.discovery_status_changed)
@@ -428,6 +435,78 @@ class MainWindow(QMainWindow):
         self.error_reporter.run(
             f"Could not discover nodes on layout '{name}'", service.discover_nodes
         )
+
+    def known_nodes(self, name: str) -> dict[int, bool]:
+        """Node numbers known on this network: {number: online}.
+
+        Connections sharing a logical layout are treated as one network; each
+        service's presence already includes that layout's saved nodes.
+        """
+        logical_layout = self.layout_settings[name]["logical_layout"]
+        known: dict[int, bool] = {}
+        for other, service in self.cbus_services.items():
+            if self.layout_settings[other]["logical_layout"] == logical_layout:
+                for number, online in service.presence.items():
+                    known[number] = known.get(number, False) or online
+        return known
+
+    def show_node_number_dialog(self, name: str) -> None:
+        """Open the assignment dialog for an RQNN; refuse a concurrent request."""
+        service = self.cbus_services[name]
+        dialog = self.node_number_dialog
+        if dialog is not None and dialog.finished_outcome is None:
+            service.node_number.cancel()
+            logical_layout = self.layout_settings[name]["logical_layout"]
+            if (
+                self.layout_settings[dialog.layout_name]["logical_layout"]
+                == logical_layout
+            ):
+                # Probably the same RQNN seen through a second connection.
+                trace(
+                    connection_logger,
+                    "Node number request already open on a shared layout",
+                    extra={"fields": {"layout": name, "open": dialog.layout_name}},
+                )
+                return
+            connection_logger.warning(
+                "Node number request ignored: another request is open",
+                extra={"fields": {"layout": name, "open": dialog.layout_name}},
+            )
+            self.statusBar().showMessage(
+                f"Layout '{name}': node number request ignored while another is open",
+                10000,
+            )
+            return
+        if dialog is not None:
+            dialog.close()  # A finished failure report; replace it.
+        dialog = NodeNumberDialog(
+            name, service.node_number, lambda: self.known_nodes(name), self
+        )
+        self.node_number_dialog = dialog
+        # Busy state follows discovery status; Online/Offline follows presence.
+        service.discovery_status_changed.connect(dialog.refresh)
+        service.presence_changed.connect(dialog.refresh)
+        trace(
+            connection_logger,
+            "Node number dialog opened",
+            extra={"fields": {"layout": name}},
+        )
+
+        def closed(_result: int) -> None:
+            success, message = dialog.finished_outcome or (False, "")
+            if success:
+                message += "; discovering…"
+            if message:
+                self.statusBar().showMessage(
+                    f"Layout '{name}': {message.splitlines()[0]}", 10000
+                )
+            if self.node_number_dialog is dialog:
+                self.node_number_dialog = None
+            dialog.deleteLater()
+
+        dialog.finished.connect(closed)
+        dialog.open()
+        service.node_number.request_parameters()
 
     def record_node_identity(self, name: str, node: Pnn) -> None:
         service = self.cbus_services[name]

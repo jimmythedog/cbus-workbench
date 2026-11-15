@@ -16,6 +16,11 @@ from .pnn import decode_pnn
 # generic frame summaries use the same CBUS mnemonic.
 OPCODE_NAMES = {
     0x0D: "QNN",
+    0x10: "RQNP",
+    0x42: "SNN",
+    0x50: "RQNN",
+    0x51: "NNREL",
+    0x52: "NNACK",
     0x53: "NNLRN",
     0x54: "NNULN",
     0x57: "NERD",
@@ -39,6 +44,7 @@ OPCODE_NAMES = {
     0xB6: "PNN",
     0xD2: "EVLRN",
     0xD3: "EVANS",
+    0xEF: "PARAMS",
     0xF2: "ENRSP",
 }
 
@@ -50,6 +56,11 @@ _NN = ("Node number", 2)
 _EVENT = (("Event node number", 2), ("Event number", 2))
 _OPCODE_FIELDS = {
     0x0D: (),
+    0x10: (),
+    0x42: (_NN,),
+    0x50: (_NN,),
+    0x51: (_NN,),
+    0x52: (_NN,),
     0x53: (_NN,),
     0x54: (_NN,),
     0x57: (_NN,),
@@ -73,6 +84,15 @@ _OPCODE_FIELDS = {
     0xB6: (_NN, ("Manufacturer", 1), ("Module type", 1), ("Flags", 1)),
     0xD2: (*_EVENT, ("EV index", 1), ("EV value", 1)),
     0xD3: (*_EVENT, ("EV index", 1), ("EV value", 1)),
+    0xEF: (
+        ("Manufacturer", 1),
+        ("Minor version", 1),
+        ("Module type", 1),
+        ("Supported events", 1),
+        ("EVs per event", 1),
+        ("Supported NVs", 1),
+        ("Major version", 1),
+    ),
     0xF2: (_NN, *_EVENT, ("Event index", 1)),
 }
 

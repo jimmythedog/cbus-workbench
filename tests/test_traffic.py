@@ -122,6 +122,12 @@ class TrafficTests(unittest.TestCase):
             ("D2", "EVLRN"),
             ("D3", "EVANS"),
             ("F2", "ENRSP"),
+            ("10", "RQNP"),
+            ("42", "SNN"),
+            ("50", "RQNN"),
+            ("51", "NNREL"),
+            ("52", "NNACK"),
+            ("EF", "PARAMS"),
         )
         for opcode, mnemonic in cases:
             frame = f":SB040N{opcode}0102;".encode("ascii")

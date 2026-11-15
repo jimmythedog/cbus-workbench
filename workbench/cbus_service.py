@@ -13,6 +13,7 @@ from .enrsp import decode_enrsp
 from .ev_write import EvWrite
 from .logging_config import trace
 from .neval import decode_neval
+from .node_number import NodeNumberAssignment
 from .numev import decode_numev
 from .nv_write import NvWrite
 from .nvans import decode_nvans
@@ -120,6 +121,7 @@ class CbusService(QObject):
         self.node_state_updated.connect(lambda _node: self._status_update.start(0))
         self.nv_write = NvWrite(self)
         self.ev_write = EvWrite(self)
+        self.node_number = NodeNumberAssignment(self)
         self.refreshing_node = None
         self.manual_refresh_node: int | None = None
         self.refreshing_layout = False
@@ -159,6 +161,7 @@ class CbusService(QObject):
         self.event_save.disconnect()
         self.nv_write.disconnect()
         self.ev_write.disconnect()
+        self.node_number.close()
         self._request_timer.stop()
         self._request_queue.clear()
         self._outstanding_request = None
@@ -878,6 +881,7 @@ class CbusService(QObject):
                 self.ev_write.acknowledge(wrack.node_number)
                 return
             self.ev_write.receive_frame(frame)
+            self.node_number.receive_frame(frame)
             pnn = decode_pnn(frame)
             paran = decode_paran(frame) if pnn is None else None
             nvans = decode_nvans(frame) if pnn is None and paran is None else None
@@ -966,6 +970,15 @@ class CbusService(QObject):
                 self._receive_cmderr(cmderr.node_number, cmderr.code)
             return
 
+        if pnn.node_number == 0:
+            # NN 0 means a module without a node number (SLiM or setup mode).
+            # It belongs to commissioning via RQNN, never to the node inventory.
+            trace(
+                logger,
+                "Ignoring PNN from node number 0",
+                extra={"fields": {"layout": self.connection.layout_name}},
+            )
+            return
         self.set_presence(pnn.node_number, True)
         previous = self.nodes.get(pnn.node_number)
         # PNN identifies the sender; event node numbers may identify another node.
@@ -1002,20 +1015,19 @@ class CbusService(QObject):
             self._set_discovery_status(DiscoveryStatus.DISCOVERING)
             self.node_discovered.emit(pnn)
             self.node_state_updated.emit(pnn.node_number)
-            if pnn.node_number != 0:
-                self._request_queue.append(("parameter", pnn.node_number, 0))
-                trace(
-                    logger,
-                    "Automatic parameter count queued",
-                    extra={
-                        "fields": {
-                            "layout": self.connection.layout_name,
-                            "node_number": pnn.node_number,
-                            "parameter_index": 0,
-                        }
-                    },
-                )
-                self._send_next_request()
+            self._request_queue.append(("parameter", pnn.node_number, 0))
+            trace(
+                logger,
+                "Automatic parameter count queued",
+                extra={
+                    "fields": {
+                        "layout": self.connection.layout_name,
+                        "node_number": pnn.node_number,
+                        "parameter_index": 0,
+                    }
+                },
+            )
+            self._send_next_request()
         else:
             # A changed observed CAN ID also matters to metadata persistence.
             self.node_updated.emit(pnn)

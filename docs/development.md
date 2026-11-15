@@ -895,7 +895,9 @@ existing asynchronous event loop; add a `QThread` only if processing later
 proves to require it.
 
 The service listens to one connection's frame signal, keeps PNN-confirmed node
-identities in memory and emits signals only for new or changed identities. When a
+identities in memory and emits signals only for new or changed identities. A PNN
+for NN 0 (a module without a node number) is ignored: NN 0 belongs to
+commissioning through RQNN, never to the inventory, polling or persistence. When a
 layout connects, `MainWindow` creates its service using the configured PC CAN ID
 (100–127) and sends one QNN. Leaving Connected detaches and clears that service;
 reconnecting starts discovery with empty state. The caller must choose a CAN ID
@@ -1065,6 +1067,48 @@ Connected -> CbusService(layout) -> QNN -> PNN (new numbered node)
                                              +-> >0 -> NERD -> ENRSP
                                                               -> REVAL/NEVAL if EV count > 0
 ```
+
+### Node number assignment
+
+Each `CbusService` owns a `NodeNumberAssignment` that observes every frame. The
+first RQNN with no request open records the reported NN and sender CAN ID and
+emits `requested`; no menu action or waiting mode precedes it. `MainWindow`
+opens one window-modal `NodeNumberDialog` for the whole application, because
+RQNP and SNN carry no NN: every module in setup mode would act on them, and two
+connections may reach the same physical network. A request arriving on another
+connection while a dialog is active is cancelled; it is reported in the status
+bar unless that connection shares the dialog's logical layout (probably the same
+RQNN seen twice). Like other modal dialogs, it defers presence polling while open.
+
+Repeated identical RQNNs are ignored. An RQNN with a different NN or CAN ID, or
+PARAMS from another CAN ID, marks the request ambiguous and blocks SNN until the
+user cancels and retries. PARAMS from the requester's CAN ID only adds
+identification. Validation refuses the Developer's Guide reserved NNs and NNs
+known Online on connections sharing the logical layout; Offline known NNs only
+warn because a module may have been replaced. The dialog offers the RQNN's
+non-zero NN; otherwise suggestions start at 256.
+
+```text
+RQNN -> requested -> MainWindow: dialog already active? -> cancel + status bar
+                                  else -> dialog.open() -> RQNP
+     PARAMS (same CAN ID) -> identification
+     RQNN differing / PARAMS other CAN ID -> ambiguous -> Assign disabled
+Assign -> validation + busy check -> SNN -> single-shot response timeout
+     NNACK(target) from requester CAN ID, not ambiguous
+          -> finished(success) -> target NN already live? rediscover_node(target)
+          -> discover_nodes() (QNN) -> unchanged PNNs ignored; new PNN -> normal FIFO
+     NNACK from another CAN ID / while ambiguous / CMDERR from old or target NN /
+     timeout / disconnect -> finished(failure, uncertain state advice)
+Cancel (before SNN only) -> forget request; module remains in setup mode
+```
+
+If the target NN already has live state (the module kept its number, or an
+Offline node's number was reused), the existing `rediscover_node()` rereads it,
+replacing its queued work; other nodes keep their state. A renumbered module's
+old NN becomes Offline through normal polling after the dialog closes. The module
+self-enumerates before RQNN (guide §7.2.1), so NNACK must match both the target
+NN and the RQNN sender's CAN ID; a mismatch is reported as uncertain rather than
+success. Saved data is never moved to the new NN.
 
 ### Event identity enumeration
 

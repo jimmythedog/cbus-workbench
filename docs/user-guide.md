@@ -10,6 +10,7 @@ and running instructions.
 - [Layouts and connections](#layouts-and-connections)
 - [Importing MMC layouts](#importing-mmc-layouts)
 - [Connecting and discovering nodes](#connecting-and-discovering-nodes)
+- [Assigning a node number](#assigning-a-node-number)
 - [Understanding discovery status](#understanding-discovery-status)
 - [Viewing node information](#viewing-node-information)
 - [Observed events](#observed-events)
@@ -121,6 +122,42 @@ If a configuration read fails or times out, confirmed values remain visible and
 Workbench continues with other nodes. Use **Refresh Node** or
 **Layouts → Refresh** to reread configuration when the connection is idle.
 Online status does not replace Restore's fresh pre-write safety checks.
+
+## Assigning a node number
+
+While a layout is connected, follow the module's own pushbutton procedure to
+put it into setup mode: a new module entering FLiM, or a FLiM module that should
+change its node number. When the module requests a node number, Workbench opens
+**Assign Node Number** automatically. You don't need to choose a menu command
+first.
+
+The dialog shows the module's current node number ("None" for a new module), its
+CAN ID and, if the module reports them, its manufacturer, module and version. It
+offers the module's current node number, or for a new module the lowest unused
+number from 256 upwards; you can change it.
+**Assign** is unavailable, with a reason, when:
+
+- the number is reserved (0, 100–127, 65534, 65535);
+- the number belongs to a node that is currently Online;
+- more than one module appears to be in setup mode at once (take the others out
+  of setup mode, cancel, and press the module's button again);
+- the connection is busy writing, restoring or refreshing a node.
+
+A number belonging to an Offline node is allowed with a warning, for example
+when a module has been replaced. Workbench checks only nodes it has discovered
+or saved, so a powered-off module may still use the number.
+
+After **Assign**, Workbench waits for the module's acknowledgement. Only then
+does it report success, close the dialog and discover the node so it appears
+in Navigator with its parameters, NVs and events. If the module doesn't
+acknowledge, reports an error or the connection closes, the dialog explains
+that the result is uncertain; use **Layouts → Refresh** to check, or press the
+module's button again. **Cancel** sends nothing: the module stays in setup mode
+until its button is pressed again. After a renumber, the old number becomes
+Offline at the next check; its saved data and backups stay under the old number.
+
+Only one Assign Node Number dialog is open at a time. A request on another
+connection meanwhile is ignored, and the status bar says so.
 
 ## Observed events
 
