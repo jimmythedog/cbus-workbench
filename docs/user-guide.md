@@ -657,7 +657,13 @@ through a replacement connection. Ordinary backup Compare has no Retry.
 ## Diagnostics and application directories
 
 **Messages / Diagnostics** shows sent and received CBUS frames, labels supported
-opcodes and shows raw frames for others. Use **View** to show or hide the panel.
+opcodes and shows raw frames for others. Double-click a frame to see its complete,
+copyable raw message and a decimal breakdown: priority, CAN ID, opcode and all data
+bytes, including the opcode. For opcodes the workbench labels, the data is also split
+into named fields such as node number, event number or NV index, and standard codes
+(manufacturer, module type, flags, parameter index, CMDERR error and some
+parameter values) are named. Unknown
+values stay numeric. Use **View** to show or hide the panel.
 **View → Logging Level** changes logging detail for the current session.
 
 For raw frame sending, connect a layout and choose

@@ -12,7 +12,16 @@ from unittest.mock import patch
 from layout_fixture import sample_settings
 from PySide6.QtCore import QObject, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QGroupBox,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+)
 
 from workbench.app_settings import load_settings, save_settings
 from workbench.cbus_service import DiscoveryProgress, NodeState
@@ -728,6 +737,61 @@ class WindowStartupTests(unittest.TestCase):
         self.assertIn(("RX", "RQNPN", "Default: node 259, parameter 4"), records)
         self.assertIn(("RX", "PARAN", "Default: node 259, parameter 4 = 5"), records)
         self.assertIn(("RX", "0x00", "Default: :SB060N00;"), records)
+
+        diagnostics = window.diagnostics_dock.widget()
+
+        def double_click_row(row):
+            """Return the dialogs opened by double-clicking a row's Details cell."""
+            before = set(diagnostics.findChildren(QDialog))
+            position = table.visualItemRect(table.item(row, 3)).center()
+            # Item views only report a double-click that follows a click.
+            QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=position)
+            QTest.mouseDClick(table.viewport(), Qt.MouseButton.LeftButton, pos=position)
+            return [d for d in diagnostics.findChildren(QDialog) if d not in before]
+
+        pnn_row = [record[1] for record in records].index("PNN")
+        for row, expected in (
+            (0, connection.sent[0].decode("ascii")),
+            (pnn_row, ":SB040NB601020D2203;"),
+        ):
+            [dialog] = double_click_row(row)
+            raw = dialog.findChild(QLineEdit)
+            self.assertEqual(raw.text(), expected)
+            self.assertTrue(raw.isReadOnly())
+            if row == pnn_row:
+                # Section title -> {label: value}, skipping the raw line edit.
+                sections = {}
+                for box in dialog.findChildren(QGroupBox):
+                    form = box.layout()
+                    sections[box.title()] = {
+                        form.itemAt(i, QFormLayout.ItemRole.LabelRole)
+                        .widget()
+                        .text(): form.itemAt(i, QFormLayout.ItemRole.FieldRole)
+                        .widget()
+                        .text()
+                        for i in range(form.rowCount())
+                        if isinstance(
+                            form.itemAt(i, QFormLayout.ItemRole.FieldRole).widget(),
+                            QLabel,
+                        )
+                    }
+                self.assertEqual(
+                    [box.title() for box in dialog.findChildren(QGroupBox)],
+                    ["Raw frame", "Message", "CAN header"],
+                )
+                self.assertEqual(sections["Message"]["Opcode:"], "182 (PNN)")
+                self.assertEqual(sections["Message"]["Node number:"], "258")
+                self.assertEqual(sections["CAN header"]["CAN ID:"], "2")
+                self.assertEqual(
+                    sections["Raw frame"]["Data bytes:"], "182, 1, 2, 13, 34, 3"
+                )
+            dialog.findChild(QDialogButtonBox).button(
+                QDialogButtonBox.StandardButton.Close
+            ).click()
+            self.assertFalse(dialog.isVisible())
+
+        diagnostics.add_message("Info", "", "No frame")
+        self.assertEqual(double_click_row(table.rowCount() - 1), [])
 
     def test_connected_layout_polling_edits_apply_and_persist_without_reconnecting(
         self,

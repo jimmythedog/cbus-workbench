@@ -456,7 +456,9 @@ class MainWindow(QMainWindow):
             if identity is not None:
                 self.observe_event(name, identity)
         opcode, details = describe_frame(frame, name)
-        self.diagnostics_dock.widget().add_message(direction, opcode, details)
+        self.diagnostics_dock.widget().add_message(
+            direction, opcode, details, frame.decode("ascii", errors="replace")
+        )
 
     def remove_cbus_service(self, name: str) -> None:
         service = self.cbus_services.pop(name, None)

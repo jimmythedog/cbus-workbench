@@ -3,6 +3,22 @@
 import re
 from dataclasses import dataclass
 
+# Published CMDERR codes from MERG cbusdefs.csv (CbusCmdErrs). Code 8 is now
+# reserved and 13 is only proposed, so both are left as plain numbers.
+CMDERR_NAMES = {
+    1: "Invalid command",
+    2: "Not in learn mode",
+    3: "Not in setup mode",
+    4: "Too many events",
+    5: "No event variable",
+    6: "Invalid event variable index",
+    7: "Invalid event",
+    9: "Invalid parameter index",
+    10: "Invalid node variable index",
+    11: "Invalid event variable value",
+    12: "Invalid node variable value",
+}
+
 
 @dataclass(frozen=True)
 class Cmderr:

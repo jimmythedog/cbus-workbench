@@ -212,6 +212,43 @@ def firmware_version(parameters: dict[int, int]) -> str | None:
     return version
 
 
+# Parameter indices from cbusdefs.csv (CbusParams). Index 0 is the parameter
+# count (Developer's Guide 6b, RQNPN). Multi-byte values are named by first index.
+PARAMETER_NAMES = {
+    0: "Number of parameters",
+    1: "Manufacturer",
+    2: "Minor version",
+    3: "Module type",
+    4: "Number of events",
+    5: "Event variables per event",
+    6: "Number of node variables",
+    7: "Major version",
+    8: "Flags",
+    9: "Processor type",
+    10: "Bus type",
+    11: "Load address",
+    15: "CPU manufacturer ID",
+    19: "CPU manufacturer",
+    20: "Beta revision",
+}
+
+# Node flag bits from cbusdefs.csv (CbusParamFlags); PNN uses the same bits.
+_FLAG_NAMES = (
+    (0x01, "Consumer"),
+    (0x02, "Producer"),
+    (0x04, "FLiM"),
+    (0x08, "Bootloader"),
+    (0x10, "Consumes own events"),
+    (0x20, "Learn mode"),
+    (0x40, "VLCB"),
+)
+
+
+def flag_names(flags: int) -> list[str]:
+    """Name the set node flag bits; unnamed bits are not reported."""
+    return [name for bit, name in _FLAG_NAMES if flags & bit]
+
+
 def vlcb_compatible(flags: int | None) -> bool | None:
     """Decode parameter 8 bit 6; unavailable flags must remain unknown."""
     return None if flags is None else bool(flags & 0x40)
