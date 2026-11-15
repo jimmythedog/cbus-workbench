@@ -1,58 +1,61 @@
 # CBUS Workbench
 
-A cross-platform desktop application for configuring and maintaining CBUS/VLCB networks,
-built with Python and PySide6 (Qt).
+CBUS Workbench is a cross-platform desktop application for configuring and maintaining MERG CBUS/VLCB networks.
 
-## Status and features
+Built with Python and Qt, it provides a native graphical interface for discovering modules, configuring node variables and events, managing layouts, and backing up and restoring configurations.
 
-Early development. Currently implemented:
+## Features
 
-- Saved layouts with TCP/IP or serial GridConnect connections and optional auto-connect.
-- Node discovery, connection/discovery status and confirmed node information.
-  Discovered nodes and their last-known parameters/CAN ID are remembered without backups.
-  During hardware discovery (including event Save and restore readbacks), node selection
-  is disabled and the displayed details remain unchanged; MDF processing is deferred
-  until discovery ends. When
-  discovery ends, the previous node is restored if found; otherwise the first
-  discovered node is selected, including when discovery is incomplete.
-- Reading node variables (NVs), stored events and event variables (EVs), with separate
-  NV and Events Edit/Save/Cancel actions. Only one editor is active at a time; the
-  other tab stays available for read-only browsing. NV Save verifies each write,
-  reads only MDF-linked NVs and preserves outstanding edits. After verified NV
-  writes, stored events and EVs are refreshed, including after a partial Save when
-  safe. Events Save teaches and verifies only explicit EV changes; clearing an
-  existing EV reconstructs that event. Node Restore retains full verification.
-- Separate full-width Produced Events and Consumed Events tabs.
-  Live EV rows show supported MDF controls alongside their raw values.
-  Supported MDF controls and raw values edit the same desired configuration;
-  outside Edit, they display confirmed hardware values and remain read-only.
-- Node and layout backups, optional descriptions, incomplete-backup warnings,
-  offline viewing, comparison and node restoration with final verification.
-  Node backup New, Compare and Restore actions remain disabled throughout restoration.
-- Failed node Save/Restore reports requested versus actual differences and unknown
-  values, with optional Retry after fresh discovery when the connection is safe.
-  Uncertain writes or learn-mode state require reconnecting before another attempt.
-- Messages / Diagnostics, raw GridConnect frame sending and persistent logs.
-- Send ON/OFF from an event's context menu, or use Layout → Send Event…
-  for repeated long/short event testing on the selected layout. Short events
-  display a disabled node number of 0 and send ASON/ASOF with NN zero,
-  using the selected layout's configured CAN ID and connection.
-  Long events default to the first discovered node; event numbers are 0–65535.
-  Sending requires a connection and does not confirm that a node acted on the
-  event. Outgoing frames appear in Diagnostics.
-- Transmitted and received events appear in the layout event list as `NN:EN`, with short
-  events using `0:EN`. Short events are not attributed to a node's Produced
-  Events list. Observations do not become configured events.
+- Discover and inspect modules on a CBUS network.
+- Configure node variables (NVs) and consumed events using module descriptors (MDFs).
+- Commission modules and assign node numbers.
+- Back up, compare and restore node and layout configurations.
+- Name nodes and events.
+- Monitor CBUS traffic and send diagnostic messages.
 
-Layout Restore confirms and restores selected online nodes sequentially, then shows
-remaining differences, unknown values and offline nodes. Retry reads hardware afresh
-and applies outstanding differences when safe. Node and Layout Restore offer separate
-configuration and annotation choices, both checked by default. Annotation-only restore
-works offline without hardware checks; Layout Restore applies node annotations only
-to selected nodes and layout event names even with no nodes selected. Backup deletion is not available yet.
-See [Requirements](REQUIREMENTS.md) for intended capabilities, including planned work.
+## Installation
 
-## Installation and running
+Download the appropriate installer from the GitHub Releases page.
+
+Windows, Linux and macOS builds are available. Portable builds are also provided.
+
+## Documentation
+
+- [User guide](docs/user-guide.md): for everyday operation and the Development Guide
+  for contributing, building and testing.
+- [Development guide](docs/development.md): for environment setup, checks, architecture,
+  protocol implementation and diagnostics.
+
+## Installing a release build
+
+Release builds bundle Python, Qt and the pinned MDF collection; Python and uv are not
+needed. Builds are produced for Windows x64, Linux x64, and macOS on
+both Apple Silicon and Intel. Uninstalling
+leaves your settings, layouts, backups, annotations and logs in place.
+
+- **Windows:** run `cbus-workbench-<version>-windows-x64-setup.exe`. It installs for
+  all users in Program Files (administrator approval needed) and adds a Start Menu
+  entry; uninstall from Settings → Apps. The installer is not code-signed, so
+  SmartScreen may warn: choose More info → Run anyway.
+- **Ubuntu 24.04+:** `sudo apt install ./cbus-workbench-<version>-linux-x64.deb`,
+  then start CBUS Workbench from the application menu or run `cbus-workbench`.
+  Remove with `sudo apt remove cbus-workbench`. Serial adapters need membership of
+  the `dialout` group (`sudo usermod -aG dialout $USER`, then log out and back in).
+  Other Debian-based distributions with glibc 2.39+, such as Debian 13, may work but are untested.
+- **macOS:** download `cbus-workbench-<version>-macos-arm64.dmg` for Apple Silicon
+  (M-series) Macs or `cbus-workbench-<version>-macos-x64.dmg` for Intel Macs; Apple
+  menu → About This Mac shows which you have. Open the `.dmg` and drag CBUS Workbench
+  to Applications. The app is not signed with an Apple Developer ID or notarised, so
+  macOS blocks the first launch: try to open it once, then choose Open Anyway in
+  System Settings → Privacy & Security.
+- **Portable:** each platform also has a `-portable` build that runs without
+  installation. The Linux bundle suits distributions where the `.deb` does not; it
+  needs glibc 2.39 or newer plus the host's OpenGL/EGL, xcb and Wayland libraries.
+  NixOS cannot run it directly; a compatibility layer such as `nix-ld` or `steam-run`
+  is needed (not yet validated). If the Linux executable will not start from a
+  GitHub Actions artifact, which drops Unix permissions, run `chmod +x "CBUS Workbench"`.
+
+## Running from source
 
 To run from source, install Python 3.14 or newer and [uv](https://docs.astral.sh/uv/),
 clone this repository and change into its directory. Then run:
@@ -68,10 +71,3 @@ Portable builds include the pinned MDF collection for offline use. For source ru
 use `make mdfs` to fetch it. See [MDF sourcing and release refresh instructions](docs/development.md#mdf-collection-for-development-and-portable-builds).
 On NixOS, follow the [NixOS development setup](docs/development.md#nixos-development)
 instead, using Nix-provided Python and PySide6.
-
-## Documentation
-
-- [User guide](docs/user-guide.md): layouts, connections, node configuration and backups.
-- [Development guide](docs/development.md): environment setup, checks, architecture,
-  protocol implementation and diagnostics.
-- [Development guidelines](AGENTS.md): project principles and contribution workflow.

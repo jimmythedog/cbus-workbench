@@ -11,6 +11,8 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(DISPLAY_NAME)
+    # Wayland shells match windows to cbus-workbench.desktop (and its icon) by this name.
+    app.setDesktopFileName(APP_NAME)
     log_path = configure_logging()
     logger = logging.getLogger("workbench.app")
     logger.info("Application starting", extra={"fields": {"log_file": str(log_path)}})

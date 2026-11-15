@@ -2,7 +2,7 @@
 
 This document records established development decisions and, as the application takes shape, will explain its architecture and important execution flows. It is not an inventory of source files. For application operating instructions, see
 the [user guide](user-guide.md); installation and running instructions start in the
-[README](../README.md#installation-and-running).
+[README](../README.md#installing-a-release-build).
 
 ## Observed network events
 
@@ -142,11 +142,11 @@ outside the existing hardware engine; comparison and Retry remain NV/EV-only.
 
 ## Running from source
 
-These instructions are for developers. End-user releases are intended to be packaged as OS-specific installers that bundle Python and application dependencies; users should not need to install Python or uv.
+These instructions are for developers. End users install release builds, which bundle Python and application dependencies; see [Release packaging](#release-packaging).
 
 ### Standard development setup (Windows, macOS and conventional Linux)
 
-Follow the [source installation instructions](../README.md#installation-and-running)
+Follow the [source instructions](../README.md#running-from-source)
 to install locked dependencies and run the application. The exact supported Python
 versions are defined in `pyproject.toml`.
 
@@ -190,7 +190,7 @@ ignored by Git. Do not commit the downloaded MDFs.
 Each successful fetch replaces the previous collection and reports the release
 tag and MDF count. Download, archive and missing/empty collection errors return
 a nonzero status; download/extraction failures leave the previous collection intact.
-The portable-build workflow runs this same script without a version override before
+The packaging workflow runs this same script without a version override before
 PyInstaller packaging on Windows, Linux and macOS. An unsuccessful or empty fetch
 fails the build. `--add-data "resources/mdfs:resources/mdfs"` places the collection
 under the bundle resource root: `_internal/` in Windows/Linux onedir builds and
@@ -204,6 +204,102 @@ run `make check`. Build the portable artifacts and manually check offline MDF
 presentation and a user override on each target platform before releasing.
 Changing `MMC_VERSION` locally does not change the release pin. The application
 never downloads MDFs at runtime.
+
+### Release packaging
+
+`.github/workflows/portable-builds.yml` runs only on manual dispatch. Each matrix
+job (Windows x64, Linux x64, macOS Intel, macOS Apple Silicon) builds one
+PyInstaller onedir bundle natively on its runner and wraps that same bundle in a
+native installer, so the portable and installed applications are identical:
+
+    pyproject version + pinned MDFs -> PyInstaller bundle -> MDF check
+        -> portable artifact (-portable)
+        -> Windows: Inno Setup setup.exe  (packaging/windows/cbus-workbench.iss)
+           Linux:   .deb                  (packaging/linux/build_deb.sh)
+           macOS:   .dmg with .app and an Applications link (hdiutil)
+        -> install/open, MDF check, launch, uninstall -> installer artifact
+
+Artifact names include `[project].version`. When the workflow runs on a tag, the
+job fails if the tag is not `v<version>`. Publishing is manual; see
+[Release procedure](#release-procedure). There is no release automation or
+auto-updater.
+
+Each installer is checked in CI after it is built. The checks are against the
+installed or mounted result, not the build directory:
+
+- **Windows:** silent per-machine install to Program Files, Start Menu shortcut,
+  MDF check, a ten-second launch, then silent uninstall. The installer's `AppId`
+  must never change, because Windows uses it to upgrade an existing installation.
+  An upgrade deletes the previous `_internal/` before copying the new one.
+- **Linux:** the package contents are extracted and MDF-checked. Then
+  `packaging/linux/check_deb.sh` installs the package into a clean `ubuntu:24.04`
+  container, so only the declared `Depends` are present. There it checks that
+  every bundled library resolves, launches `cbus-workbench` under Xvfb and removes
+  the package. PyInstaller leaves out the graphics stack (GL, EGL, xcb, Wayland,
+  DRM), which must come from the host, and it can only bundle Qt's xcb helper
+  libraries when the build machine has them. The GitHub runner does not, so they
+  are declared in `Depends` too. Bundled fontconfig needs the host's
+  configuration and fonts. If a
+  PySide6 or PyInstaller upgrade changes this, the container check fails and
+  `Depends` in `build_deb.sh` needs updating. Building on Ubuntu 24.04 sets the
+  minimum glibc to 2.39.
+- **macOS:** the DMG is mounted, then its app signature is verified (PyInstaller
+  signs ad hoc), the MDFs are checked and the app is launched from the image.
+  Intel (`macos-x64`) and Apple Silicon (`macos-arm64`) are separate native builds,
+  not a universal binary.
+
+User data lives in Qt's per-user locations, never in the installation directory,
+so uninstalling or removing the package leaves it in place. Windows and macOS
+builds are unsigned; the README documents the resulting SmartScreen and Gatekeeper
+prompts.
+
+### Release procedure
+
+The examples use `V=0.1.0a1`. Alpha, beta and release-candidate versions (`a`, `b`,
+`rc`) are published as GitHub pre-releases.
+
+1. **Verify the version.** Every issue in the milestone is closed, `main` is up to
+   date and its CI passes. `uv version` prints `$V`. If it does not, bump it in an
+   issue branch and PR with `uv version $V`, which also updates `uv.lock`.
+2. **Tag `main`.**
+
+       git switch main && git pull --ff-only
+       git tag -a "v$V" -m "CBUS Workbench $V"
+       git push origin "v$V"
+
+3. **Build from the tag.** Run `gh workflow run portable-builds.yml --ref "v$V"`,
+   then `gh run watch`. All four jobs must pass. A tag that does not match the
+   project version fails the build.
+4. **Smoke-test.** Download the artifacts with `gh run download <run-id> --dir release-assets`.
+   On each platform available, install, launch, check Help → About and MDF
+   presentation, restart, uninstall, and confirm that user data survives. Note
+   any platform not tested.
+5. **Prepare the portable archives.** Actions artifacts lose Unix permissions, so
+   restore the Linux executable bit before zipping:
+
+       cd release-assets
+       chmod +x "cbus-workbench-$V-linux-x64-portable/CBUS Workbench"
+       for p in linux-x64 windows-x64; do
+           zip -qr "cbus-workbench-$V-$p-portable.zip" "cbus-workbench-$V-$p-portable"
+       done
+
+6. **Create a draft pre-release** with GitHub's PR-based notes and all assets:
+
+       gh release create "v$V" --draft --prerelease --verify-tag --generate-notes \
+           --title "CBUS Workbench $V" \
+           */*-setup.exe */*.deb */*.dmg */*-portable.zip ./*-portable.zip
+
+7. **Review the notes.** Edit them on the draft with `gh release view "v$V" --web`. The
+   generated list covers PRs merged since the previous release (for the first
+   release, every PR). Above that list, add a short summary and the known
+   limitations: alpha status, unsigned Windows and macOS builds, and untested
+   platforms. Check that eight assets are attached: four installers (Windows,
+   Linux and two macOS) and four portable archives.
+8. **Publish:** `gh release edit "v$V" --draft=false`. The release stays marked as
+   a pre-release, so GitHub does not show it as the latest release.
+
+Never move or reuse a published tag. Fix problems through a PR, then release the
+next version (for example `0.1.0a2`).
 
 ### MDF form visual reference
 
@@ -273,7 +369,7 @@ above; no Dual writing or restore behaviour is added.
 
 - **System:** `resources/mdfs/` under the source root during development, or
   `resources/mdfs/` under PyInstaller's bundle root (`sys._MEIPASS`). This collection
-  is treated as read-only. Packaging workflows do not yet include it.
+  is treated as read-only.
 - **User:** `mdfs/` under `application_directories()["Data"]`, using Qt's
   `QStandardPaths.AppDataLocation`, for example
   `$XDG_DATA_HOME/cbus-workbench/mdfs/` on Linux (normally

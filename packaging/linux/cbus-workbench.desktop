@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=CBUS Workbench
+Comment=Configure and maintain CBUS/VLCB networks
+Exec=cbus-workbench
+Icon=cbus-workbench
+Terminal=false
+Categories=Utility;

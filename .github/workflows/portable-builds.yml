@@ -1,5 +1,7 @@
-name: Portable application builds
+---
+name: Portable builds and installers
 
+# Run manually. For a release, choose the release tag as the workflow ref.
 on:
   workflow_dispatch:
 
@@ -12,19 +14,33 @@ jobs:
         include:
           - name: Linux x64
             runner: ubuntu-24.04
-            artifact: cbus-workbench-linux-x64
+            platform: linux-x64
+            installer_suffix: .deb
+            icon_option: ''
             bundle: dist/CBUS Workbench
             executable: dist/CBUS Workbench/CBUS Workbench
             resource_root: dist/CBUS Workbench/_internal
           - name: Windows x64
             runner: windows-2025
-            artifact: cbus-workbench-windows-x64
+            platform: windows-x64
+            installer_suffix: -setup.exe
+            icon_option: --icon assets/icons/cbus-workbench.ico
             bundle: dist/CBUS Workbench
             executable: dist/CBUS Workbench/CBUS Workbench.exe
             resource_root: dist/CBUS Workbench/_internal
           - name: macOS Intel
             runner: macos-15-intel
-            artifact: cbus-workbench-macos-x64
+            platform: macos-x64
+            installer_suffix: .dmg
+            icon_option: --icon assets/icons/cbus-workbench.icns
+            bundle: dist/CBUS Workbench.app
+            executable: dist/CBUS Workbench.app
+            resource_root: dist/CBUS Workbench.app/Contents/Resources
+          - name: macOS Apple Silicon
+            runner: macos-15
+            platform: macos-arm64
+            installer_suffix: .dmg
+            icon_option: --icon assets/icons/cbus-workbench.icns
             bundle: dist/CBUS Workbench.app
             executable: dist/CBUS Workbench.app
             resource_root: dist/CBUS Workbench.app/Contents/Resources
@@ -38,30 +54,117 @@ jobs:
         run: uv sync --no-dev
       - name: Install PyInstaller
         run: uv pip install --python .venv pyinstaller
+      - name: Read version
+        shell: bash
+        run: |
+          version="$(uv run --no-sync python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])" | tr -d '\r')"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match project version $version" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "INSTALLER=dist/cbus-workbench-$version-${{ matrix.platform }}${{ matrix.installer_suffix }}" >> "$GITHUB_ENV"
       - name: Fetch pinned MDF collection
         run: uv run --no-sync python scripts/fetch_mdfs.py
       - name: Bundle application
-        run: uv run --no-sync pyinstaller --noconfirm --clean --windowed --onedir --add-data "resources/mdfs:resources/mdfs" --copy-metadata cbus-workbench --name "CBUS Workbench" main.py
+        run: uv run --no-sync pyinstaller --noconfirm --clean --windowed --onedir --add-data "resources/mdfs:resources/mdfs" --copy-metadata cbus-workbench ${{ matrix.icon_option }} --name "CBUS Workbench" main.py
       - name: Verify bundle exists
         shell: bash
         run: test -e "${{ matrix.executable }}"
       - name: Verify packaged MDF collection
         run: uv run --no-sync python scripts/check_bundled_mdfs.py "${{ matrix.resource_root }}"
+
+      - name: Build Debian package
+        if: runner.os == 'Linux'
+        run: packaging/linux/build_deb.sh "$VERSION" "$INSTALLER"
+      - name: Verify Debian package contents
+        if: runner.os == 'Linux'
+        run: |
+          dpkg-deb -x "$INSTALLER" deb-contents
+          test -L deb-contents/usr/bin/cbus-workbench
+          test -f deb-contents/usr/share/applications/cbus-workbench.desktop
+          test -f deb-contents/usr/share/icons/hicolor/256x256/apps/cbus-workbench.png
+          uv run --no-sync python scripts/check_bundled_mdfs.py deb-contents/opt/cbus-workbench/_internal
+      - name: Install, launch and remove Debian package on clean Ubuntu
+        if: runner.os == 'Linux'
+        run: docker run --rm -v "$PWD:/repo" ubuntu:24.04 /repo/packaging/linux/check_deb.sh "/repo/$INSTALLER"
+
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $iscc = Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup *\ISCC.exe", "$env:ProgramFiles\Inno Setup *\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $iscc) { throw "ISCC.exe not found" }
+          & $iscc.FullName "/DAppVersion=$env:VERSION" packaging\windows\cbus-workbench.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install, launch and uninstall Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $app = "$env:ProgramFiles\CBUS Workbench"
+          $exe = "$app\CBUS Workbench.exe"
+          $shortcut = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\CBUS Workbench.lnk"
+          $quiet = "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"
+          $setup = Start-Process (Resolve-Path $env:INSTALLER) -ArgumentList $quiet -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "Installer exited with $($setup.ExitCode)" }
+          if (-not (Test-Path $shortcut)) { throw "Start Menu shortcut missing" }
+          uv run --no-sync python scripts/check_bundled_mdfs.py "$app\_internal"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $run = Start-Process $exe -PassThru
+          Start-Sleep 10
+          if ($run.HasExited) { throw "Application exited early with $($run.ExitCode)" }
+          Stop-Process $run
+          Start-Process "$app\unins000.exe" -ArgumentList $quiet -Wait
+          # The uninstaller hands over to a temporary copy of itself, so wait for the files to go.
+          for ($i = 0; $i -lt 60 -and (Test-Path $exe); $i++) { Start-Sleep 1 }
+          if (Test-Path $exe) { throw "Uninstall left the application installed" }
+          if (Test-Path $shortcut) { throw "Uninstall left the Start Menu shortcut" }
+
+      - name: Build macOS disk image
+        if: runner.os == 'macOS'
+        run: |
+          mkdir dmg-root
+          ditto "dist/CBUS Workbench.app" "dmg-root/CBUS Workbench.app"
+          ln -s /Applications dmg-root/Applications
+          hdiutil create -volname "CBUS Workbench" -srcfolder dmg-root -ov -format UDZO "$INSTALLER"
+      - name: Verify and launch macOS disk image
+        if: runner.os == 'macOS'
+        run: |
+          mkdir dmg-mount
+          hdiutil attach -nobrowse -readonly -mountpoint "$PWD/dmg-mount" "$INSTALLER"
+          app="dmg-mount/CBUS Workbench.app"
+          test -L dmg-mount/Applications
+          codesign --verify --deep --strict "$app"
+          uv run --no-sync python scripts/check_bundled_mdfs.py "$app/Contents/Resources"
+          "$app/Contents/MacOS/CBUS Workbench" &
+          pid=$!
+          sleep 10
+          kill -0 "$pid"
+          kill "$pid"
+          wait "$pid" || true
+          hdiutil detach "$PWD/dmg-mount"
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: cbus-workbench-${{ env.VERSION }}-${{ matrix.platform }}${{ matrix.installer_suffix }}
+          path: ${{ env.INSTALLER }}
+          if-no-files-found: error
       - name: Archive macOS application
         if: runner.os == 'macOS'
-        shell: bash
-        run: ditto -c -k --sequesterRsrc --keepParent "dist/CBUS Workbench.app" "cbus-workbench-macos-x64.zip"
-      - name: Upload macOS archive
+        run: ditto -c -k --sequesterRsrc --keepParent "dist/CBUS Workbench.app" "cbus-workbench-$VERSION-${{ matrix.platform }}-portable.zip"
+      - name: Upload macOS portable archive
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact }}
-          path: cbus-workbench-macos-x64.zip
+          name: cbus-workbench-${{ env.VERSION }}-${{ matrix.platform }}-portable
+          path: cbus-workbench-${{ env.VERSION }}-${{ matrix.platform }}-portable.zip
           if-no-files-found: error
       - name: Upload portable bundle
         if: runner.os != 'macOS'
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact }}
+          name: cbus-workbench-${{ env.VERSION }}-${{ matrix.platform }}-portable
           path: ${{ matrix.bundle }}
           if-no-files-found: error
