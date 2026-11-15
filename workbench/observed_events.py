@@ -108,21 +108,8 @@ class ObservedEvents(QObject):
                 },
             )
             return
-        identities = sorted([*self.events, identity])
-        records = [
-            {
-                "nodeNumber": item.node_number,
-                "eventNumber": item.event_number,
-            }
-            for item in identities
-        ]
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".yaml.tmp")
         try:
-            temporary.write_text(
-                yaml.safe_dump(records, sort_keys=False), encoding="utf-8"
-            )
-            temporary.replace(self.path)
+            self._save({*self.events, identity})
         except OSError:
             logger.exception(
                 "Could not persist observed event",
@@ -142,3 +129,59 @@ class ObservedEvents(QObject):
             },
         )
         self.changed.emit()
+
+    def forget(self, identities) -> None:
+        """Remove identities from this layout's catalogue; annotations are untouched.
+
+        The file is written before memory changes, so a failed save leaves both
+        unchanged. A forgotten identity is rediscovered by the next observe().
+        """
+        forgotten = self.events & set(identities)
+        if not forgotten:
+            trace(
+                logger,
+                "No observed identities to forget",
+                extra={"fields": {"layout": self.logical_layout}},
+            )
+            return
+        labels = [item.label() for item in sorted(forgotten)]
+        try:
+            self._save(self.events - forgotten)
+        except OSError:
+            logger.exception(
+                "Could not forget observed events",
+                extra={"fields": {"layout": self.logical_layout, "events": labels}},
+            )
+            raise
+        self.events -= forgotten
+        # Forget All can be large: count at INFO, identities at TRACE.
+        logger.info(
+            "Observed identities forgotten",
+            extra={
+                "fields": {
+                    "layout": self.logical_layout,
+                    "count": len(forgotten),
+                    "remaining": len(self.events),
+                }
+            },
+        )
+        trace(
+            logger,
+            "Forgotten identities",
+            extra={"fields": {"layout": self.logical_layout, "events": labels}},
+        )
+        self.changed.emit()
+
+    def _save(self, identities: set[EventIdentity]) -> None:
+        """Replace the YAML file atomically so a failed write keeps the old one."""
+        records = [
+            {
+                "nodeNumber": item.node_number,
+                "eventNumber": item.event_number,
+            }
+            for item in sorted(identities)
+        ]
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_suffix(".yaml.tmp")
+        temporary.write_text(yaml.safe_dump(records, sort_keys=False), encoding="utf-8")
+        temporary.replace(self.path)

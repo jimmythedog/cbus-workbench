@@ -1,8 +1,11 @@
+import logging
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QDialog,
     QHeaderView,
+    QMessageBox,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -11,7 +14,11 @@ from PySide6.QtWidgets import (
 
 from .event_description_edit import EventDescriptionDialog
 from .event_teach import TeachEventDialog, teach_targets
+from .logging_config import trace
+from .observed_events import EventIdentity
 from .send_event_dialog import event_menu
+
+logger = logging.getLogger("workbench.events")
 
 
 class LayoutEvents(QWidget):
@@ -98,17 +105,65 @@ class LayoutEvents(QWidget):
             if item and item.parent() is None
             else None
         )
-        if identity is None:
-            return
+        actions = []
         service = self.cbus_service
-        teach = QAction("Teach to Node…", self.table)
-        teach.setEnabled(
-            service is not None
-            and service.connection.state == "Connected"
-            and not service.writes_busy()
+        if identity is not None:
+            teach = QAction("Teach to Node…", self.table)
+            teach.setEnabled(
+                service is not None
+                and service.connection.state == "Connected"
+                and not service.writes_busy()
+            )
+            teach.triggered.connect(lambda: self.teach_to_node(identity))
+            actions.append(teach)
+        # Forgetting applies only to the observed catalogue, not imported events.
+        observations = getattr(self, "observed_events", None)
+        if observations is not None:
+            if identity is not None:
+                forget = QAction("Forget Event", self.table)
+                forget.triggered.connect(
+                    lambda: self.forget_events({EventIdentity(*identity)})
+                )
+                actions.append(forget)
+            forget_all = QAction("Forget All Observed Events…", self.table)
+            forget_all.setEnabled(bool(observations.events))
+            forget_all.triggered.connect(self.forget_all_events)
+            actions.append(forget_all)
+        # With no identity, event_menu() omits Send and shows only these actions.
+        event_menu(self.table, position, service, identity, actions)
+
+    def forget_all_events(self):
+        observations = self.observed_events
+        answer = QMessageBox.question(
+            self,
+            "Forget All Observed Events",
+            f"Forget all {len(observations.events)} observed events for layout "
+            f"'{observations.logical_layout}'?\n\n"
+            "Event names, node configuration and backups are kept. "
+            "Events seen again are rediscovered automatically.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
-        teach.triggered.connect(lambda: self.teach_to_node(identity))
-        event_menu(self.table, position, service, identity, (teach,))
+        confirmed = answer == QMessageBox.StandardButton.Yes
+        trace(
+            logger,
+            "Forget all observed events answered",
+            extra={
+                "fields": {
+                    "layout": observations.logical_layout,
+                    "confirmed": confirmed,
+                }
+            },
+        )
+        if confirmed:
+            self.forget_events(set(observations.events))
+
+    def forget_events(self, identities):
+        """Remove identities from the layout catalogue; views refresh on changed."""
+        try:
+            self.observed_events.forget(identities)
+        except OSError as error:
+            QMessageBox.warning(self, "Events not forgotten", str(error))
 
     def teach_to_node(self, identity):
         """Choose a target node, then hand over to its Events Edit workflow."""

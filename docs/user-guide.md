@@ -179,6 +179,13 @@ when viewing a saved offline node. Connections using the same logical layout sha
 observations; different logical layouts keep separate lists. Disconnecting and
 reconnecting preserves the catalogue.
 
+To tidy the catalogue, right-click an event in the layout **Events** tab or in a
+node's **Produced Events** and choose **Forget Event**. To clear the whole list,
+right-click anywhere in the layout **Events** tab, choose **Forget All Observed
+Events…** and confirm. This removes identities only from the selected logical layout's catalogue;
+event names, node configuration and backups are kept. A forgotten event that is
+seen again is added back automatically with its saved name.
+
 ## Editing node annotations
 
 Double-click the read-only **Name** label on **Node Details** to open a small

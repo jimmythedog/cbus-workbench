@@ -7,8 +7,9 @@ from unittest.mock import patch
 
 import yaml
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
+from workbench.annotations import Annotations, annotation_path
 from workbench.cbus_service import CbusService, NodeState
 from workbench.layout_view import LayoutView
 from workbench.observed_events import EventIdentity, ObservedEvents
@@ -34,12 +35,13 @@ class ObservedEventsTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
-        patcher = patch(
-            "workbench.observed_events.application_directories",
-            return_value={"Data": self.root},
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for module in ("observed_events", "annotations"):
+            patcher = patch(
+                f"workbench.{module}.application_directories",
+                return_value={"Data": self.root},
+            )
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def connect(self, observations):
         connection = Connection(observations.logical_layout)
@@ -150,6 +152,49 @@ class ObservedEventsTests(unittest.TestCase):
         view.set_observed_events(b)
         self.assertEqual(view.layout_events.table.topLevelItem(0).text(0), "259:46")
 
+    def test_forget_removes_only_layout_identities_and_rediscovery_restores_name(self):
+        a, b = ObservedEvents("a"), ObservedEvents("b")
+        connection, _ = self.connect(a)
+        for frame in (b":SB040N900102002D;", b":SB040N900102002E;"):
+            connection.frame_received.emit(frame)
+        b.observe(EventIdentity(258, 45))
+        annotations = Annotations("a")
+        annotations.save({"events": {"258:45": "Platform 1"}})
+        named = annotation_path("a").read_text()
+        view = LayoutView(empty=True)
+        self.addCleanup(view.close)
+        view.set_observed_events(a)
+        view.set_annotations(annotations)
+        state = NodeState(Pnn(258, 1, 1, 0))
+        view.node_view.state_lookup = lambda number: state
+        view.node_view.show_identity(state.identity)
+        produced = view.node_view.details.node_events.produced_table
+        self.assertEqual(produced.rowCount(), 2)
+
+        # Forgetting from the node view updates both views from one catalogue.
+        view.node_view.details.node_events.forget_event(a, EventIdentity(258, 45))
+        self.assertEqual(produced.rowCount(), 1)
+        self.assertEqual(produced.item(0, 0).text(), "258:46")
+        self.assertEqual(view.layout_events.table.topLevelItemCount(), 1)
+        self.assertEqual(ObservedEvents("a").events, {EventIdentity(258, 46)})
+
+        # Declining Forget All keeps the catalogue; confirming clears this layout.
+        answers = [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes]
+        with patch.object(QMessageBox, "question", side_effect=answers):
+            view.layout_events.forget_all_events()
+            self.assertEqual(produced.rowCount(), 1)
+            view.layout_events.forget_all_events()
+        self.assertEqual(produced.rowCount(), 0)
+        self.assertEqual(view.layout_events.table.topLevelItemCount(), 0)
+        self.assertEqual(ObservedEvents("a").events, set())
+        self.assertEqual(ObservedEvents("b").events, {EventIdentity(258, 45)})
+        self.assertEqual(annotation_path("a").read_text(), named)
+
+        connection.frame_received.emit(b":SB040N910102002D;")
+        self.assertEqual(ObservedEvents("a").events, {EventIdentity(258, 45)})
+        self.assertEqual(produced.item(0, 1).text(), "Platform 1")
+        self.assertEqual(view.layout_events.table.topLevelItem(0).text(1), "Platform 1")
+
     def test_catalogue_short_events_use_layout_identity_without_node_attribution(self):
         view = LayoutView(empty=True)
         self.addCleanup(view.close)
@@ -180,3 +225,11 @@ class ObservedEventsTests(unittest.TestCase):
         self.assertNotIn(second, observations.events)
         observations.observe(second)
         self.assertEqual(set(ObservedEvents("a").events), {first, second})
+        saved = observations.path.read_bytes()
+        with (
+            patch.object(Path, "replace", side_effect=OSError("disk full")),
+            self.assertRaises(OSError),
+        ):
+            observations.forget({first})
+        self.assertEqual(observations.path.read_bytes(), saved)
+        self.assertEqual(observations.events, {first, second})

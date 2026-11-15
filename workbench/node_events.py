@@ -2,6 +2,7 @@ import logging
 from copy import deepcopy
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -9,6 +10,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QLineEdit,
+    QMessageBox,
     QSpinBox,
     QStyle,
     QStyledItemDelegate,
@@ -23,6 +25,7 @@ from PySide6.QtWidgets import (
 from .cbus_service import NodeState
 from .event_mdf import EvContainer, EvValueValidator, add_ev_controls, ev_definitions
 from .logging_config import trace
+from .observed_events import EventIdentity
 from .pnn import Pnn
 from .send_event_dialog import event_menu
 
@@ -148,7 +151,23 @@ class NodeEvents(QWidget):
         if item is None:
             return
         identity = tuple(map(int, table.item(item.row(), 0).text().split(":")))
-        event_menu(table, position, self.cbus_service, identity)
+        actions = []
+        # Only observed rows can be forgotten; Forget All stays in Layout → Events.
+        observations = getattr(self, "observed_events", None)
+        if observations is not None:
+            forget = QAction("Forget Event", table)
+            forget.triggered.connect(
+                lambda: self.forget_event(observations, EventIdentity(*identity))
+            )
+            actions.append(forget)
+        event_menu(table, position, self.cbus_service, identity, actions)
+
+    def forget_event(self, observations, identity):
+        """Remove from the layout catalogue; both event views refresh on changed."""
+        try:
+            observations.forget({identity})
+        except OSError as error:
+            QMessageBox.warning(self, "Event not forgotten", str(error))
 
     def selected_identity(self):
         """The selected consumed event's identity, or None for EV/detail rows."""
