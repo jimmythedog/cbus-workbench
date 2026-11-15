@@ -875,7 +875,17 @@ PySide6 UI ◄── signals ─── per-layout CBUS service ◄── incomin
 
 Undiscovered parameter, NV, event identity and EV values remain unknown. A
 matching NEVAL confirms an EV value, including zero. Seeing a write request does
-not confirm that the write succeeded. Live connection state stays separate for
+not confirm that the write succeeded.
+
+Replies caused by another application (for example MMC) are passive evidence.
+They never complete Workbench's outstanding request. PARAN updates the
+parameter. NVANS and NEVAL refresh only values already confirmed by discovery,
+and are ignored while a write, Save or Restore runs or while that node's NV/EV
+pass is in progress. NEVAL names an event only by slot, so it is applied only
+while event discovery is complete. An observed ENRSP that contradicts the
+discovered slot map marks event discovery incomplete, without changing the event
+list, until Refresh Node rereads it. EVANS carries no sender node number and is
+not used passively. Live connection state stays separate for
 each layout, including layouts that share a logical-layout data directory.
 
 QNN/PNN node discovery, parameter, NV, stored-event identity and

@@ -376,7 +376,7 @@ class CbusServiceTests(unittest.TestCase):
             node_backup(state)["events"][0]["eventVariables"], [None, None, None]
         )
 
-    def test_unrelated_malformed_and_late_neval_do_not_confirm_values(self):
+    def test_unrelated_and_malformed_neval_do_not_confirm_values(self):
         self.start_ev_reads(1)
         state = self.service.node_states[258]
         sent = self.connection.sent.copy()
@@ -392,8 +392,46 @@ class CbusServiceTests(unittest.TestCase):
         self.connection.frame_received.emit(b":SB040NB50102070105;")
         self.assertEqual(state.ev_values, {7: {1: 5}})
         self.assertEqual(state.ev_progress, DiscoveryProgress.COMPLETE)
+
+    def test_observed_nvans_refreshes_only_known_nvs(self):
+        self.start_nv_reads(2)
+        self.connection.frame_received.emit(b":SB040N9701020105;")
+        self.connection.frame_received.emit(b":SB040N9701020207;")
+        state = self.service.node_states[258]
+        sent = self.connection.sent.copy()
+
+        # Another application's NVRD replies: known NV updates, unknown does not.
+        self.connection.frame_received.emit(b":SB040N9701020120;")
+        self.connection.frame_received.emit(b":SB040N9701020321;")
+        # An observed NVSET is a request, not confirmation.
+        self.connection.frame_received.emit(b":SB040N9601020233;")
+        self.assertEqual(state.nv_values, {1: 0x20, 2: 7})
+        self.assertEqual(self.connection.sent, sent)
+
+        # While our own write owns the wire, observed replies are not applied.
+        self.service.nv_write.begin(258, {1: 9})
+        self.connection.frame_received.emit(b":SB040N9701020244;")
+        self.assertEqual(state.nv_values[2], 7)
+
+    def test_observed_neval_stops_after_conflicting_enrsp(self):
+        self.start_ev_reads(1)
+        self.connection.frame_received.emit(b":SB040NB50102070105;")
+        state = self.service.node_states[258]
         self.connection.frame_received.emit(b":SB040NB50102070109;")
-        self.assertEqual(state.ev_values, {7: {1: 5}})
+        self.connection.frame_received.emit(b":SB040NB50102080104;")  # Unknown slot.
+        self.connection.frame_received.emit(b":SB040NB50102070204;")  # Unknown EV.
+        self.assertEqual(state.ev_values, {7: {1: 9}})
+
+        # Another application's NERD confirming our slot map changes nothing.
+        self.connection.frame_received.emit(b":SB040NF20102000A001407;")
+        self.assertEqual(state.event_progress, DiscoveryProgress.COMPLETE)
+        # A different identity in a known slot means the table changed.
+        with self.assertLogs("workbench.cbus", level="WARNING"):
+            self.connection.frame_received.emit(b":SB040NF20102000B001407;")
+        self.assertEqual(state.event_progress, DiscoveryProgress.INCOMPLETE)
+        self.assertEqual(state.event_identities, {7: (10, 20)})
+        self.connection.frame_received.emit(b":SB040NB50102070103;")
+        self.assertEqual(state.ev_values, {7: {1: 9}})
 
     def test_ev_timeout_retains_partial_values_and_continues_other_node(self):
         self.start_ev_reads(2)
@@ -1088,7 +1126,6 @@ class CbusServiceTests(unittest.TestCase):
         before = self.connection.sent.copy()
         self.connection.frame_received.emit(b":SB040N9701020209;")
         self.assertEqual(self.connection.sent, before)
-        self.assertEqual(state.nv_values, {1: 5, 2: 7})
         self.assertFalse(any(b"N96" in frame for frame in self.connection.sent))
 
     def test_disconnect_during_nv_recovery_drops_late_reply(self):

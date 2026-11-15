@@ -1185,18 +1185,7 @@ class CbusService(QObject):
             )
             return
         if self._outstanding_request != ("nv", node_number, index):
-            trace(
-                logger,
-                "NVANS does not match outstanding automatic request",
-                extra={
-                    "fields": {
-                        "layout": self.connection.layout_name,
-                        "node_number": node_number,
-                        "nv_index": index,
-                        "outstanding": self._outstanding_request,
-                    }
-                },
-            )
+            self._observe_nvans(node_number, index, value)
             return
         if self._nv_read_recovery:
             trace(
@@ -1213,6 +1202,39 @@ class CbusService(QObject):
             )
         self.record_nv(node_number, index, value)
         self._finish_request("nv", node_number)
+
+    def _observe_nvans(self, node_number: int, index: int, value: int) -> None:
+        """Refresh an already-confirmed NV from a reply another application caused.
+
+        The reply never completes our own request. It only replaces a value we
+        already confirmed, so unknown NVs stay unknown. It is ignored while a
+        write owns the wire (the writer verifies its own readbacks) and while
+        this node's NV pass is running (late duplicates belong to that pass).
+        """
+        fields = {
+            "layout": self.connection.layout_name,
+            "node_number": node_number,
+            "nv_index": index,
+            "value": value,
+            "outstanding": self._outstanding_request,
+        }
+        state = self.node_states[node_number]
+        if self.writes_busy():
+            reason = "configuration write in progress"
+        elif state.nv_progress == DiscoveryProgress.IN_PROGRESS:
+            reason = "NV discovery in progress"
+        elif index not in state.nv_values:
+            reason = "NV has no confirmed value"
+        else:
+            trace(logger, "Observed NVANS accepted", extra={"fields": fields})
+            self.record_nv(node_number, index, value)
+            return
+        trace(
+            logger,
+            "Observed NVANS ignored: %s",
+            reason,
+            extra={"fields": fields},
+        )
 
     def _receive_numev(self, node_number: int, count: int) -> None:
         fields = {
@@ -1251,6 +1273,7 @@ class CbusService(QObject):
                 "ENRSP does not match outstanding NERD request",
                 extra={"fields": {**fields, "outstanding": self._outstanding_request}},
             )
+            self._check_observed_enrsp(node_number, index, (event_node, event_number))
             return
         state = self.node_states[node_number]
         if index in state.event_identities:
@@ -1280,6 +1303,45 @@ class CbusService(QObject):
         else:
             # NERD has no final response; each new index extends the wait for more.
             self._request_timer.start(response_timeout.RESPONSE_TIMEOUT_MS)
+
+    def _check_observed_enrsp(
+        self, node_number: int, index: int, identity: tuple[int, int]
+    ) -> None:
+        """Stop trusting a slot map that another application's NERD contradicts.
+
+        NEVAL identifies an event only by slot. A different identity in a known
+        slot, or an unknown slot, means the table changed since our discovery.
+        Observed traffic never rewrites the event list; the node is marked
+        incomplete so passive EV updates stop until Refresh Node rereads it.
+        """
+        state = self.node_states.get(node_number)
+        if (
+            state is None
+            or state.event_progress != DiscoveryProgress.COMPLETE
+            or state.event_identities.get(index) == identity
+        ):
+            return
+        fields = {
+            "layout": self.connection.layout_name,
+            "node_number": node_number,
+            "event_index": index,
+            "observed_identity": identity,
+            "confirmed_identity": state.event_identities.get(index),
+        }
+        if self.writes_busy():
+            # Outside traffic must not change an in-flight write's outcome.
+            # Limitation: a conflict seen only during a write is not retained.
+            trace(
+                logger,
+                "Conflicting observed ENRSP ignored during configuration write",
+                extra={"fields": fields},
+            )
+            return
+        logger.warning(
+            "Observed ENRSP conflicts with discovered events; Refresh Node required",
+            extra={"fields": fields},
+        )
+        self._set_progress("event", node_number, DiscoveryProgress.INCOMPLETE)
 
     def _start_ev_discovery(self, node_number: int) -> None:
         if node_number in self._ev_started:
@@ -1335,11 +1397,7 @@ class CbusService(QObject):
             "value": value,
         }
         if self._outstanding_request != ("ev", node_number, (event_index, ev_index)):
-            trace(
-                logger,
-                "NEVAL does not match outstanding REVAL",
-                extra={"fields": {**fields, "outstanding": self._outstanding_request}},
-            )
+            self._observe_neval(node_number, event_index, ev_index, value)
             return
         self.node_states[node_number].ev_values.setdefault(event_index, {})[
             ev_index
@@ -1347,6 +1405,45 @@ class CbusService(QObject):
         trace(logger, "EV value confirmed", extra={"fields": fields})
         self.node_state_updated.emit(node_number)
         self._finish_request("ev", node_number)
+
+    def _observe_neval(
+        self, node_number: int, event_index: int, ev_index: int, value: int
+    ) -> None:
+        """Refresh an already-known EV from a reply another application caused.
+
+        Attribution relies on our discovered slot map, so it must still be
+        complete (see _check_observed_enrsp) and the slot/EV must already be
+        known. A confirmed-absent EV (None) is known and may become a value.
+        """
+        fields = {
+            "layout": self.connection.layout_name,
+            "node_number": node_number,
+            "event_index": event_index,
+            "ev_index": ev_index,
+            "value": value,
+            "outstanding": self._outstanding_request,
+        }
+        state = self.node_states.get(node_number)
+        if state is None:
+            reason = "node not discovered"
+        elif self.writes_busy():
+            reason = "configuration write in progress"
+        elif state.event_progress != DiscoveryProgress.COMPLETE:
+            reason = "event slots not confirmed by complete discovery"
+        elif state.ev_progress == DiscoveryProgress.IN_PROGRESS:
+            reason = "EV discovery in progress"
+        elif (
+            event_index not in state.event_identities
+            or ev_index not in state.ev_values.get(event_index, {})
+        ):
+            reason = "EV is not already known"
+        else:
+            trace(logger, "Observed NEVAL accepted", extra={"fields": fields})
+            if state.ev_values[event_index][ev_index] != value:
+                state.ev_values[event_index][ev_index] = value
+                self.node_state_updated.emit(node_number)
+            return
+        trace(logger, "Observed NEVAL ignored: %s", reason, extra={"fields": fields})
 
     def _receive_cmderr(self, node_number: int, code: int) -> None:
         if self.ev_write.reject(node_number, code):

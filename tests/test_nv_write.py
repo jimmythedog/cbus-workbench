@@ -124,8 +124,11 @@ class NvWriteTests(unittest.TestCase):
         self.assertFalse(self.results[-1][1])
         self.assertIn("1 of 2 changes saved", self.results[-1][2])
         self.assertIn("CMDERR 10", self.results[-1][2])
-        self.reply("970102020A")  # A late reply must not erase the failure.
-        self.assertEqual(self.state.nv_values, {1: 9, 2: 8})
+        reported = list(self.results)
+        # A later confirmed read is live evidence, but cannot rewrite the result.
+        self.reply("970102020A")
+        self.assertEqual(self.results, reported)
+        self.assertEqual(self.state.nv_values, {1: 9, 2: 10})
 
     def test_mismatch_does_not_confirm_requested_value(self):
         self.service.nv_write.begin(258, {1: 9, 2: 10})
