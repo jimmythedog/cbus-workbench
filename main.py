@@ -13,7 +13,10 @@ def main():
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(DISPLAY_NAME)
     # Wayland shells match windows to cbus-workbench.desktop (and its icon) by this name.
-    app.setDesktopFileName(APP_NAME)
+    # Only packaged builds install that file; setting it for source runs makes the
+    # desktop portal reject Qt's app ID registration with a console warning (#155).
+    if getattr(sys, "frozen", False):
+        app.setDesktopFileName(APP_NAME)
     # Read before configuring logging so startup records use the saved level.
     log_path = configure_logging(saved_log_level())
     logger = logging.getLogger("workbench.app")
