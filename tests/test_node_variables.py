@@ -19,6 +19,12 @@ from workbench.node import Node
 from workbench.node_variables import MdfNodeVariables
 
 
+def select_page(view, index):
+    """Show an MDF page as the user would; only the selected page is drawn."""
+    view.navigation.setCurrentRow(index)
+    return view.pages.currentWidget()
+
+
 class MdfFormTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -77,7 +83,7 @@ class MdfFormTests(unittest.TestCase):
         dual["visibilityLogic"] = {"nv": 1, "equals": 2}
         view = MdfNodeVariables({"nodeVariables": [dual]})
         self.addCleanup(view.close)
-        form = view.pages.widget(1)
+        form = select_page(view, 1)
         control = form.findChild(QDoubleSpinBox)
         for values, visible in [({1: 0}, False), ({1: 2}, True), ({}, True)]:
             view.show_live_values(43, values)
@@ -499,7 +505,7 @@ class MdfFormTests(unittest.TestCase):
             Path("tests/fixtures/mdfs/CANCMD-A50A-4d.json").read_text()
         )
         self.view.set_definition(definition)
-        form = self.view.pages.widget(1)
+        form = select_page(self.view, 1)
         fields = {
             c.parentWidget().layout().labelForField(c).text(): c
             for c in form.findChildren(QDoubleSpinBox)
@@ -520,6 +526,7 @@ class MdfFormTests(unittest.TestCase):
         working = [0] * 16
         self.view.show_node(self.node, working)
         self.view.set_editing(True)
+        self.view.navigation.setCurrentRow(0)
         self.view.raw_values.item(1, 1).setText("64")
         self.view.navigation.setCurrentRow(1)
         self.assertFalse(sod.isHidden())
@@ -537,7 +544,7 @@ class MdfFormTests(unittest.TestCase):
             Path("tests/fixtures/mdfs/canlever-io-type.json").read_text()
         )
         self.view.set_definition({"nodeVariables": [group]})
-        form = self.view.pages.widget(1)
+        form = select_page(self.view, 1)
         choices = form.findChildren(QComboBox)
         checks = {c.text(): c for c in form.findChildren(QCheckBox)}
         servo = checks["Primary - Start Event (7xx)"]
@@ -567,7 +574,7 @@ class MdfFormTests(unittest.TestCase):
         group = deepcopy(group)
         group["visibilityLogic"] = {"nv": 1, "equals": 1}
         self.view.set_definition({"nodeVariables": [group]})
-        form = self.view.pages.widget(1)
+        form = select_page(self.view, 1)
         box = form.findChild(QGroupBox)
         self.view.show_live_values(80, {1: 0})
         self.assertTrue(box.isHidden())
@@ -581,7 +588,7 @@ class MdfFormTests(unittest.TestCase):
         )
         self.view.set_definition(definition)
         self.view.show_live_values(8, {index: 85 for index in range(1, 9)})
-        form = self.view.pages.widget(1)
+        form = select_page(self.view, 1)
         groups = form.findChildren(QGroupBox)
         # Channel templates stay literal: this prototype does not change MDF interpretation.
         self.assertEqual(
@@ -635,7 +642,7 @@ class MdfFormTests(unittest.TestCase):
                 self.assertEqual(
                     [
                         c.value()
-                        for c in self.view.pages.widget(1).findChildren(QDoubleSpinBox)
+                        for c in select_page(self.view, 1).findChildren(QDoubleSpinBox)
                     ],
                     [42],
                 )
@@ -672,7 +679,7 @@ class MdfFormTests(unittest.TestCase):
                             ]
                         }
                     )
-                    control = self.view.pages.widget(1).findChild(QDoubleSpinBox)
+                    control = select_page(self.view, 1).findChild(QDoubleSpinBox)
                     self.view.show_live_values(3, {1: 42})
                     self.assertFalse(control.isHidden())
                     first_explanation = control.toolTip()
@@ -722,7 +729,7 @@ class MdfFormTests(unittest.TestCase):
                 with self.subTest(definitions=definitions):
                     self.view.set_definition({"nodeVariables": definitions})
                     self.view.show_live_values(2, {1: 42, 2: 128})
-                    form = self.view.pages.widget(1)
+                    form = select_page(self.view, 1)
                     self.assertEqual(
                         [c.value() for c in form.findChildren(QDoubleSpinBox)], [42]
                     )
@@ -877,6 +884,7 @@ class MdfFormTests(unittest.TestCase):
             view.pages.currentWidget().findChild(QDoubleSpinBox).value(), 42
         )
 
+        view.navigation.setCurrentRow(2)
         view.show_live_values(255, {1: 42, 255: 128})
         self.assertTrue(form.findChild(QDoubleSpinBox).isHidden())
         view.show_live_values(255, {1: 42, 255: 127})
@@ -885,6 +893,13 @@ class MdfFormTests(unittest.TestCase):
         control = form.findChild(QDoubleSpinBox)
         self.assertFalse(control.isHidden())
         self.assertIn("Visibility unknown", control.toolTip())
+        # Values that arrive while another page is shown appear on selection.
+        view.navigation.setCurrentRow(3)
+        view.show_live_values(255, {1: 43, 255: 128})
+        view.navigation.setCurrentRow(2)
+        self.assertTrue(control.isHidden())
+        self.assertEqual(control.value(), 43)
+        self.assertEqual(control.toolTip(), "")
 
     def test_invalid_group_structures_and_nested_tabs_remain_errors(self):
         for group in [

@@ -201,6 +201,13 @@ class EventMdfTests(unittest.TestCase):
         event = self.show(expand=False)
         self.assertTrue(event.isExpanded())
         self.assertEqual(self.control(event.child(1), QComboBox).currentData(), 10)
+        # NV-only changes update expanded forms and keep the selection.
+        self.events.consumed_table.setCurrentItem(event.child(1))
+        self.state.nv_values[16] = 0
+        event = self.show(expand=False)
+        self.assertTrue(event.isExpanded())
+        self.assertEqual(self.events.consumed_table.currentItem().text(0), "EV 2")
+        self.assertTrue(self.control(event.child(1), QComboBox).isHidden())
 
     def test_desired_edits_sync_duplicates_bits_visibility_and_lazy_expansion(self):
         number = {

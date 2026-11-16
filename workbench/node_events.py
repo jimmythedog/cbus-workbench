@@ -303,7 +303,23 @@ class NodeEvents(QWidget):
                 state.identity.node_number,
             )
             return
+        previous = self.ev_presentation
         self.ev_presentation = presentation
+        if (
+            same_node
+            and previous is not None
+            and {**previous, "nv_values": None} == {**presentation, "nv_values": None}
+        ):
+            # NV replies change only the context of EV forms (visibility, labels),
+            # so refresh the expanded forms in place rather than rebuilding (#151).
+            # Collapsed events read the new NVs from ev_presentation on expansion.
+            trace(
+                logger,
+                "NV-only change; refresh expanded EV forms node=%s",
+                state.identity.node_number,
+            )
+            self.refresh_ev_controls(self.live_context)
+            return
         expanded = set()
         selected = None
         if same_node:
@@ -519,10 +535,23 @@ class NodeEvents(QWidget):
             nvs = dict(enumerate(nvs, 1))
         return nvs, dict(enumerate(event["eventVariables"], 1))
 
+    def live_context(self, identity):
+        """NV and EV values for one consumed event in the live presentation."""
+        presentation = self.ev_presentation
+        index = next(
+            index
+            for index, event in presentation["identities"].items()
+            if event == identity
+        )
+        return presentation["nv_values"], presentation["ev_values"].get(index, {})
+
     def refresh_configuration_controls(self):
-        """Refresh existing forms only; collapsed events keep deferred construction."""
         if self.desired_configuration is None:
             return
+        self.refresh_ev_controls(self.configuration_context)
+
+    def refresh_ev_controls(self, context_for):
+        """Refresh existing forms only; collapsed events keep deferred construction."""
         tree = self.consumed_table
         for row in range(tree.topLevelItemCount()):
             event = tree.topLevelItem(row)
@@ -533,14 +562,14 @@ class NodeEvents(QWidget):
                 form = tree.itemWidget(item, 1)
                 if isinstance(form, EvContainer):
                     if context is None:
-                        context = self.configuration_context(identity)
+                        context = context_for(identity)
                     nvs, evs = context
                     for settings in form.settings:
                         settings.show_values(evs, nv_values=nvs, ev_values=evs)
                     blocked = tree.blockSignals(True)
                     item.setSizeHint(1, form.sizeHint())
                     tree.blockSignals(blocked)
-        trace(logger, "Refreshed desired EV controls node=%s", self.node.node_number)
+        trace(logger, "Refreshed EV controls node=%s", self.node.node_number)
 
     def update_configuration_value(self, item, column):
         if column != 1:

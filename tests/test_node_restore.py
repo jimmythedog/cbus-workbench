@@ -1310,7 +1310,8 @@ class NodeRestoreTests(unittest.TestCase):
             },
         )
         details.show_live_state(self.state, mdf)
-        form = details.mdf_values.pages.widget(1)
+        details.mdf_values.navigation.setCurrentRow(1)
+        form = details.mdf_values.pages.currentWidget()
         combos = form.findChildren(QComboBox)
         numbers = form.findChildren(QDoubleSpinBox)
         flag = form.findChild(QCheckBox)

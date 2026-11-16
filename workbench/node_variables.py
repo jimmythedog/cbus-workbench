@@ -950,6 +950,8 @@ class MdfNodeVariables(QSplitter):
         self.navigation.itemDoubleClicked.connect(self.edit_page_tokens)
         self.live_mode = False
         self.live_count = None
+        # Last live values drawn; the service mutates its dictionary in place.
+        self.live_shown = None
         self.navigation.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.navigation.currentRowChanged.connect(self.refresh_raw_values)
         self.addWidget(self.navigation)
@@ -971,6 +973,7 @@ class MdfNodeVariables(QSplitter):
             return
         self.token_editor = token_editor
         self.definition = None
+        self.live_shown = None
         self.navigation.setCurrentRow(0)
         while self.pages.count() > 1:
             page = self.pages.widget(1)
@@ -1018,6 +1021,13 @@ class MdfNodeVariables(QSplitter):
     def show_live_values(self, count, values, node_number=None):
         """Read the service's confirmed dictionary directly, including absent NVs."""
         self.set_editing(False)
+        # Every CBUS reply for the selected node arrives here (#151); most leave
+        # the NVs unchanged, so skip redrawing when nothing visible would differ.
+        shown = (node_number, count, dict(values))
+        if self.live_mode and shown == self.live_shown:
+            trace(logger, "Retain unchanged MDF NV pages node=%s", node_number)
+            return
+        self.live_shown = shown
         self.values = values
         self.node_number = node_number
         self.live_mode = True
@@ -1027,6 +1037,7 @@ class MdfNodeVariables(QSplitter):
 
     def show_node(self, node, values=None):
         self.live_mode = False
+        self.live_shown = None
         self.node = node
         self.node_number = node.number
         self.values = values if values is not None else node.nv_values
@@ -1059,7 +1070,10 @@ class MdfNodeVariables(QSplitter):
         self.show_pages()
 
     def show_pages(self):
-        for index in range(1, self.pages.count()):
+        # Only the selected page is drawn; refresh_raw_values draws any other
+        # page when it is selected, before it is painted (#151).
+        index = self.navigation.currentRow()
+        if index > 0:
             self.show_page(index)
 
     def show_page(self, index):
