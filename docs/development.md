@@ -534,6 +534,8 @@ GitHub Actions continues to run its own validation commands.
 
 The application configures standard Python logging before constructing the Qt UI. Development runs start at TRACE; PyInstaller packaged releases start at INFO. Logs go to a rotating plain-text file (5 MiB per file, three backups). The first `configure_logging()` call sets the initial level and log destination; the View → Logging Level menu can change the `workbench` logger's level for the current session.
 
+`configure_logging()` also enables `faulthandler`, appending to `crash.log` beside the main log. A native crash (for example, a segfault in Qt or a serial driver) bypasses Python exception handling; `faulthandler` then writes the Python stack of every thread to `crash.log`. It has its own file because `faulthandler` writes directly to a file descriptor: in the rotating log it would interleave with ordinary records and, after rotation, would write to the renamed backup. It does not use stderr because windowed packaged builds may have none. The file stays empty unless the process crashes; match a crash with the main log by its last records.
+
 The file is `cbus-workbench.log` in the `logs` subdirectory of Qt's
 `StateLocation`. On Linux this defaults to
 `${XDG_STATE_HOME:-~/.local/state}/cbus-workbench/logs`. Help → Application

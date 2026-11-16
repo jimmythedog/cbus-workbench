@@ -1,9 +1,11 @@
 """Configure the application's persistent, plain-text log."""
 
+import faulthandler
 import logging
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import TextIO
 
 from .paths import application_directories
 
@@ -11,6 +13,8 @@ TRACE = 5
 logging.addLevelName(TRACE, "TRACE")
 
 _log_path: Path | None = None
+# Kept open for the whole process: faulthandler writes to its descriptor at crash time.
+_crash_file: TextIO | None = None
 
 
 def trace(
@@ -42,7 +46,7 @@ def configure_logging(level: int | None = None) -> Path:
     Supply structured fields with ``extra={"fields": {"layout_id": 12}}``.
     The first call determines the initial level and log destination for this process.
     """
-    global _log_path
+    global _log_path, _crash_file
     if _log_path is not None:
         return _log_path
 
@@ -69,4 +73,18 @@ def configure_logging(level: int | None = None) -> Path:
     logger.addHandler(handler)
     logger.propagate = False
     _log_path = path
+
+    # A native crash (e.g. a segfault in Qt or the serial driver) bypasses Python
+    # exception handling, so faulthandler dumps every thread's stack instead. It
+    # writes straight to the file descriptor, so it gets its own file: sharing the
+    # rotating log would interleave output, and after rotation a descriptor opened
+    # at startup would point at the renamed backup. stderr is not used because
+    # windowed packaged builds may have none.
+    crash_path = directory / "crash.log"
+    # Not a context manager: the file must stay open until the process exits.
+    _crash_file = open(crash_path, "a", encoding="utf-8")  # noqa: SIM115
+    faulthandler.enable(_crash_file, all_threads=True)
+    logger.info(
+        "Crash diagnostics enabled", extra={"fields": {"crash_file": str(crash_path)}}
+    )
     return path
