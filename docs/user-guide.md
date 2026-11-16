@@ -2,8 +2,8 @@
 
 CBUS Workbench configures and maintains CBUS/VLCB networks. It is in early
 development; layout backup restoration and backup deletion are not yet
-available. See the [README](../README.md#installing-a-release-build) for installation
-and running instructions.
+available. See the [installation guide](installation.md) to install, update or
+uninstall it.
 
 ## Contents
 

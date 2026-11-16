@@ -1,8 +1,8 @@
 # Development guide
 
 This document records established development decisions and, as the application takes shape, will explain its architecture and important execution flows. It is not an inventory of source files. For application operating instructions, see
-the [user guide](user-guide.md); installation and running instructions start in the
-[README](../README.md#installing-a-release-build).
+the [user guide](user-guide.md); end-user installation is covered only by the
+[installation guide](installation.md).
 
 ## Observed network events
 
@@ -142,7 +142,7 @@ outside the existing hardware engine; comparison and Retry remain NV/EV-only.
 
 ## Running from source
 
-These instructions are for developers. End users install release builds, which bundle Python and application dependencies; see [Release packaging](#release-packaging).
+These instructions are for developers. End users install release builds, which bundle Python and application dependencies; see the [installation guide](installation.md).
 
 ### Standard development setup (Windows, macOS and conventional Linux)
 
@@ -251,8 +251,10 @@ installed or mounted result, not the build directory:
 
 User data lives in Qt's per-user locations, never in the installation directory,
 so uninstalling or removing the package leaves it in place. Windows and macOS
-builds are unsigned; the README documents the resulting SmartScreen and Gatekeeper
-prompts.
+builds are unsigned; the [installation guide](installation.md) documents the
+resulting SmartScreen and Gatekeeper prompts. It is the single source of end-user
+installation, update and uninstall instructions; other documents and release
+notes link to it rather than repeating them.
 
 ### Release procedure
 
@@ -314,8 +316,10 @@ Then review and publish the draft:
    assets are attached: four installers (Windows, Linux and two macOS) and four
    portable archives. The generated notes list PRs merged since the previous
    release (for the first release, every PR). Above that list, add a short
-   summary and the known limitations: alpha status where applicable, unsigned
-   Windows and macOS builds, and untested platforms.
+   summary, a link to the installation guide
+   (`https://github.com/jimmythedog/cbus-workbench/blob/main/docs/installation.md`)
+   and the known limitations: alpha status where applicable, unsigned Windows and
+   macOS builds, and untested platforms.
 10. **Publish** with the draft's **Publish release** button in GitHub. For a final
     version, leave **Set as the latest release** checked.
 
@@ -1540,7 +1544,6 @@ failure/cleanup outcomes; frame traffic remains in Diagnostics.
 The existing event refresh uses REVAL and may be incomplete on VLCB nodes that
 reject it. This is reported as saved changes with incomplete refresh, never full
 success. No compatibility fallback or second discovery system is introduced.
-For the manual test sequence, see the [EV hardware check](ev-hardware-check.md).
 
 Protocol references: [CBUS Guide 6c and CBUS 5.0 Rev A1](https://github.com/cbus-traincontrol/cbus-traincontrol.github.io),
 [MERG Developer’s Guide 6b, §7.2.7 and opcode definitions](https://www.merg.org.uk/merg_wiki/lib/exe/fetch.php?media=public%3Acbuspublic%3Adeveloper_6b.pdf),
