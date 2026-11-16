@@ -1,9 +1,10 @@
 ---
 name: Portable builds and installers
 
-# Run manually. For a release, choose the release tag as the workflow ref.
+# Run manually to test packaging, or called by release.yml for a version tag.
 on:
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   package:

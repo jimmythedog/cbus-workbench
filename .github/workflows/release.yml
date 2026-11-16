@@ -1,0 +1,89 @@
+---
+name: Draft release
+
+# Pushing a version tag builds every platform from the tagged commit and creates
+# a draft GitHub release. Publishing the draft is always a manual step.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate tag
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Check version syntax
+        id: version
+        run: |
+          # Final (1.2.3) or alpha/beta/release-candidate (1.2.3a1, 1.2.3b2, 1.2.3rc1).
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)((a|b|rc)[0-9]+)?$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME is not v<major>.<minor>.<patch>[a|b|rc<n>]"
+            exit 1
+          fi
+          prerelease=false
+          if [ -n "${BASH_REMATCH[2]}" ]; then prerelease=true; fi
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+      - name: Check tagged commit is on main
+        run: |
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::Tag $GITHUB_REF_NAME points to a commit that is not on main"
+            exit 1
+          fi
+
+  # The build workflow also fails if the tag does not match the project version.
+  build:
+    needs: validate
+    uses: ./.github/workflows/portable-builds.yml
+
+  release:
+    name: Create draft release
+    needs: [validate, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      V: ${{ needs.validate.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets
+      - name: Collect release assets
+        run: |
+          # Each artifact downloads into a directory named after it. A missing
+          # artifact makes mv or chmod fail, so no partial release is created.
+          mkdir release
+          for f in windows-x64-setup.exe linux-x64.deb macos-x64.dmg macos-arm64.dmg; do
+            mv "assets/cbus-workbench-$V-$f/cbus-workbench-$V-$f" release/
+          done
+          for p in macos-x64 macos-arm64; do
+            mv "assets/cbus-workbench-$V-$p-portable/cbus-workbench-$V-$p-portable.zip" release/
+          done
+          # Actions artifacts lose Unix permissions, so restore the Linux
+          # executable bit before zipping the portable bundles.
+          chmod +x "assets/cbus-workbench-$V-linux-x64-portable/CBUS Workbench"
+          cd assets
+          for p in linux-x64 windows-x64; do
+            test -d "cbus-workbench-$V-$p-portable"
+            zip -qr "../release/cbus-workbench-$V-$p-portable.zip" "cbus-workbench-$V-$p-portable"
+          done
+          ls -l ../release
+      - name: Create draft release
+        run: |
+          prerelease=()
+          if [ "${{ needs.validate.outputs.prerelease }}" = true ]; then
+            prerelease=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --repo "$GITHUB_REPOSITORY" --draft "${prerelease[@]}" \
+            --verify-tag --generate-notes --title "CBUS Workbench $V"

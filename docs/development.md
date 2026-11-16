@@ -207,7 +207,8 @@ never downloads MDFs at runtime.
 
 ### Release packaging
 
-`.github/workflows/portable-builds.yml` runs only on manual dispatch. Each matrix
+`.github/workflows/portable-builds.yml` runs on manual dispatch, or as part of
+`release.yml` when a version tag is pushed. Each matrix
 job (Windows x64, Linux x64, macOS Intel, macOS Apple Silicon) builds one
 PyInstaller onedir bundle natively on its runner and wraps that same bundle in a
 native installer, so the portable and installed applications are identical:
@@ -220,8 +221,8 @@ native installer, so the portable and installed applications are identical:
         -> install/open, MDF check, launch, uninstall -> installer artifact
 
 Artifact names include `[project].version`. When the workflow runs on a tag, the
-job fails if the tag is not `v<version>`. Publishing is manual; see
-[Release procedure](#release-procedure). There is no release automation or
+job fails if the tag is not `v<version>`. Releases are drafted automatically and
+published manually; see [Release procedure](#release-procedure). There is no
 auto-updater.
 
 Each installer is checked in CI after it is built. The checks are against the
@@ -255,51 +256,95 @@ prompts.
 
 ### Release procedure
 
-The examples use `V=0.1.0a1`. Alpha, beta and release-candidate versions (`a`, `b`,
-`rc`) are published as GitHub pre-releases.
+Pushing a tag `v<version>` runs `.github/workflows/release.yml`, which builds every
+platform from the tagged commit and creates a **draft** GitHub release. Publishing
+is always manual.
 
-1. **Verify the version.** Every issue in the milestone is closed, `main` is up to
-   date and its CI passes. `uv version` prints `$V`. If it does not, bump it in an
-   issue branch and PR with `uv version $V`, which also updates `uv.lock`.
-2. **Tag `main`.**
+    push tag v$V
+      -> validate: tag is v<major>.<minor>.<patch>[a|b|rc<n>], commit is on main
+      -> build: portable-builds.yml, all four platforms; each job checks the tag
+         matches the project version, then builds and checks its installer
+      -> release: download artifacts, zip the Linux/Windows portable bundles,
+         create the draft with generated notes and eight assets
+         (build or validation failure: no release; release creation failure:
+         inspect for an incomplete draft)
+    review the draft -> Publish release (manual, in GitHub)
 
-       git switch main && git pull --ff-only
-       git tag -a "v$V" -m "CBUS Workbench $V"
-       git push origin "v$V"
+A **draft** is visible only to people with write access until it is published. A
+**pre-release** is a published release that GitHub does not show as the latest.
+Alpha, beta and release-candidate tags (`a`, `b`, `rc`, e.g. `v0.1.0a1`) create a
+draft pre-release. Final tags (e.g. `v0.1.0`) create a draft stable release.
 
-3. **Build from the tag.** Run `gh workflow run portable-builds.yml --ref "v$V"`,
-   then `gh run watch`. All four jobs must pass. A tag that does not match the
-   project version fails the build.
-4. **Smoke-test.** Download the artifacts with `gh run download <run-id> --dir release-assets`.
-   On each platform available, install, launch, check Help → About and MDF
-   presentation, restart, uninstall, and confirm that user data survives. Note
-   any platform not tested.
-5. **Prepare the portable archives.** Actions artifacts lose Unix permissions, so
-   restore the Linux executable bit before zipping:
+Before starting, every issue in the milestone is closed and CI passes on `main`.
+`uv version` sets the version in `pyproject.toml` and `uv.lock` only. It never
+commits or creates a Git tag.
 
-       cd release-assets
-       chmod +x "cbus-workbench-$V-linux-x64-portable/CBUS Workbench"
-       for p in linux-x64 windows-x64; do
-           zip -qr "cbus-workbench-$V-$p-portable.zip" "cbus-workbench-$V-$p-portable"
-       done
+1. **Bump the version** on an issue branch. Use `uv version --bump alpha` (or
+   `beta`, `rc`, `stable`, `patch`, …), or set it explicitly with `uv version <version>`.
+2. **Run `make check`.**
+3. **Commit** `pyproject.toml` and `uv.lock`. No other file holds the version.
+4. **Merge** the branch into `main` through a PR.
+5. **Tag `main`** with `v` plus the project version. The build fails if the tag does
+   not match `pyproject.toml`.
+6. **Push the tag** to start the release workflow.
 
-6. **Create a draft pre-release** with GitHub's PR-based notes and all assets:
+For example, to advance from `0.1.0a1` to `0.1.0a2`:
 
-       gh release create "v$V" --draft --prerelease --verify-tag --generate-notes \
-           --title "CBUS Workbench $V" \
-           */*-setup.exe */*.deb */*.dmg */*-portable.zip ./*-portable.zip
+    git switch -c issue/<number>-release-0.1.0a2 main
+    uv version --bump alpha            # 0.1.0a1 => 0.1.0a2
+    make check
+    git commit -am "#<number> Bump version to 0.1.0a2"
+    # open a PR and merge it into main, then:
+    git switch main && git pull --ff-only
+    V="$(uv version --short)"          # 0.1.0a2
+    git tag -a "v$V" -m "CBUS Workbench $V"
+    git push origin "v$V"
 
-7. **Review the notes.** Edit them on the draft with `gh release view "v$V" --web`. The
-   generated list covers PRs merged since the previous release (for the first
-   release, every PR). Above that list, add a short summary and the known
-   limitations: alpha status, unsigned Windows and macOS builds, and untested
-   platforms. Check that eight assets are attached: four installers (Windows,
-   Linux and two macOS) and four portable archives.
-8. **Publish:** `gh release edit "v$V" --draft=false`. The release stays marked as
-   a pre-release, so GitHub does not show it as the latest release.
+Then review and publish the draft:
 
-Never move or reuse a published tag. Fix problems through a PR, then release the
-next version (for example `0.1.0a2`).
+7. **Watch the release workflow.** `gh run list --workflow release.yml`, then
+   `gh run watch <run-id>`. Validation, all four builds and the release job must
+   pass.
+8. **Smoke-test.** Download the draft's assets with
+   `gh release download "v$V" --dir release-assets`. On each platform available,
+   install, launch, check Help → About and MDF presentation, restart, uninstall,
+   and confirm that user data survives. Note any platform not tested.
+9. **Review the draft.** Open it with `gh release view "v$V" --web`. Check that it
+   is marked as a pre-release only for an `a`, `b` or `rc` version, and that eight
+   assets are attached: four installers (Windows, Linux and two macOS) and four
+   portable archives. The generated notes list PRs merged since the previous
+   release (for the first release, every PR). Above that list, add a short
+   summary and the known limitations: alpha status where applicable, unsigned
+   Windows and macOS builds, and untested platforms.
+10. **Publish** with the draft's **Publish release** button in GitHub. For a final
+    version, leave **Set as the latest release** checked.
+
+**If the workflow fails,** no release is created; the tag already exists. Read the
+failed job's log. For a transient runner or network failure, use **Re-run failed
+jobs** on the run. If the release job fails after a draft was partly created,
+delete that draft (`gh release delete "v$V"`, which keeps the tag) before
+re-running.
+
+**If the tagged code or version is wrong** (a build fails because of it, or a
+problem is found while reviewing the draft), reuse the version while its release
+is unpublished. Fix the problem through a PR to `main`, then remove the draft and
+the old tag and recreate the tag on the corrected commit:
+
+    gh release list                    # every draft for v$V must go; drafts can share a tag
+    gh release delete "v$V" --yes      # repeat until no draft for v$V remains
+    git push --delete origin "v$V"
+    git tag -d "v$V"
+    git switch main && git pull --ff-only
+    git tag -a "v$V" -m "CBUS Workbench $V"
+    git push origin "v$V"
+
+The new push runs the release workflow again and creates a fresh draft. Delete the
+draft first: a leftover draft keeps its old assets and would sit beside the new
+one.
+
+Once a release has been published, its tag must never be moved or reused. Users
+and GitHub's release notes depend on it. Fix problems through a PR, then release
+the next version (for example `0.1.0a2`).
 
 ### MDF form visual reference
 
