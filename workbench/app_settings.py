@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 from PySide6.QtCore import QIODeviceBase, QSaveFile
 
-from .logging_config import trace
+from .logging_config import LOG_LEVELS, trace
 from .paths import application_directories
 
 logger = logging.getLogger("workbench.settings")
@@ -89,8 +89,16 @@ def _validate_layout(name: object, value: object) -> dict:
 
 def validate_settings(value: object, *, recover_default: bool = False) -> dict:
     """Validate settings; loading may recover an absent or stale default."""
-    if not isinstance(value, dict) or set(value) - {"default_layout", "layouts"}:
-        raise SettingsError("Settings must contain only default_layout and layouts")
+    if not isinstance(value, dict) or set(value) - {
+        "default_layout",
+        "layouts",
+        "log_level",
+    }:
+        raise SettingsError(
+            "Settings must contain only default_layout, layouts and log_level"
+        )
+    if "log_level" in value and value["log_level"] not in tuple(LOG_LEVELS):
+        raise SettingsError(f"log_level must be one of {', '.join(LOG_LEVELS)}")
     layouts = value.get("layouts")
     if not isinstance(layouts, dict):
         raise SettingsError("Settings needs a layouts mapping")
@@ -120,7 +128,11 @@ def validate_settings(value: object, *, recover_default: bool = False) -> dict:
                 extra={"fields": {"missing_layout": default_layout}},
             )
         default_layout = next(iter(validated), None)
-    return {"default_layout": default_layout, "layouts": validated}
+    result = {"default_layout": default_layout, "layouts": validated}
+    # Absent means the build's default level, so it is not written back as a value.
+    if "log_level" in value:
+        result["log_level"] = value["log_level"]
+    return result
 
 
 def layout_settings_for_ui(stored_layouts: dict[str, dict]) -> dict[str, dict]:
@@ -201,6 +213,23 @@ def load_settings(path: Path | None = None) -> dict:
         extra={"fields": {"layouts": len(settings["layouts"])}},
     )
     return settings
+
+
+def saved_log_level(path: Path | None = None) -> int | None:
+    """Return the saved logging level, read before logging is configured.
+
+    This deliberately logs nothing and returns None for any problem: there is no
+    log handler yet. MainWindow's later load_settings call reports the problem.
+    """
+    path = settings_path() if path is None else Path(path)
+    try:
+        value = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except OSError, UnicodeError, yaml.YAMLError:
+        return None
+    if not isinstance(value, dict):
+        return None
+    level = value.get("log_level")
+    return LOG_LEVELS.get(level) if isinstance(level, str) else None
 
 
 def save_settings(settings: dict, path: Path | None = None) -> None:

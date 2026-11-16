@@ -1,5 +1,6 @@
 """Main window initialization from the persisted layout configuration."""
 
+import logging
 import os
 import tempfile
 import tomllib
@@ -164,6 +165,34 @@ class WindowStartupTests(unittest.TestCase):
         ):
             window.show_about()
         self.assertIn("<p>Version: Development</p>", about.call_args.args[2])
+
+    def test_chosen_logging_level_is_saved_and_kept_by_layout_changes(self):
+        workbench_logger = logging.getLogger("workbench")
+        self.addCleanup(workbench_logger.setLevel, workbench_logger.level)
+        save_settings(sample_settings(), self.path)
+        window = self.open_window()
+        debug = next(
+            action
+            for action in window.logging_group.actions()
+            if action.text() == "Debug"
+        )
+
+        with patch("workbench.app_settings.settings_path", return_value=self.path):
+            debug.trigger()
+            self.assertEqual(load_settings(self.path)["log_level"], "DEBUG")
+            test_layout = next(
+                action
+                for action in window.layout_group.actions()
+                if action.data() == "Test Layout"
+            )
+            test_layout.setChecked(True)
+            window.select_layout(test_layout)
+            window.set_selected_as_default()
+
+        saved = load_settings(self.path)
+        self.assertEqual(saved["default_layout"], "Test Layout")
+        self.assertEqual(saved["log_level"], "DEBUG")
+        self.assertEqual(workbench_logger.level, logging.DEBUG)
 
     def test_manual_refresh_preserves_saved_metadata(self):
         from test_refresh_node import answer_refresh

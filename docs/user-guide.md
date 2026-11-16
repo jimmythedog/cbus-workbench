@@ -719,7 +719,9 @@ into named fields such as node number, event number or NV index, and standard co
 (manufacturer, module type, flags, parameter index, CMDERR error and some
 parameter values) are named. Unknown
 values stay numeric. Use **View** to show or hide the panel.
-**View → Logging Level** changes logging detail for the current session.
+**View → Logging Level** changes logging detail. The choice is remembered and
+applies from the start of the next session, so startup and auto-connect are logged
+at that level too.
 
 For raw frame sending, connect a layout and choose
 **Layouts → Send GridConnect Frame…**. Enter a complete GridConnect frame. Raw

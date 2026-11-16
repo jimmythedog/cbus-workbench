@@ -32,7 +32,7 @@ from .cbus_service import CbusService, DiscoveryStatus
 from .diagnostics import Diagnostics
 from .layout_settings import LayoutSettingsDialog, collect_layout_settings
 from .layout_view import LayoutView
-from .logging_config import TRACE, trace
+from .logging_config import LOG_LEVELS, trace
 from .mmc_import_dialog import MmcImportDialog
 from .node_metadata import save_metadata
 from .node_number_dialog import NodeNumberDialog
@@ -89,6 +89,8 @@ class MainWindow(QMainWindow):
 
         self.error_reporter.run("Could not load settings", read_settings)
         self.default_layout = saved_settings["default_layout"]
+        # The saved level name, or None to keep the build's default on restart.
+        self.log_level: str | None = saved_settings.get("log_level")
         self.layout_settings = layout_settings_for_ui(saved_settings["layouts"])
 
         for name in self.layout_settings:
@@ -229,14 +231,8 @@ class MainWindow(QMainWindow):
         self.logging_group.setExclusive(True)
         self.logging_group.triggered.connect(self.change_logging_level)
         current_level = logging.getLogger("workbench").level
-        for name, level in (
-            ("Error", logging.ERROR),
-            ("Warning", logging.WARNING),
-            ("Info", logging.INFO),
-            ("Debug", logging.DEBUG),
-            ("Trace", TRACE),
-        ):
-            action = logging_menu.addAction(name)
+        for name, level in LOG_LEVELS.items():
+            action = logging_menu.addAction(name.title())
             action.setCheckable(True)
             action.setData(level)
             self.logging_group.addAction(action)
@@ -299,6 +295,16 @@ class MainWindow(QMainWindow):
             },
         )
         logger.handle(record)
+
+        # Keep the new level for this session even if it cannot be remembered.
+        name = logging.getLevelName(new_level)
+
+        def save_level():
+            self.save_layouts(self.layout_settings, self.default_layout, name)
+            self.log_level = name
+            trace(logger, "Logging level saved", extra={"fields": {"level": name}})
+
+        self.error_reporter.run("Could not save logging level", save_level)
 
     def set_connection_state(self, name: str, state: str) -> None:
         trace(
@@ -810,14 +816,18 @@ class MainWindow(QMainWindow):
             return not connection.port.isOpen()
         return connection.socket.state() == QAbstractSocket.SocketState.UnconnectedState
 
-    def save_layouts(self, layouts: dict, default_layout: str | None) -> None:
+    def save_layouts(
+        self, layouts: dict, default_layout: str | None, log_level: str | None = None
+    ) -> None:
         """Write proposed layout settings before changing the window's state."""
-        save_settings(
-            {
-                "default_layout": default_layout,
-                "layouts": layout_settings_for_storage(layouts),
-            }
-        )
+        settings = {
+            "default_layout": default_layout,
+            "layouts": layout_settings_for_storage(layouts),
+        }
+        log_level = self.log_level if log_level is None else log_level
+        if log_level is not None:
+            settings["log_level"] = log_level
+        save_settings(settings)
 
     def select_layout(self, action):
         name = action.data()

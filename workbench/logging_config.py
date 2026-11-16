@@ -12,6 +12,15 @@ from .paths import application_directories
 TRACE = 5
 logging.addLevelName(TRACE, "TRACE")
 
+# The levels offered in View → Logging Level and accepted as settings.yaml log_level.
+LOG_LEVELS = {
+    "ERROR": logging.ERROR,
+    "WARNING": logging.WARNING,
+    "INFO": logging.INFO,
+    "DEBUG": logging.DEBUG,
+    "TRACE": TRACE,
+}
+
 _log_path: Path | None = None
 # Kept open for the whole process: faulthandler writes to its descriptor at crash time.
 _crash_file: TextIO | None = None

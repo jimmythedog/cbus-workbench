@@ -3,6 +3,7 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
+from workbench.app_settings import saved_log_level
 from workbench.logging_config import configure_logging, trace
 from workbench.paths import APP_NAME, DISPLAY_NAME
 
@@ -13,7 +14,8 @@ def main():
     app.setApplicationDisplayName(DISPLAY_NAME)
     # Wayland shells match windows to cbus-workbench.desktop (and its icon) by this name.
     app.setDesktopFileName(APP_NAME)
-    log_path = configure_logging()
+    # Read before configuring logging so startup records use the saved level.
+    log_path = configure_logging(saved_log_level())
     logger = logging.getLogger("workbench.app")
     logger.info("Application starting", extra={"fields": {"log_file": str(log_path)}})
     try:

@@ -13,8 +13,10 @@ from workbench.app_settings import (
     layout_settings_for_ui,
     load_settings,
     save_settings,
+    saved_log_level,
     settings_path,
 )
+from workbench.logging_config import TRACE
 
 
 class AppSettingsTests(unittest.TestCase):
@@ -286,6 +288,40 @@ class AppSettingsTests(unittest.TestCase):
                 save_settings({"default_layout": None, "layouts": {}}, self.path)
 
         self.assertEqual(self.path.read_text(), invalid)
+
+    def test_log_level_round_trips_and_absent_level_uses_build_default(self):
+        self.assertIsNone(saved_log_level(self.path))
+        settings = {"default_layout": None, "layouts": {}}
+        save_settings(settings, self.path)
+        self.assertEqual(load_settings(self.path), settings)
+        self.assertNotIn("log_level", yaml.safe_load(self.path.read_text()))
+        self.assertIsNone(saved_log_level(self.path))
+
+        settings["log_level"] = "TRACE"
+        save_settings(settings, self.path)
+
+        self.assertEqual(load_settings(self.path), settings)
+        self.assertEqual(saved_log_level(self.path), TRACE)
+
+    def test_invalid_log_level_is_reported_and_not_overwritten(self):
+        self.path.parent.mkdir(parents=True)
+        for level in ("VERBOSE", "[TRACE]"):
+            with self.subTest(level=level):
+                invalid = f"default_layout: null\nlayouts: {{}}\nlog_level: {level}\n"
+                self.path.write_text(invalid)
+
+                self.assertIsNone(saved_log_level(self.path))
+                with self.assertLogs("workbench.settings", level="ERROR"):
+                    with self.assertRaisesRegex(
+                        SettingsError, "log_level must be one of"
+                    ):
+                        load_settings(self.path)
+                    with self.assertRaises(SettingsError):
+                        save_settings(
+                            {"default_layout": None, "layouts": {}}, self.path
+                        )
+
+                self.assertEqual(self.path.read_text(), invalid)
 
     def test_invalid_settings_cannot_be_saved(self):
         with (
