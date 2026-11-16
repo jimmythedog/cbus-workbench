@@ -68,10 +68,13 @@ class NvSave(QObject):
         pre_edit: list[int] | None = None,
         user_edited: set[int] | None = None,
         mdf: dict | None = None,
+        refresh_events: bool = True,
     ) -> None:
         self.check(number, backup)
         state = self.service.node_states[number]
         self.mdf = deepcopy(mdf or {})
+        self.refresh_events = refresh_events
+        self.failure_reason = ""
         self.event_refresh = False
         self.events_refreshed = False
         self.backup = deepcopy(backup)
@@ -193,6 +196,8 @@ class NvSave(QObject):
     def finish(self, success: bool, message: str) -> None:
         self.timer.stop()
         service = self.service
+        if not success:
+            self.failure_reason = message
         # A resolved rejection/mismatch leaves the wire safe for read-only event
         # discovery. An ambiguous write keeps its existing protocol safety block.
         safe = (
@@ -205,7 +210,7 @@ class NvSave(QObject):
                 for state in service.node_states.values()
             )
         )
-        if self.verified and not self.events_refreshed:
+        if self.verified and self.refresh_events and not self.events_refreshed:
             self.events_refreshed = True
             if safe:
                 self.pending_result = success, message

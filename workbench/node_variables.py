@@ -9,8 +9,10 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QListWidget,
+    QPushButton,
     QScrollArea,
     QSplitter,
     QSplitterHandle,
@@ -385,6 +387,7 @@ class MdfSettings(QScrollArea):
     """Interpret raw bytes and emit edits; never own desired configuration."""
 
     value_edited = Signal(int, int)
+    test_requested = Signal(int)
 
     def __init__(
         self,
@@ -412,6 +415,7 @@ class MdfSettings(QScrollArea):
         self.setWidget(contents)
         self.group_rows = []
         self.bit_arrays = []
+        self.test_buttons = {}
         self.add_items(
             definitions,
             f"{panel_title} ({panel_number})",
@@ -490,6 +494,11 @@ class MdfSettings(QScrollArea):
             )
 
     def set_row_visible(self, control, visible):
+        if control in self.test_buttons:
+            # The form row holds the control beside its Test button. Group
+            # visibility still reads the control's own hidden state.
+            control.setVisible(visible)
+            control = control.parentWidget()
         layout = control.parentWidget().layout()
         if isinstance(layout, QFormLayout):
             layout.setRowVisible(control, visible)
@@ -594,7 +603,22 @@ class MdfSettings(QScrollArea):
                         self.token_editor.bind_choices(
                             control, source.get("options", [])
                         )
-                layout.addRow(label, control)
+                field = control
+                if output_on_write(definition):
+                    field = QWidget()
+                    field_layout = QHBoxLayout(field)
+                    field_layout.setContentsMargins(0, 0, 0, 0)
+                    field_layout.addWidget(control, 1)
+                    test = QPushButton("Test")
+                    test.setToolTip("Write the current value to the node again.")
+                    test.clicked.connect(
+                        lambda _checked, i=definition["nodeVariableIndex"]: (
+                            self.test_requested.emit(i)
+                        )
+                    )
+                    field_layout.addWidget(test)
+                    self.test_buttons[control] = test
+                layout.addRow(label, field)
                 self.rows.append((definition, control, conditions))
 
     def add_bit_array(self, definition, location, layout, conditions, source):
@@ -698,6 +722,9 @@ class MdfSettings(QScrollArea):
                 control.addItem(option["label"], option["value"])
         elif kind in ("NodeVariableSlider", "NodeVariableNumber", "NodeVariableDual"):
             control = MdfNumericValue(definition)
+            # Each change is written to the node immediately, so report only
+            # finished entries (Enter, focus loss, arrows), not every digit typed.
+            control.setKeyboardTracking(not output_on_write(definition))
         elif kind == "NodeVariableBitSingle":
             control = QCheckBox()
         return control
@@ -794,6 +821,10 @@ class MdfSettings(QScrollArea):
                 and definition["type"] != "NodeVariableDual"
                 and (not isinstance(control, MdfNumericValue) or bool(control.scale))
             )
+            test = self.test_buttons.get(control)
+            if test is not None:
+                # Test rewrites the confirmed value, so it works outside Edit too.
+                test.setEnabled(value is not None and not visibility_message)
             control.blockSignals(blocked)
             trace(
                 logger,
@@ -842,6 +873,32 @@ class PlainSplitterHandle(QSplitterHandle):
         pass
 
 
+def output_on_write(definition) -> bool:
+    """MDF outputOnWrite NVs drive their output whenever they are written."""
+    return (
+        definition.get("outputOnWrite") is True
+        and type(definition.get("nodeVariableIndex")) is int
+    )
+
+
+def output_on_write_nvs(definition) -> set[int]:
+    """Collect outputOnWrite NV indices from the nested MDF presentation."""
+    result = set()
+
+    def visit(value):
+        if isinstance(value, dict):
+            if output_on_write(value):
+                result.add(value["nodeVariableIndex"])
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(definition.get("nodeVariables", []) if definition else [])
+    return result
+
+
 def settings_panels(definitions):
     """Root tabs supply navigation; consecutive flat items share a Settings page."""
     if not isinstance(definitions, list):
@@ -872,6 +929,7 @@ def settings_panels(definitions):
 
 class MdfNodeVariables(QSplitter):
     value_changed = Signal()
+    test_requested = Signal(int)
 
     def __init__(self, definition=None):
         super().__init__(Qt.Orientation.Horizontal)
@@ -950,6 +1008,7 @@ class MdfNodeVariables(QSplitter):
                 )
             self.pages.addWidget(form)
             form.value_edited.connect(self.update_value)
+            form.test_requested.connect(self.test_requested)
         self.definition = definition
 
     def show_live_values(self, count, values):

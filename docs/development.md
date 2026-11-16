@@ -1108,6 +1108,30 @@ with resolved failures. Ambiguous writes, protocol blocks, known learn mode or
 disconnection prevent this refresh and are reported. Event/EV read failures use
 the existing partial-save report. No changed NVs means no event refresh.
 
+MDF `outputOnWrite` NVs drive a node output (e.g. a servo position) whenever they
+are written, so `NodeDetails` writes them during the ordinary NV Edit session
+rather than adding a separate mode. Each write is a one-NV `NvSave` run, with the
+editor locked and `output_write` routing its result away from the normal Save
+handling. `original_configuration` is never changed: it stays the Cancel baseline.
+Save compares outputOnWrite NVs with their edited value, so it skips them.
+Test rewrites the confirmed value with the same one-NV run, in or out of Edit,
+but only when no other edit session, write or discovery is active. These runs
+pass `refresh_events=False`: they verify the write and read MDF-linked NVs, but
+skip the stored event/EV refresh. On the CANMIO rig the module dropped an EV read
+while moving its servo, failing an otherwise verified Test. Normal Save keeps the
+refresh. Failures are shown on the NV tab; there is no failure report or Retry.
+
+```text
+Edit: outputOnWrite NV changed -> NvSave {nv} -> verified: keep editing
+                                              -> failed: show error, draft = hardware
+Save   -> NvSave ordinary edits only (outputOnWrite skipped)
+Cancel -> any outputOnWrite NV differs from original?
+            no  -> discard draft
+            yes -> NvSave {nv: original} -> close session, show restored / failure
+Test   -> NvSave {nv: confirmed value} (pre-edit unknown forces the write)
+(all of the above except Save: no stored event/EV refresh)
+```
+
 While `NvSave` or `EventSave` owns the operation, `NodeView` skips intermediate presentation and
 the selection-suspension/completion sweep. Completion updates the existing NV and
 event views without navigator MDF lookups. `NvWrite.write_finished` and

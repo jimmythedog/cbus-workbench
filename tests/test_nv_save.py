@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QListWidgetItem
+from PySide6.QtWidgets import QApplication, QListWidgetItem, QPushButton
 from test_nv_write import Connection
 
 from workbench.cbus_service import CbusService, DiscoveryProgress, NodeState
@@ -480,6 +480,147 @@ class NvSaveTests(unittest.TestCase):
         self.service.restore.begin(258, node_backup(self.state))
         self.assertFalse(report.dialog.retry_button.isEnabled())
         self.assertIn("replaced this request", report.dialog.retry_status.text())
+
+    def output_view(self):
+        """Edit session with ordinary NV1 = 10 and MDF outputOnWrite NV3."""
+        self.mdf = {
+            "nodeVariables": [
+                {
+                    "type": "NodeVariableSlider",
+                    "nodeVariableIndex": 3,
+                    "displayTitle": "Servo",
+                    "outputOnWrite": True,
+                }
+            ]
+        }
+        view, _item = self.editing_view()
+        return view.details
+
+    def test_output_nv_writes_immediately_and_save_writes_only_ordinary_nvs(self):
+        self.consumer()
+        details = self.output_view()
+        details.raw_values.item(2, 1).setText("20")
+        self.app.processEvents()
+        self.assertEqual(self.payloads(), ["9601020314"])
+        self.verified(3, 20)
+        self.app.processEvents()
+        # Driving the output does not refresh stored events.
+        self.assertEqual(self.payloads(), ["9601020314", "71010203"])
+        self.assertEqual(details.editing_session, "nvs")
+        self.assertIn("NV 3 written", details.nv_result.text())
+        details.save_button.click()
+        self.app.processEvents()
+        self.verified(1, 10)
+        self.app.processEvents()
+        self.answer_events()  # Normal Save still refreshes them.
+        self.assertEqual(
+            self.payloads()[:4], ["9601020314", "71010203", "960102010A", "71010201"]
+        )
+        self.assertIsNone(details.desired_configuration)
+        self.assertIn("saved successfully", details.nv_result.text())
+        self.assertEqual(self.state.nv_values, {1: 10, 2: 8, 3: 20})
+
+    def test_cancel_restores_written_output_nv_and_discards_ordinary_edits(self):
+        details = self.output_view()
+        details.raw_values.item(2, 1).setText("20")
+        self.app.processEvents()
+        self.verified(3, 20)
+        self.app.processEvents()
+        details.cancel_button.click()
+        self.app.processEvents()
+        self.assertEqual(self.payloads()[-1], "9601020309")
+        self.assertEqual(details.editing_session, "nvs")  # until verified
+        self.verified(3, 9)
+        self.app.processEvents()
+        self.assertIsNone(details.desired_configuration)
+        self.assertIn("Original NV 3 value restored", details.nv_result.text())
+        self.assertEqual(self.state.nv_values, {1: 7, 2: 8, 3: 9})
+        self.assertNotIn("960102010A", self.payloads())
+
+    def test_test_button_rewrites_confirmed_value_in_view_and_edit_modes(self):
+        details = self.output_view()
+        details.cancel_button.click()  # No output NV changed: nothing to write.
+        self.assertEqual(self.payloads(), [])
+        details.mdf_values.set_definition(self.mdf)
+        details.show_nv_values()
+        (test,) = [
+            button
+            for button in details.mdf_values.findChildren(QPushButton)
+            if button.text() == "Test"
+        ]
+        for start_editing in (False, True):
+            if start_editing:
+                details.start_editing()
+            self.assertTrue(test.isEnabled())
+            test.click()
+            self.app.processEvents()
+            self.assertEqual(self.payloads()[-1], "9601020309")
+            self.verified(3, 9)
+            self.app.processEvents()
+            self.assertIn("NV 3 tested", details.nv_result.text())
+        self.assertEqual(details.editing_session, "nvs")
+        self.assertEqual(self.state.nv_values, {1: 7, 2: 8, 3: 9})
+
+    def test_failed_output_write_is_reported_and_shows_actual_value(self):
+        details = self.output_view()
+        details.raw_values.item(2, 1).setText("20")
+        self.app.processEvents()
+        self.verified(3, 11)
+        self.app.processEvents()
+        self.assertIn("NV 3 could not be written", details.nv_result.text())
+        self.assertNotIn("Partial Save", details.nv_result.text())
+        self.assertIn("readback was 11", details.nv_result.text())
+        self.assertEqual(details.editing_session, "nvs")
+        self.assertEqual(details.desired_configuration["nvs"], [10, 8, 11])
+        self.assertEqual(details.raw_values.item(2, 1).text(), "11")
+
+    def test_failed_cancel_restore_is_reported(self):
+        details = self.output_view()
+        details.raw_values.item(2, 1).setText("20")
+        self.app.processEvents()
+        self.verified(3, 20)
+        self.app.processEvents()
+        details.cancel_button.click()
+        self.app.processEvents()
+        self.verified(3, 20)
+        self.app.processEvents()
+        self.assertIsNone(details.desired_configuration)
+        self.assertIn(
+            "Cancel could not restore the original NV 3 value",
+            details.nv_result.text(),
+        )
+        self.assertEqual(self.state.nv_values[3], 20)
+
+    def test_test_is_refused_during_events_editing(self):
+        details = self.output_view()
+        details.cancel_button.click()
+        details.mdf_values.set_definition(self.mdf)
+        details.show_nv_values()
+        details.start_events_editing()
+        (test,) = [
+            button
+            for button in details.mdf_values.findChildren(QPushButton)
+            if button.text() == "Test"
+        ]
+        test.click()
+        self.app.processEvents()
+        self.assertEqual(self.payloads(), [])
+        self.assertIn("Test is unavailable", details.nv_result.text())
+        self.assertEqual(details.editing_session, "events")
+
+    def test_disconnect_reports_output_nv_left_at_edited_value(self):
+        details = self.output_view()
+        details.raw_values.item(2, 1).setText("20")
+        self.app.processEvents()
+        self.verified(3, 20)
+        self.app.processEvents()
+        details.connected = False
+        details.update_connection_details()
+        self.assertIsNone(details.desired_configuration)
+        self.assertIn(
+            "NV 3 had already been written and still holds the edited value",
+            details.nv_result.text(),
+        )
 
 
 if __name__ == "__main__":

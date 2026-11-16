@@ -136,6 +136,8 @@ def add_ev_controls(
             }
             normalized.pop("eventVariableIndex")
             normalized.pop("visibilityLogic", None)
+            # Immediate output writes and Test are NV behaviour only (#139).
+            normalized.pop("outputOnWrite", None)
             if definition["type"] == "EventVariableSelect":
                 options = []
                 for option in definition["options"]:

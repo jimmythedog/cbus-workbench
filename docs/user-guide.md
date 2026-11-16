@@ -356,6 +356,17 @@ Annotations are skipped; template labels are displayed literally without substit
 4. Choose **Save** or **Cancel** on **Node Variables**. Cancel discards the
    NV draft without writing. Events actions cannot save or discard this draft.
 
+Some MDF settings, such as servo positions, are marked `outputOnWrite`: the
+node moves its output whenever the value is written. While editing, a change to
+one of these is written to the node immediately, so you can see the effect.
+Save keeps that value without writing it again. Cancel writes the original value
+back; if that fails, the message says so and the node may still hold the edited
+value. These rows have a **Test** button, available in and out of Edit, that
+writes the current value again to repeat the output. Test is refused while
+another edit, write or discovery is in progress. Each of these writes is verified
+by readback, but stored events are not refreshed afterwards. Normal Save still
+refreshes them.
+
 The active editor is locked during Save. Progress and the final result appear
 on its tab. NV Save compares values in ascending NV order and writes only
 explicit changes. Each write requires WRACK followed by matching NV readback.

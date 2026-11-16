@@ -31,7 +31,12 @@ from .node_details_form import NodeDetailsForm
 from .node_events import NodeEvents
 from .node_failure_report import NodeFailureReport
 from .node_name_edit import NodeNameEditor
-from .node_variables import PROTOTYPE_MDF, MdfNodeVariables, RawNodeVariables
+from .node_variables import (
+    PROTOTYPE_MDF,
+    MdfNodeVariables,
+    RawNodeVariables,
+    output_on_write_nvs,
+)
 from .pnn import Pnn
 from .token_label_edit import TokenLabelEditor
 
@@ -61,6 +66,8 @@ class NodeDetails(QWidget):
         self.failure_report = None
         self.saving_configuration = False
         self.saving_nvs = False
+        # (kind, NV indices) while an outputOnWrite change, Cancel or Test writes.
+        self.output_write = None
         self.layout_restoring = False
 
         layout = QVBoxLayout(self)
@@ -112,6 +119,9 @@ class NodeDetails(QWidget):
         self.mdf_values.set_editing(False)
         self.raw_values.value_changed.connect(self.refresh_configuration_views)
         self.mdf_values.value_changed.connect(self.refresh_configuration_views)
+        self.raw_values.value_changed.connect(self.write_changed_outputs)
+        self.mdf_values.value_changed.connect(self.write_changed_outputs)
+        self.mdf_values.test_requested.connect(self.test_output)
 
         self.variables = QStackedWidget()
         self.variables.addWidget(self.raw_values)
@@ -296,10 +306,16 @@ class NodeDetails(QWidget):
         )
         try:
             if self.saving_nvs:
+                # outputOnWrite NVs were written as they changed. Comparing them
+                # with their edited value makes Save skip them; the original
+                # configuration stays untouched for Cancel.
+                pre_edit = list(self.original_configuration["nvs"])
+                for index in self.output_indices():
+                    pre_edit[index - 1] = self.desired_configuration["nvs"][index - 1]
                 self.cbus_service.nv_save.begin(
                     number,
                     self.desired_configuration,
-                    pre_edit=self.original_configuration["nvs"],
+                    pre_edit=pre_edit,
                     mdf=self.live_mdf.data if self.live_mdf else None,
                 )
             else:
@@ -434,9 +450,153 @@ class NodeDetails(QWidget):
             current.setText(label)
 
     def cancel_editing(self):
-        if self.editing_session != "nvs":
+        if self.editing_session != "nvs" or self.saving_configuration:
             return
-        self.cancel_configuration()
+        # Ordinary edits are only discarded; outputOnWrite NVs already written
+        # must have their pre-edit hardware value written back.
+        hardware = self.live_state.nv_values
+        original = self.original_configuration["nvs"]
+        restore = {
+            index: original[index - 1]
+            for index in self.output_indices()
+            if hardware.get(index) is not None
+            and hardware[index] != original[index - 1]
+        }
+        if restore:
+            self.write_outputs("cancel", restore)
+        else:
+            self.cancel_configuration()
+
+    def output_indices(self) -> list[int]:
+        """outputOnWrite NVs the selected node actually has."""
+        count = self.live_state.parameters.get(6) or 0
+        return sorted(
+            index
+            for index in output_on_write_nvs(
+                self.live_mdf.data if self.live_mdf else None
+            )
+            if index <= count
+        )
+
+    def write_changed_outputs(self):
+        """Write an edited outputOnWrite NV immediately; Save will skip it."""
+        if self.editing_session != "nvs" or self.saving_configuration:
+            return
+        hardware = self.live_state.nv_values
+        for index in self.output_indices():
+            value = self.desired_configuration["nvs"][index - 1]
+            if hardware.get(index) is not None and value != hardware[index]:
+                self.write_outputs("change", {index: value})
+                return
+
+    def test_output(self, index: int):
+        """Write the confirmed value again so the node drives its output."""
+        service = self.cbus_service
+        # Test must not interleave with, or unlock the UI during, another
+        # edit session, Save, Restore or discovery.
+        if (
+            self.editing_session not in (None, "nvs")
+            or self.node_events.editing_values is not None
+            or self.saving_configuration
+            or self.output_write is not None
+            or self.layout_restoring
+            or service is None
+            or service.writes_busy()
+            or service.discovery_pending()
+        ):
+            self.nv_result.setText(
+                "Test is unavailable while another edit, write or discovery is in progress."
+            )
+            return
+        value = self.live_state.nv_values.get(index)
+        if value is not None:
+            self.write_outputs("test", {index: value})
+
+    def write_outputs(self, kind: str, values: dict[int, int]):
+        """Write outputOnWrite NVs now through the existing verified NV Save."""
+        state = self.live_state
+        number = state.identity.node_number
+        backup = node_backup(state)
+        pre_edit = list(backup["nvs"])
+        for index, value in values.items():
+            backup["nvs"][index - 1] = value
+            # NV Save skips values matching the pre-edit one. Unknown forces the
+            # write, which Test needs because it rewrites an unchanged value.
+            pre_edit[index - 1] = None
+        self.output_write = (kind, sorted(values))
+        trace(
+            logger,
+            "Writing outputOnWrite NVs",
+            extra={"fields": {"node_number": number, "kind": kind, "values": values}},
+        )
+        if self.editing_session == "nvs":
+            self.set_configuration_saving(True)
+        else:
+            self.variables.setEnabled(False)
+            self.edit_button.setEnabled(False)
+            self.editing_changed.emit(True)
+        self.show_configuration_result(f"Writing NV {', '.join(map(str, values))}…")
+        try:
+            self.cbus_service.nv_save.begin(
+                number,
+                backup,
+                pre_edit=pre_edit,
+                user_edited={index - 1 for index in values},
+                mdf=self.live_mdf.data if self.live_mdf else None,
+                # Writing these NVs drives the output; the module may be busy
+                # (and was seen to drop an EV read) while it does so. Stored
+                # events are not refreshed for these writes; normal Save still does.
+                refresh_events=False,
+            )
+        except ValueError as error:
+            self.finish_output_write(number, False, str(error))
+
+    def finish_output_write(self, number: int, success: bool, message: str):
+        kind, indices = self.output_write
+        self.output_write = None
+        trace(
+            logger,
+            "outputOnWrite NV write finished",
+            extra={
+                "fields": {
+                    "node_number": number,
+                    "kind": kind,
+                    "nv_indices": indices,
+                    "success": success,
+                    "result": message,
+                }
+            },
+        )
+        names = f"NV {', '.join(map(str, indices))}"
+        if self.editing_session == "nvs":
+            self.set_configuration_saving(False)
+        else:
+            self.variables.setEnabled(True)
+            self.editing_changed.emit(False)
+            self.edit_button.setEnabled(self.can_edit_configuration())
+        if kind == "cancel":
+            # Close the session either way; a failed restore stays visible.
+            self.cancel_configuration()
+            self.show_configuration_result(
+                f"Node {number}: Original {names} value restored."
+                if success
+                else f"Node {number}: Cancel could not restore the original "
+                f"{names} value; the node may still hold the edited value. {message}"
+            )
+            return
+        if not success and kind == "change" and self.desired_configuration:
+            # Show what the node holds now rather than an unwritten edit.
+            for index in indices:
+                actual = self.live_state.nv_values.get(index)
+                if actual is not None:
+                    self.desired_configuration["nvs"][index - 1] = actual
+            self.refresh_configuration_views()
+        action = "tested" if kind == "test" else "written"
+        self.show_configuration_result(
+            f"Node {number}: {names} {action}."
+            if success
+            else f"Node {number}: {names} could not be {action}. {message}"
+        )
 
     def cancel_configuration(self):
         if self.saving_configuration:
@@ -764,9 +924,21 @@ class NodeDetails(QWidget):
             and self.desired_configuration is not None
             and not self.saving_configuration
         ):
+            written = [
+                index
+                for index in (
+                    self.output_indices() if self.editing_session == "nvs" else []
+                )
+                if self.live_state.nv_values.get(index)
+                != self.original_configuration["nvs"][index - 1]
+            ]
             self.cancel_configuration()
             message = (
                 "Connection ended; node configuration edits discarded without writing."
+                if not written
+                else "Connection ended; node configuration edits discarded. "
+                f"NV {', '.join(map(str, written))} had already been written and "
+                "still holds the edited value."
             )
             self.nv_result.setText(message)
             self.events_result.setText(message)
@@ -969,6 +1141,9 @@ class NodeDetails(QWidget):
             self.backup_workflow.restore(self.node)
 
     def show_restore_progress(self, node_number: int, message: str) -> None:
+        if self.output_write is not None:
+            self.show_configuration_result(message.replace("Saving ", "Writing "))
+            return
         if self.layout_restoring:
             return
         self.update_backup_buttons()
@@ -989,6 +1164,14 @@ class NodeDetails(QWidget):
         self.update_membership_actions()
 
     def finish_restore(self, node_number: int, success: bool, message: str) -> None:
+        if self.output_write is not None:
+            # NV Save words its failures as a partial Save; report the reason.
+            if not success:
+                message = self.cbus_service.nv_save.failure_reason
+                for index in self.output_write[1]:
+                    message = message.removeprefix(f"NV {index} could not be saved. ")
+            self.finish_output_write(node_number, success, message)
+            return
         if self.layout_restoring:
             return
         saving = self.saving_configuration
