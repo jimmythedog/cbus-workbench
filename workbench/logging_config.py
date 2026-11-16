@@ -55,7 +55,12 @@ def configure_logging(level: int | None = None) -> Path:
     path = directory / "cbus-workbench.log"
 
     handler = RotatingFileHandler(
-        path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        # Nine backups: each run rolls over at startup, so this keeps the last several
+        # runs (the failing one may be a few restarts back). Worst case is 50 MiB.
+        path,
+        maxBytes=5 * 1024 * 1024,
+        backupCount=9,
+        encoding="utf-8",
     )
     handler.setFormatter(
         _PlainTextFormatter(
@@ -63,6 +68,15 @@ def configure_logging(level: int | None = None) -> Path:
             datefmt="%Y-%m-%d %H:%M:%S",
         )
     )
+    # Start each run in a fresh file so it is easy to find; the previous run, often
+    # the one that failed, moves to .1 rather than being deleted. If renaming fails
+    # (e.g. another instance has the file open on Windows), keep appending.
+    rollover_error = None
+    if path.stat().st_size > 0:
+        try:
+            handler.doRollover()
+        except OSError as error:
+            rollover_error = error
 
     if level is None:
         level = logging.INFO if getattr(sys, "frozen", False) else TRACE
@@ -73,6 +87,11 @@ def configure_logging(level: int | None = None) -> Path:
     logger.addHandler(handler)
     logger.propagate = False
     _log_path = path
+    if rollover_error is not None:
+        logger.warning(
+            "Could not start a new log file; appending to the existing one",
+            extra={"fields": {"error": str(rollover_error)}},
+        )
 
     # A native crash (e.g. a segfault in Qt or the serial driver) bypasses Python
     # exception handling, so faulthandler dumps every thread's stack instead. It
