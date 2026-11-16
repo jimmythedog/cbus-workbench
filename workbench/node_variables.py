@@ -402,6 +402,9 @@ class MdfSettings(QScrollArea):
     ):
         super().__init__()
         self.rows = []
+        self.page = f"{panel_title} ({panel_number})"
+        # Set by the owner so refresh summaries identify the node being shown.
+        self.node_number = None
         self.token_editor = token_editor
         self.editing = False
         self.allow_undefined = allow_undefined
@@ -418,7 +421,7 @@ class MdfSettings(QScrollArea):
         self.test_buttons = {}
         self.add_items(
             definitions,
-            f"{panel_title} ({panel_number})",
+            self.page,
             layout,
             parent_conditions,
             source_definitions,
@@ -740,6 +743,7 @@ class MdfSettings(QScrollArea):
         self.values = values
         self.nv_values = nv_values
         self.ev_values = ev_values
+        counts = {"visible": 0, "hidden": 0, "unknown": 0}
         for definition, control, conditions in self.rows:
             blocked = control.blockSignals(True)
             if definition["type"] == "NodeVariableDual":
@@ -826,22 +830,12 @@ class MdfSettings(QScrollArea):
                 # Test rewrites the confirmed value, so it works outside Edit too.
                 test.setEnabled(value is not None and not visibility_message)
             control.blockSignals(blocked)
-            trace(
-                logger,
-                "MDF row nv=%s value=%s visible=%s label=%s reason=%s conditions=%s",
-                definition.get(
-                    "nodeVariableIndex",
-                    (
-                        definition.get("nodeVariableIndexHigh"),
-                        definition.get("nodeVariableIndexLow"),
-                    ),
-                ),
-                value,
-                visible,
-                control.text() if isinstance(control, QCheckBox) else "",
-                control.toolTip(),
-                conditions,
-            )
+            if not visible:
+                counts["hidden"] += 1
+            elif visibility_message:
+                counts["unknown"] += 1
+            else:
+                counts["visible"] += 1
 
         # Keep the array title beside its first visible bit as modes change.
         for title, controls in self.bit_arrays:
@@ -863,7 +857,16 @@ class MdfSettings(QScrollArea):
         for group, children in self.group_rows:
             visible = any(not child.isHidden() for child in children)
             group.parentWidget().layout().setRowVisible(group, visible)
-            trace(logger, "MDF group title=%s visible=%s", group.title(), visible)
+        # One summary per refresh: per-row detail would flood TRACE (#149).
+        trace(
+            logger,
+            "MDF page refreshed node=%s page=%s visible=%s hidden=%s unknown_visibility=%s",
+            self.node_number,
+            self.page,
+            counts["visible"],
+            counts["hidden"],
+            counts["unknown"],
+        )
 
 
 class PlainSplitterHandle(QSplitterHandle):
@@ -934,6 +937,7 @@ class MdfNodeVariables(QSplitter):
     def __init__(self, definition=None):
         super().__init__(Qt.Orientation.Horizontal)
         self.node = None
+        self.node_number = None
         self.values = None
         self.navigation = QListWidget()
         self.pages = QStackedWidget()
@@ -1011,23 +1015,23 @@ class MdfNodeVariables(QSplitter):
             form.test_requested.connect(self.test_requested)
         self.definition = definition
 
-    def show_live_values(self, count, values):
+    def show_live_values(self, count, values, node_number=None):
         """Read the service's confirmed dictionary directly, including absent NVs."""
         self.set_editing(False)
         self.values = values
+        self.node_number = node_number
         self.live_mode = True
         self.live_count = count
         self.raw_values.show_live_values(count, values)
-        for index in range(1, self.pages.count()):
-            self.pages.widget(index).show_values(values)
+        self.show_pages()
 
     def show_node(self, node, values=None):
         self.live_mode = False
         self.node = node
+        self.node_number = node.number
         self.values = values if values is not None else node.nv_values
         self.raw_values.show_node(node, self.values)
-        for index in range(1, self.pages.count()):
-            self.pages.widget(index).show_values(self.values)
+        self.show_pages()
         trace(logger, "Displayed prototype MDF node=%s", node.number)
 
     def refresh_raw_values(self, index):
@@ -1040,7 +1044,7 @@ class MdfNodeVariables(QSplitter):
             else:
                 self.raw_values.show_node(self.node, self.values)
         else:
-            self.pages.widget(index).show_values(self.values)
+            self.show_page(index)
 
     def update_value(self, index, value):
         if self.live_mode:
@@ -1052,8 +1056,16 @@ class MdfNodeVariables(QSplitter):
         if self.values is None or self.live_mode:
             return
         self.raw_values.refresh_values()
+        self.show_pages()
+
+    def show_pages(self):
         for index in range(1, self.pages.count()):
-            self.pages.widget(index).show_values(self.values)
+            self.show_page(index)
+
+    def show_page(self, index):
+        page = self.pages.widget(index)
+        page.node_number = self.node_number
+        page.show_values(self.values)
 
     def set_editing(self, editing):
         self.raw_values.set_editing(editing)

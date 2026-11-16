@@ -425,7 +425,7 @@ class NodeDetails(QWidget):
                 token_editor=self.token_label_editor,
             )
             # Unknown hardware bytes stay blank/read-only; the labels are local.
-            self.mdf_values.show_live_values(None, {})
+            self.mdf_values.show_live_values(None, {}, self.node)
             self.variables.setCurrentIndex(
                 1 if self.mdf_values.pages.count() > 1 else 0
             )
@@ -814,7 +814,9 @@ class NodeDetails(QWidget):
         """Both raw tables and MDF forms read the same confirmed live dictionary."""
         state = self.live_state
         self.raw_values.show_live_values(state.parameters.get(6), state.nv_values)
-        self.mdf_values.show_live_values(state.parameters.get(6), state.nv_values)
+        self.mdf_values.show_live_values(
+            state.parameters.get(6), state.nv_values, state.identity.node_number
+        )
 
     def show_node(self, current):
         if self.node_events.editing_values is not None:

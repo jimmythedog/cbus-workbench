@@ -160,6 +160,9 @@ def add_ev_controls(
                 token_editor=token_editor,
                 allow_undefined=True,
             )
+            settings.node_number = node_number
+            # Several events can share an EV index, so name the event too.
+            settings.page = f"event {event.text(0)} EV {index}"
             contents = settings.takeWidget()
             # Keep full form labels inside the value column, beside their controls.
             layout = contents.layout()

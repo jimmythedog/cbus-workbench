@@ -8,8 +8,6 @@ not a general JSON Logic implementation. Slot conditions are not supported.
 import logging
 
 logger = logging.getLogger(__name__)
-# Match logging_config.TRACE without importing its Qt-dependent paths module.
-_TRACE = 5
 _COMPARISONS = {"==", "!=", ">", "<=", "in"}
 _ACCESSORS = {"NV", "EV", "NVbit", "EVbit"}
 
@@ -29,16 +27,13 @@ def evaluate_visibility(
     so unsupported syntax cannot be concealed by short-circuit evaluation.
     No values or expressions are modified.
     """
-    logger.log(_TRACE, "Evaluate MDF visibility condition=%r", condition)
     try:
-        result = _condition(condition, nv_values, ev_values)
+        return _condition(condition, nv_values, ev_values)
     except MdfVisibilityError:
         logger.exception(
             "Invalid or unsupported MDF visibility condition=%r", condition
         )
         raise
-    logger.log(_TRACE, "MDF visibility result=%r condition=%r", result, condition)
-    return result
 
 
 def _condition(condition, nv_values, ev_values):
@@ -92,25 +87,12 @@ def _operand(operand, nv_values, ev_values):
     values = nv_values if accessor in ("NV", "NVbit") else ev_values
     value = values.get(index)
     if value is None:
-        logger.log(
-            _TRACE, "MDF visibility value unread accessor=%s index=%s", accessor, index
-        )
         return None
     if type(value) is not int or not 0 <= value <= 255:
         raise MdfVisibilityError(
             f"{accessor} index {index} must contain a byte or None"
         )
-    result = value if bit is None else (value >> bit) & 1
-    logger.log(
-        _TRACE,
-        "MDF visibility value accessor=%s index=%s bit=%s byte=%s result=%s",
-        accessor,
-        index,
-        bit,
-        value,
-        result,
-    )
-    return result
+    return value if bit is None else (value >> bit) & 1
 
 
 def _expression(expression, nv_values, ev_values):
@@ -125,19 +107,10 @@ def _expression(expression, nv_values, ev_values):
         # Use identity checks: None must never behave like False.
         decisive = operator == "or"
         if any(result is decisive for result in results):
-            result = decisive
-        elif any(result is None for result in results):
-            result = None
-        else:
-            result = not decisive
-        logger.log(
-            _TRACE,
-            "MDF visibility operator=%s children=%r result=%r",
-            operator,
-            results,
-            result,
-        )
-        return result
+            return decisive
+        if any(result is None for result in results):
+            return None
+        return not decisive
     if operator not in _COMPARISONS:
         raise MdfVisibilityError(f"Unsupported JLL operator: {operator}")
     if not isinstance(arguments, list) or len(arguments) != 2:
