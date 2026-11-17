@@ -405,6 +405,10 @@ class LayoutRestoreWorkflowTests(unittest.TestCase):
             send(frame)
             self.assertIsNone(view.node_list.currentItem())
             self.assertFalse(view.node_list.isEnabled())
+            # The whole window is disabled, so busy state is shown app-wide.
+            self.assertEqual(
+                QApplication.overrideCursor().shape(), Qt.CursorShape.WaitCursor
+            )
             data = bytes.fromhex(frame.decode().split("N")[1][:-1])
             opcode = data[0]
             if opcode == 0x73:
@@ -435,6 +439,8 @@ class LayoutRestoreWorkflowTests(unittest.TestCase):
         def before_retry():
             self.assertEqual(writes, [(1, 4), (2, 5)])
             self.assertIn(("NV 2", "5", "8"), self.reports[-1])
+            # The report asks for input, so it must not show the wait cursor.
+            self.assertIsNone(QApplication.overrideCursor())
             # Deliberately stale cache: fresh hardware must determine Retry writes.
             state.nv_values = {1: 99, 2: 5}
 
@@ -445,6 +451,7 @@ class LayoutRestoreWorkflowTests(unittest.TestCase):
         self.assertIsNotNone(view.node_list.currentItem())
         self.assertTrue(view.node_list.isEnabled())
         self.assertEqual(view.details.raw_values.item(0, 1).text(), "4")
+        self.assertIsNone(QApplication.overrideCursor())
         self.assertEqual(writes, [(1, 4), (2, 5), (2, 5)])
         self.assertEqual(hardware, {1: 4, 2: 5})
         self.assertEqual(self.desired, original)

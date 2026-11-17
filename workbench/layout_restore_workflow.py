@@ -2,8 +2,8 @@
 
 import logging
 
-from PySide6.QtCore import QEventLoop
-from PySide6.QtWidgets import QDialog, QMessageBox
+from PySide6.QtCore import QEventLoop, Qt
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from .layout_backup_compare import LayoutBackupCompare
 from .logging_config import trace
@@ -287,6 +287,9 @@ class LayoutRestoreWorkflow:
         window = self.parent.window()
         was_enabled = window.isEnabled()
         window.setEnabled(False)
+        # Qt shows no widget cursor over a disabled window, so the layout's own
+        # discovery cursor is invisible here. No dialog opens before `finally`.
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         details = self.parent.node_view.details
         details.layout_restoring = True
         try:
@@ -307,4 +310,5 @@ class LayoutRestoreWorkflow:
         finally:
             details.layout_restoring = False
             details.update_backup_buttons()
+            QApplication.restoreOverrideCursor()
             window.setEnabled(was_enabled)

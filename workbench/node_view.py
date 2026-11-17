@@ -1,7 +1,7 @@
 import logging
 from collections.abc import Callable
 
-from PySide6.QtCore import QSignalBlocker, Qt
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
@@ -40,6 +40,9 @@ class NodeListItem(QListWidgetItem):
 
 
 class NodeView(QSplitter):
+    # Emitted only when node selection is suspended for, or resumed after, discovery.
+    discovering_changed = Signal(bool)
+
     def __init__(self, events):
         super().__init__(Qt.Orientation.Horizontal)
 
@@ -209,6 +212,7 @@ class NodeView(QSplitter):
         with QSignalBlocker(self.node_list):
             self.node_list.setCurrentItem(None)
         self.node_list.setEnabled(False)
+        self.discovering_changed.emit(True)
         trace(
             logger,
             "Node selection suspended for discovery",
@@ -221,6 +225,7 @@ class NodeView(QSplitter):
             return
         self.discovering = False
         self.node_list.setEnabled(not self.editing)
+        self.discovering_changed.emit(False)
         selected = None
         if status != DiscoveryStatus.DISCONNECTED:
             for index in range(self.node_list.count()):

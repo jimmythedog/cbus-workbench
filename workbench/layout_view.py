@@ -28,8 +28,11 @@ from .layout_events import LayoutEvents
 from .layout_restore_dialog import LayoutRestoreDialog
 from .layout_restore_selection import LayoutRestoreSelection
 from .layout_restore_workflow import LayoutRestoreWorkflow
+from .logging_config import trace
 from .node_snapshot import create_node_snapshot, restore_node_snapshot
 from .node_view import NodeView, node_number
+
+logger = logging.getLogger("workbench.ui")
 
 
 class LayoutSummaryLabel(QLabel):
@@ -50,6 +53,7 @@ class LayoutView(QWidget):
         self.connected = False
         self.logical_layout = None
         self.discovery_states = list
+        self.tab_before_discovery = 0
 
         layout = QVBoxLayout(self)
 
@@ -122,6 +126,7 @@ class LayoutView(QWidget):
         layout.addWidget(self.tabs)
 
         self.node_view.details.editing_changed.connect(self.on_editing_changed)
+        self.node_view.discovering_changed.connect(self.on_discovering_changed)
         self.tabs.currentChanged.connect(self.on_tab_changed)
         self.update_backup_buttons()
 
@@ -205,7 +210,12 @@ class LayoutView(QWidget):
     def on_tab_changed(self, index):
         if index == self.tabs.indexOf(self.backups_page) and self.logical_layout:
             self.layout_backups.show_live_layout(self.logical_layout)
-        if index == self.tabs.indexOf(self.node_view):
+        # finish_discovery() restores selection; a suspended (empty) selection
+        # must not blank the details when a disabled tab returns focus to Nodes.
+        if (
+            index == self.tabs.indexOf(self.node_view)
+            and not self.node_view.discovering
+        ):
             self.node_view.show_selected_node(self.node_view.node_list.currentItem())
 
     def teach_event(self, number, identity):
@@ -219,9 +229,39 @@ class LayoutView(QWidget):
                 break
         self.node_view.details.start_new_event(number, identity)
 
-    def on_editing_changed(self, editing):
-        self.tabs.setTabEnabled(self.tabs.indexOf(self.layout_events), not editing)
-        self.tabs.setTabEnabled(self.tabs.indexOf(self.backups_page), not editing)
+    def on_editing_changed(self, _editing):
+        self.update_tab_availability()
+
+    def on_discovering_changed(self, discovering):
+        """Show this layout as busy while its node selection is suspended."""
+        # A widget cursor (not an application override) is scoped to this layout,
+        # so other layouts, menus and Disconnect stay usable and nothing can leak.
+        if discovering:
+            # Disabling the current tab makes Qt move to Nodes; return afterwards.
+            self.tab_before_discovery = self.tabs.currentIndex()
+            self.setCursor(Qt.CursorShape.WaitCursor)
+        else:
+            self.unsetCursor()
+        self.update_tab_availability()
+        if not discovering and self.tabs.isTabEnabled(self.tab_before_discovery):
+            self.tabs.setCurrentIndex(self.tab_before_discovery)
+        trace(
+            logger,
+            "Layout busy cursor changed",
+            extra={
+                "fields": {
+                    "layout": self.logical_layout,
+                    "discovering": discovering,
+                    "tab": self.tabs.currentIndex(),
+                }
+            },
+        )
+
+    def update_tab_availability(self):
+        # Events (Teach) and Backups would navigate or read nodes mid-discovery.
+        available = not (self.node_view.editing or self.node_view.discovering)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.layout_events), available)
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.backups_page), available)
 
     def update_backup_buttons(self):
         selected = bool(self.layout_backups.selectedItems())

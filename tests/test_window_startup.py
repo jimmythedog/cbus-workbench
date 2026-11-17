@@ -359,6 +359,13 @@ class WindowStartupTests(unittest.TestCase):
                     view.layout_events.table.topLevelItem(0).text(0), "258:45"
                 )
 
+    def assert_layout_busy(self, view, busy):
+        """Discovery shows a wait cursor and blocks navigation away from Nodes."""
+        expected = Qt.CursorShape.WaitCursor if busy else Qt.CursorShape.ArrowCursor
+        self.assertEqual(view.cursor().shape(), expected)
+        for page in (view.layout_events, view.backups_page):
+            self.assertEqual(view.tabs.isTabEnabled(view.tabs.indexOf(page)), not busy)
+
     def test_discovery_status_tracks_selected_connection_and_reconnect(self):
         settings = sample_settings()
         # Two connections can refer to the same logical layout.
@@ -371,10 +378,17 @@ class WindowStartupTests(unittest.TestCase):
             patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 30),
         ):
             window = self.open_window()
+            view = window.layouts["Home"]
+            view.tabs.setCurrentWidget(view.backups_page)
             window.connect_layout()
             self.assertEqual(window.discovery_status.text(), "Discovering…")
+            self.assert_layout_busy(view, True)
+            self.assertIs(view.tabs.currentWidget(), view.node_view)
             QTest.qWait(60)
             self.assertEqual(window.discovery_status.text(), "Incomplete")
+            self.assert_layout_busy(view, False)
+            # The user returns to the page they were on before discovery.
+            self.assertIs(view.tabs.currentWidget(), view.backups_page)
             actions = window.layout_group.actions()
             actions[1].trigger()
             self.assertTrue(window.discovery_status.isHidden())
@@ -392,8 +406,16 @@ class WindowStartupTests(unittest.TestCase):
             self.assertFalse(window.discovery_status.isHidden())
             self.assertFalse(window.discovery_separator.isHidden())
             self.assertEqual(window.discovery_status.text(), "Discovering…")
+            self.assert_layout_busy(view, True)
+            # Disconnecting aborts discovery and must release the busy state.
+            QTest.mouseDClick(window.connection_status, Qt.MouseButton.LeftButton)
+            self.assertEqual(window.connection_status.text(), "Disconnected")
+            self.assert_layout_busy(view, False)
+            QTest.mouseDClick(window.connection_status, Qt.MouseButton.LeftButton)
+            self.assertEqual(window.discovery_status.text(), "Discovering…")
             QTest.qWait(60)
             self.assertEqual(window.discovery_status.text(), "Incomplete")
+            self.assert_layout_busy(view, False)
 
     def test_status_bar_orders_separate_fields_and_shows_ready(self):
         settings = sample_settings()
