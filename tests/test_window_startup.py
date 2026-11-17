@@ -1127,47 +1127,67 @@ class WindowStartupTests(unittest.TestCase):
         self.assertEqual(details.firmware.text(), "3d")
         self.assertEqual(details.event_count.text(), "0")
 
-    def test_live_nv_count_and_progressive_values_keep_selection_and_rows(self):
+    def test_live_nvs_load_when_their_tab_opens_and_keep_selection_and_rows(self):
         self.save_startup_layouts([("Default", "TCP/IP", True)])
-        window = self.start_with_recording_connections()
-        connection = window.connections["Default"]
-        view = window.layouts["Default"].node_view
-        connection.frame_received.emit(b":SB040NB601020D2203;")
-        window.cbus_services["Default"].discovery_status_changed.emit(
-            "Discovery incomplete"
-        )
-        selected = view.node_list.currentItem()
-        details = view.details
-        table = details.raw_values
-        # Finish parameter discovery so these NVANS answer actual queued reads.
-        connection.frame_received.emit(b":SB040N9B01020006;")
-        for index in (2, 4, 5):
-            connection.frame_received.emit(f":SB040N9B0102{index:02X}00;".encode())
-        connection.frame_received.emit(b":SB040N9B01020603;")
-        connection.frame_received.emit(b":SB040N9B010201A5;")
-        connection.frame_received.emit(b":SB040N9B01020320;")
+        # A short QNN quiet window lets discovery finish within the test.
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 30):
+            window = self.start_with_recording_connections()
+            connection = window.connections["Default"]
+            view = window.layouts["Default"].node_view
+            connection.frame_received.emit(b":SB040NB601020D2203;")
+            window.cbus_services["Default"].discovery_status_changed.emit(
+                "Discovery incomplete"
+            )
+            selected = view.node_list.currentItem()
+            details = view.details
+            table = details.raw_values
+            # Finish parameter discovery; NVs are read only when their tab opens.
+            connection.frame_received.emit(b":SB040N9B01020006;")
+            for index in (2, 4, 5):
+                connection.frame_received.emit(f":SB040N9B0102{index:02X}00;".encode())
+            connection.frame_received.emit(b":SB040N9B01020603;")
+            connection.frame_received.emit(b":SB040N9B010201A5;")
+            connection.frame_received.emit(b":SB040N9B01020320;")
+            QTest.qWait(40)  # The QNN quiet window ends discovery.
 
-        self.assertTrue(
-            details.tabs.isTabEnabled(details.tabs.indexOf(details.variables_page))
-        )
-        self.assertIs(details.variables.currentWidget(), table)
-        self.assertEqual(table.editTriggers(), table.EditTrigger.NoEditTriggers)
-        self.assertEqual(
-            [
-                (table.item(row, 0).text(), table.item(row, 1).text())
-                for row in range(3)
-            ],
-            [("1", "-"), ("2", "-"), ("3", "-")],
-        )
-        first_row = table.item(0, 0)
-        connection.frame_received.emit(b":SB040N970102012A;")
-        connection.frame_received.emit(b":SB040N9701020200;")
-        self.assertIs(view.node_list.currentItem(), selected)
-        self.assertIs(table.item(0, 0), first_row)
-        self.assertEqual(
-            [table.item(row, 1).text() for row in range(3)],
-            ["42", "0", "-"],
-        )
+            def nv_reads():
+                return [frame for frame in connection.sent if b"N71" in frame]
+
+            # Connecting reads parameters only; opening Node Variables reads NVs once.
+            self.assertEqual(nv_reads(), [])
+            details.tabs.setCurrentWidget(details.variables_page)
+            self.app.processEvents()
+            self.assertEqual(len(nv_reads()), 1)
+            self.assertTrue(nv_reads()[0].endswith(b"N71010201;"))
+            details.tabs.setCurrentWidget(details.details_page)
+            details.tabs.setCurrentWidget(details.variables_page)
+            self.app.processEvents()
+            self.assertEqual(len(nv_reads()), 1)
+            self.assertTrue(
+                details.tabs.isTabEnabled(details.tabs.indexOf(details.variables_page))
+            )
+            self.assertIs(details.variables.currentWidget(), table)
+            self.assertEqual(table.editTriggers(), table.EditTrigger.NoEditTriggers)
+            self.assertEqual(
+                [
+                    (table.item(row, 0).text(), table.item(row, 1).text())
+                    for row in range(3)
+                ],
+                [("1", "-"), ("2", "-"), ("3", "-")],
+            )
+            first_row = table.item(0, 0)
+            connection.frame_received.emit(b":SB040N970102012A;")
+            connection.frame_received.emit(b":SB040N9701020200;")
+            connection.frame_received.emit(b":SB040N9701020307;")
+            self.app.processEvents()
+            # Loading suspends selection like any discovery, then restores it.
+            self.assertIs(view.node_list.currentItem(), selected)
+            self.assertIs(table.item(0, 0), first_row)
+            self.assertEqual(
+                [table.item(row, 1).text() for row in range(3)],
+                ["42", "0", "7"],
+            )
+            self.assertEqual(len(nv_reads()), 3)
 
     def test_live_nv_values_follow_selection_and_unknown_count(self):
         self.save_startup_layouts([("Default", "TCP/IP", True)])

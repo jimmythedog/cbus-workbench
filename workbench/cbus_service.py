@@ -103,6 +103,9 @@ class CbusService(QObject):
         self._nv_read_recovery = False
         self._nv_started: dict[int, int] = {}
         self._ev_started: set[int] = set()
+        # Connecting reads identities and parameters only; NVs and events load on
+        # demand. Explicit refreshes (and restores) read these nodes in full.
+        self._full_discovery: set[int] = set()
         self._request_timer = QTimer(self)
         self._request_timer.setSingleShot(True)
         self._request_timer.timeout.connect(self._request_timed_out)
@@ -168,6 +171,7 @@ class CbusService(QObject):
         self._nv_read_recovery = False
         self._nv_started.clear()
         self._ev_started.clear()
+        self._full_discovery.clear()
         trace(
             logger,
             "Automatic discovery work cleared",
@@ -220,14 +224,19 @@ class CbusService(QObject):
                     or all(number in self.nodes for number in self.presence)
                 )
                 and all(
-                    progress in complete
-                    for state in self.node_states.values()
-                    for progress in (
-                        state.parameter_progress,
-                        state.nv_progress,
-                        state.event_progress,
-                        state.ev_progress,
+                    state.parameter_progress in complete
+                    and all(
+                        progress in complete
+                        # Not yet loaded on demand is not a failure.
+                        or progress == DiscoveryProgress.NOT_STARTED
+                        and number not in self._full_discovery
+                        for progress in (
+                            state.nv_progress,
+                            state.event_progress,
+                            state.ev_progress,
+                        )
                     )
+                    for number, state in self.node_states.items()
                 )
             )
             status = DiscoveryStatus.READY if ready else DiscoveryStatus.INCOMPLETE
@@ -557,6 +566,7 @@ class CbusService(QObject):
         state.event_progress = state.ev_progress = DiscoveryProgress.NOT_STARTED
         self._nv_started.pop(node_number, None)
         self._ev_started.discard(node_number)
+        self._full_discovery.add(node_number)
         self.refreshing_node = node_number
         self._request_queue.append(("parameter", node_number, 0))
         trace(
@@ -571,6 +581,100 @@ class CbusService(QObject):
         )
         self.node_state_updated.emit(node_number)
         self._send_next_request()
+
+    def load_nvs(self, node_number: int) -> bool:
+        """Read one node's NVs on demand, once per connection.
+
+        Only a section never started is read. A failed or partial read stays
+        incomplete until Refresh Node, so revisiting a tab cannot loop on a
+        node that does not answer. Returns True when reads were queued.
+        """
+        state = self.node_states.get(node_number)
+        if state is None or state.nv_progress != DiscoveryProgress.NOT_STARTED:
+            return False
+        if node_number in self._nv_started:
+            return False
+        fields = {"layout": self.connection.layout_name, "node_number": node_number}
+        if self._closed or self.connection.state != "Connected" or self.writes_busy():
+            trace(logger, "On-demand NV read deferred", extra={"fields": fields})
+            return False
+        count = state.parameters.get(6)
+        if count is None:
+            # Unknown NV count: only Refresh Node can establish it.
+            trace(
+                logger,
+                "On-demand NV read unavailable: parameter 6 unknown",
+                extra={"fields": fields},
+            )
+            return False
+        trace(logger, "On-demand NV read requested", extra={"fields": fields})
+        self._start_nv_discovery(node_number, count)
+        return state.nv_progress != DiscoveryProgress.COMPLETE
+
+    def load_events(self, node_number: int) -> bool:
+        """Read one node's stored events and EVs on demand, once per connection.
+
+        Returns True when reads were queued (not for a skipped non-consumer).
+        """
+        state = self.node_states.get(node_number)
+        if (
+            state is None
+            or state.event_progress != DiscoveryProgress.NOT_STARTED
+            or any(r[:2] == ("event", node_number) for r in self._request_queue)
+        ):
+            return False
+        fields = {"layout": self.connection.layout_name, "node_number": node_number}
+        if self._closed or self.connection.state != "Connected" or self.writes_busy():
+            trace(logger, "On-demand event read deferred", extra={"fields": fields})
+            return False
+        trace(logger, "On-demand event read requested", extra={"fields": fields})
+        self._queue_event_count(node_number)
+        self._send_next_request()
+        return state.event_progress != DiscoveryProgress.SKIPPED
+
+    def load_online_configuration(self, *, consumers_only: bool = False) -> list[int]:
+        """Start loading every online node never loaded; return those now reading.
+
+        Layout-wide operations (backups, Teach) need whole nodes. Offline nodes
+        and those that cannot load keep the caller's incomplete handling.
+        """
+        started = []
+        for number, state in sorted(self.node_states.items()):
+            if not self.presence.get(number) or (
+                consumers_only and not state.identity.is_consumer
+            ):
+                continue
+            nvs = self.load_nvs(number)
+            if self.load_events(number) or nvs:
+                started.append(number)
+        trace(
+            logger,
+            "Online configuration load requested",
+            extra={
+                "fields": {
+                    "layout": self.connection.layout_name,
+                    "consumers_only": consumers_only,
+                    "started": started,
+                }
+            },
+        )
+        return started
+
+    def _parameters_finished(self, node_number: int) -> None:
+        """Full discovery continues to events; otherwise load_events() is awaited."""
+        if node_number in self._full_discovery:
+            self._queue_event_count(node_number)
+            return
+        trace(
+            logger,
+            "Parameters read; NVs and events load on demand",
+            extra={
+                "fields": {
+                    "layout": self.connection.layout_name,
+                    "node_number": node_number,
+                }
+            },
+        )
 
     def write_nvs(
         self,
@@ -1011,6 +1115,8 @@ class CbusService(QObject):
             },
         )
         if is_new:
+            if self.refreshing_layout:
+                self._full_discovery.add(pnn.node_number)
             self._discovery_window.start(response_timeout.RESPONSE_TIMEOUT_MS)
             self._set_discovery_status(DiscoveryStatus.DISCOVERING)
             self.node_discovered.emit(pnn)
@@ -1101,7 +1207,8 @@ class CbusService(QObject):
         # automatic parameter sequence, so discovery starts on the reply itself.
         if index == 6:
             if node_number not in self._nv_started:
-                self._start_nv_discovery(node_number, value)
+                if node_number in self._full_discovery:
+                    self._start_nv_discovery(node_number, value)
             elif value != self._nv_started[node_number]:
                 # The queued pass covers the first confirmed count. Keep it
                 # moving, but do not call it complete for a different count.
@@ -1531,7 +1638,7 @@ class CbusService(QObject):
         ):
             self._set_progress(kind, node_number, DiscoveryProgress.COMPLETE)
             if kind == "parameter":
-                self._queue_event_count(node_number)
+                self._parameters_finished(node_number)
             elif kind == "event":
                 self._start_ev_discovery(node_number)
         self._send_next_request()
@@ -1600,7 +1707,7 @@ class CbusService(QObject):
                     self.set_presence(node_number, False)
                     self.presence_checked.emit(node_number, False, 0)
                 if kind == "parameter":
-                    self._queue_event_count(node_number)
+                    self._parameters_finished(node_number)
                 continue
             self._outstanding_request = (kind, node_number, index)
             self._nv_read_recovery = False
@@ -1756,5 +1863,5 @@ class CbusService(QObject):
             self.set_presence(node_number, False)
             self.presence_checked.emit(node_number, False, 0)
         if kind == "parameter":
-            self._queue_event_count(node_number)
+            self._parameters_finished(node_number)
         self._send_next_request()

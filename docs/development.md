@@ -1089,6 +1089,10 @@ reusing its discovery guard to defer MDF presentation. List selection is cleared
 with Qt signals blocked, preserving visible details, editor copies and progress.
 On ready/incomplete, selection returns and confirmed state is refreshed; disconnect
 clears the live display instead. Editing and discovery both lock the navigator.
+While selection is suspended, `LayoutView` shows a wait cursor on that layout only
+and disables its Events and Backups tabs, returning to the previous tab afterwards.
+Layout Restore disables the whole window, so it uses an application override
+cursor for exactly that span instead.
 NV-only Save retains selection and the existing descriptor, deferring value
 presentation until its completion without starting this navigator refresh cycle.
 
@@ -1100,7 +1104,8 @@ presentation until its completion without starting this navigator refresh cycle.
     QNN -> 2-second window (restart for each newly observed node)
         -> parameter / NV / event / EV requests and reply-triggered phases
         -> window expired + no pending requests or Save/refresh
-           -> all node phases COMPLETE/SKIPPED: ready
+           -> all node phases COMPLETE/SKIPPED (or NOT_STARTED, awaiting
+              on-demand loading): ready
            -> missing/failed phases or no nodes: incomplete
 
 The window is a practical quiet-period boundary, not proof of complete network
@@ -1243,14 +1248,50 @@ NVs and complete NV/event/EV discovery (or non-consumer event skips). Confirmed
 zero EVs, confirmed absences and unread values retain their existing meanings.
 Detailed logs record application stages, comparisons, verified writes and failures.
 
-Each new numbered PNN starts a parameter pass. A confirmed parameter 6 can
-queue NV reads before that pass ends; the shared queue serialises the requests.
-The parameter pass ending, including after failure, starts event discovery unless
-the PNN confirms Consumer = No. In that case event progress is SKIPPED and the
-stored-event count stays unknown.
+Each new numbered PNN starts a parameter pass. Connecting stops there: NVs and
+events stay NOT_STARTED until something needs them, so the layout is usable
+sooner. Full discovery (below) is used for Refresh Node, Refresh Layout and
+`rediscover_node()`, which restores and Layout Restore use. In full discovery a
+confirmed parameter 6 can queue NV reads before the parameter pass ends; the shared
+queue serialises the requests. The parameter pass ending, including after failure,
+starts event discovery unless the PNN confirms Consumer = No. In that case event
+progress is SKIPPED and the stored-event count stays unknown.
+
+`load_nvs()` and `load_events()` start the same NV or event/EV phases on demand,
+only when that phase is NOT_STARTED. A completed phase is never repeated on this
+connection; a failed or partial phase stays INCOMPLETE until Refresh Node, so
+reopening a tab cannot loop on a node that does not answer. Unknown parameter 6
+also leaves NVs to Refresh Node. `NodeDetails` calls them for the selected node
+on tab or selection change and whenever discovery status settles (including after
+NV/Event Save). The call is queued to the event loop, never run inside another
+selection, tab or status signal, because loading itself starts discovery:
+
+    Node Variables  -> NVs
+    Consumed Events -> NVs, then events/EVs (event MDF visibility reads NVs)
+    Backups         -> NVs, then events/EVs (backups cover the whole node)
+    Produced Events -> nothing (layout observed-event catalogue)
+
+NV editing requires complete parameters and NVs; NV Save refreshes stored events
+afterwards only if they had been loaded. Event editing, Node Restore, backups and
+comparisons still require the whole node. Layout backup New/Compare and Teach to
+Node (consumers only) call `configuration_load.load_online_configuration()`. It
+starts `CbusService.load_online_configuration()` and, if any read started, waits
+in a local event loop (window disabled, override wait cursor, as Layout Restore)
+until discovery status settles or the connection ends, then the operation
+continues. Offline nodes and those that cannot load keep the existing incomplete
+handling.
+
+    New / Compare / Teach -> online nodes never loaded? -> no -> continue
+                                     | yes
+                    disable window + wait cursor -> NV/event reads (FIFO)
+                                     |
+                 status settles (Ready / Incomplete) -> restore -> continue
+                 disconnect (Disconnected)           -> restore -> stop A new service per
+connection means stale values can never appear as freshly confirmed.
 
 ```text
 Connected -> CbusService(layout) -> QNN -> PNN (new numbered node)
+            (connect: parameter pass only; NV and event branches run on demand)
                                         |
                   +---------------------+---------------------+
                   |                                           |
@@ -1449,7 +1490,7 @@ already confirmed by the service. Identity updates keep the current selection,
 and ending a connection clears that layout's live entries. The selected live
 node's Raw Node Variables table shows confirmed values, with `-` for
 unread indices when parameter 6 provides the count. Edit becomes available after
-complete node configuration discovery while the connection is active.
+complete NV discovery while the connection is active.
 Node details has separate full-width Produced Events and Consumed Events tabs.
 `NodeEvents` coordinates the existing produced table and consumed tree for both
 configured and live nodes; moving between tabs does not rebuild either view.

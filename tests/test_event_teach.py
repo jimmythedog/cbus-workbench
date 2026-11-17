@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -184,6 +184,47 @@ class EventTeachTests(unittest.TestCase):
         self.assertEqual([t[0] for t in teach_targets(self.service, None)], [258])
         self.service.presence[258] = False
         self.assertEqual(teach_targets(self.service, None), [])
+
+    def test_teach_to_node_first_reads_unloaded_online_consumers(self):
+        # Connecting reads parameters only, so no target could be listed yet.
+        done = DiscoveryProgress.COMPLETE
+        consumer = NodeState(
+            Pnn(301, 13, 34, 5),
+            parameters={5: 1, 6: 1},
+            parameter_progress=done,
+            can_id=4,
+        )
+        producer = NodeState(
+            Pnn(300, 165, 2, 4), parameters={6: 1}, parameter_progress=done
+        )
+        for state in (consumer, producer):
+            number = state.identity.node_number
+            self.service.nodes[number] = state.identity
+            self.service.node_states[number] = state
+            self.service.presence[number] = True
+        replies = {"71012D01": "97012D0105", "58012D": "74012D00"}
+
+        def reply(frame):
+            self.connection.sent.append(frame)
+            answer = replies[frame.decode().split("N")[1][:-1]]
+            QTimer.singleShot(
+                0,
+                lambda: self.connection.frame_received.emit(
+                    f":SB040N{answer};".encode()
+                ),
+            )
+
+        view = self.layout_view()
+        view.layout_events.cbus_service = self.service
+        with (
+            patch.object(self.connection, "send", reply),
+            patch("workbench.layout_events.TeachEventDialog") as dialog,
+        ):
+            view.layout_events.teach_to_node((0, 7))
+        # Only the consumer is read; it is then offered as a target.
+        self.assertEqual(self.payloads(), ["71012D01", "58012D"])
+        targets = dialog.call_args.kwargs["targets"]
+        self.assertIn(301, [number for number, _text, _consumed in targets])
 
     def test_teach_to_node_dialog_chooses_only_the_target(self):
         self.service.presence[258] = True

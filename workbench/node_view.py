@@ -191,6 +191,9 @@ class NodeView(QSplitter):
             self.begin_discovery()
         else:
             self.finish_discovery(status)
+            # Also after NV/Event Save, which does not suspend selection.
+            if status != DiscoveryStatus.DISCONNECTED:
+                self.details.request_configuration_load()
 
     def begin_discovery(self) -> None:
         """Suspend selection and MDF work without disturbing editors or progress."""
@@ -316,6 +319,7 @@ class NodeView(QSplitter):
             state = self.state_lookup(node_number(node))
             if state is not None:
                 self.show_live_state(state)
+        self.details.request_configuration_load()
 
     def show_live_state(self, state: NodeState) -> None:
         """Display discovery values and resolve MDFs from the same live evidence."""

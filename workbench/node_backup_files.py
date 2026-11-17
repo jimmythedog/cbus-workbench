@@ -33,6 +33,17 @@ def event_variables(
     return result
 
 
+def nvs_complete(state: NodeState) -> bool:
+    """Every NV is confirmed: enough for NV editing, independently of events."""
+    nvs = positional_values(state.nv_values, state.parameters.get(6))
+    return (
+        state.parameter_progress == DiscoveryProgress.COMPLETE
+        and state.nv_progress == DiscoveryProgress.COMPLETE
+        and state.parameters.get(6) is not None
+        and None not in nvs
+    )
+
+
 def node_backup(state: NodeState) -> dict:
     """Capture confirmed configuration without event-table indices or metadata."""
     done = DiscoveryProgress.COMPLETE
@@ -67,13 +78,7 @@ def node_backup(state: NodeState) -> dict:
             for ev_index in range(1, state.parameters.get(5, 0) + 1)
         )
     )
-    complete = (
-        state.parameter_progress == done
-        and state.nv_progress == done
-        and state.parameters.get(6) is not None
-        and events_complete
-        and None not in nvs
-    )
+    complete = nvs_complete(state) and events_complete
     backup = {
         "format_version": 1,
         "complete": complete,

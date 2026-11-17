@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .configuration_load import load_online_configuration
 from .event_description_edit import EventDescriptionDialog
 from .event_teach import TeachEventDialog, teach_targets
 from .logging_config import trace
@@ -169,6 +170,10 @@ class LayoutEvents(QWidget):
         """Choose a target node, then hand over to its Events Edit workflow."""
         service = self.cbus_service
         if service is None:
+            return
+        # Targets must be whole, loaded consumer nodes; connecting reads only
+        # parameters, so read the rest before listing them.
+        if not load_online_configuration(self, service, consumers_only=True):
             return
         dialog = TeachEventDialog(
             self,

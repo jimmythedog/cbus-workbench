@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from .annotations import Annotations
 from .backup_view import backup_contents
+from .configuration_load import load_online_configuration
 from .layout_backup_compare import LayoutBackupCompare
 from .layout_backup_view import LayoutBackupView
 from .layout_backup_workflow import create_layout_backup
@@ -293,6 +294,11 @@ class LayoutView(QWidget):
         dialog = LayoutBackupView(backup, self, manifest_path=manifest_path)
         dialog.exec()
 
+    def load_live_configuration(self) -> bool:
+        """Backups and comparisons cover whole nodes; False if disconnected."""
+        service = self.node_view.details.cbus_service
+        return service is None or load_online_configuration(self, service)
+
     def compare_backup(self):
         if not self.connected:
             return
@@ -304,6 +310,8 @@ class LayoutView(QWidget):
 
         manifest_path = backup if isinstance(backup, Path) else None
         if manifest_path is not None:
+            if not self.load_live_configuration():
+                return
             with manifest_path.open(encoding="utf-8") as stream:
                 backup = yaml.safe_load(stream)
 
@@ -321,6 +329,8 @@ class LayoutView(QWidget):
         if not self.connected:
             return
         if self.logical_layout is not None:
+            if not self.load_live_configuration():
+                return
             path = create_layout_backup(
                 self, self.logical_layout, self.discovery_states()
             )

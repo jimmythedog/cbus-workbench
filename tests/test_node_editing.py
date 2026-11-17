@@ -272,25 +272,37 @@ class NodeEditingTests(unittest.TestCase):
         QTest.qWait(1)
         self.assertEqual(details.desired_configuration, original)
 
-    def test_incomplete_discovery_prevents_both_edit_entry_points(self):
-        for change in ("progress", "unknown_ev", "membership"):
+    def test_incomplete_sections_block_only_the_editing_that_needs_them(self):
+        # NV Save writes only NVs. Event editing also needs NVs, because event
+        # MDF visibility conditions read them.
+        for change in ("nvs", "unknown_ev", "membership", "events_not_loaded"):
             with self.subTest(change=change):
+                self.state.nv_progress = DiscoveryProgress.COMPLETE
+                self.state.event_progress = DiscoveryProgress.COMPLETE
                 self.state.ev_progress = DiscoveryProgress.COMPLETE
                 self.state.ev_values[9][4] = None
                 self.state.stored_event_count = 2
-                if change == "progress":
+                if change == "nvs":
                     self.state.nv_progress = DiscoveryProgress.INCOMPLETE
                 elif change == "unknown_ev":
-                    self.state.nv_progress = DiscoveryProgress.COMPLETE
                     del self.state.ev_values[9][4]
-                else:
+                elif change == "membership":
                     self.state.stored_event_count = 3
+                else:
+                    self.state.event_progress = DiscoveryProgress.NOT_STARTED
+                    self.state.ev_progress = DiscoveryProgress.NOT_STARTED
+                nv_editable = change != "nvs"
                 self.details.show_live_state(self.state)
-                self.assertFalse(self.details.edit_button.isEnabled())
+                self.assertEqual(self.details.edit_button.isEnabled(), nv_editable)
                 self.assertFalse(self.details.events_edit_button.isEnabled())
-                self.details.start_editing()
                 self.details.start_events_editing()
                 self.assertIsNone(self.details.desired_configuration)
+                self.details.start_editing()
+                self.assertEqual(
+                    self.details.desired_configuration is not None, nv_editable
+                )
+                if nv_editable:
+                    self.details.cancel_editing()
                 self.assertEqual(self.connection.sent, [])
 
     def test_disconnect_discards_the_entire_session(self):

@@ -253,6 +253,21 @@ class NvSaveTests(unittest.TestCase):
         self.assertTrue(self.results[-1][1])
         self.assertEqual(self.connection.sent, [])
 
+    def test_consumer_with_events_not_yet_loaded_saves_nvs_without_event_reads(self):
+        # Events never loaded on this connection hold nothing that could be stale.
+        self.state.identity = Pnn(258, 13, 34, 5)
+        self.service.nodes[258] = self.state.identity
+        self.state.event_progress = self.state.ev_progress = (
+            DiscoveryProgress.NOT_STARTED
+        )
+        self.mdf = {}
+        self.save([10, 8, 9])
+        self.verified(1, 10)
+        self.app.processEvents()
+        self.assertTrue(self.results[-1][1])
+        self.assertEqual(self.payloads(), ["960102010A", "71010201"])
+        self.assertEqual(self.state.event_progress, DiscoveryProgress.NOT_STARTED)
+
     def test_event_refresh_failure_reports_partial_save(self):
         self.consumer()
         with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 10):

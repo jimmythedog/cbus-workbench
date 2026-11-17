@@ -9,11 +9,12 @@ from unittest.mock import patch
 import yaml
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication, QListWidgetItem, QMessageBox, QTreeWidget
+from test_layout_restore_selection import Connection
 
 from workbench.backup_compare import BackupCompare
 from workbench.backup_timestamp import backup_date_time
 from workbench.backup_view import BackupView
-from workbench.cbus_service import DiscoveryProgress, NodeState
+from workbench.cbus_service import CbusService, DiscoveryProgress, NodeState
 from workbench.layout_view import LayoutView
 from workbench.node_backup_files import load_node_backup, node_backup, save_backup
 from workbench.node_backups import NodeBackups
@@ -314,6 +315,51 @@ class LayoutBackupTests(unittest.TestCase):
             row.toolTip(0),
             "Configuration discovery was incomplete when this backup was created.",
         )
+
+    def live_service(self):
+        """Serve self.state as an online node of a connected service."""
+        connection = Connection()
+        service = CbusService(connection, 126)
+        self.addCleanup(service.close)
+        service.nodes[42] = self.state.identity
+        service.node_states[42] = self.state
+        service.presence[42] = True
+        self.view.node_view.details.cbus_service = service
+        return connection
+
+    def test_unloaded_online_node_is_read_then_the_backup_is_written(self):
+        # Connecting reads parameters only; New reads the rest first, so the
+        # backup is complete without asking the user to try again.
+        self.state.event_progress = self.state.ev_progress = (
+            DiscoveryProgress.NOT_STARTED
+        )
+        self.state.stored_event_count = None
+        self.state.event_identities = {}
+        self.state.ev_values = {}
+        connection = self.live_service()
+
+        def reply(frame):
+            connection.sent.append(frame)
+            self.assertEqual(frame, b":SBFC0N58002A;")  # RQEVN
+            QTimer.singleShot(
+                0, lambda: connection.frame_received.emit(b":SB040N74002A00;")
+            )
+
+        with patch.object(connection, "send", reply):
+            self.view.backup_buttons["New"].click()
+        manifest = [path for path in self.files() if "nodes" not in path.parts]
+        self.assertTrue(yaml.safe_load(manifest[0].read_text())["complete"])
+        self.assertTrue(self.view.window().isEnabled())
+
+    def test_node_that_cannot_load_keeps_incomplete_acknowledgement(self):
+        # Without parameter 6 only Refresh Node can read NVs; New must not keep
+        # asking the user to wait for a read that never starts.
+        del self.state.parameters[6]
+        self.state.nv_progress = DiscoveryProgress.NOT_STARTED
+        connection = self.live_service()
+        self.answer("Cancel")
+        self.assertEqual(self.files(), [])
+        self.assertEqual(connection.sent, [])
 
     def test_empty_discovery_requires_confirmation_and_stays_incomplete(self):
         self.view.show_live_layout("Empty", list)

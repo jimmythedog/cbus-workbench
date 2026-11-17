@@ -7,7 +7,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from .cbus_service import DiscoveryProgress
 from .logging_config import trace
-from .node_backup_files import node_backup, validate_backup
+from .node_backup_files import node_backup, nvs_complete, validate_backup
 
 logger = logging.getLogger("workbench.cbus")
 
@@ -53,8 +53,9 @@ class NvSave(QObject):
             raise ValueError(
                 "Protocol safety unresolved; no further Save is allowed. Refresh Node does not retry failed writes or clear this safety block."
             )
-        if not node_backup(state)["complete"]:
-            raise ValueError("Complete target discovery is required before saving.")
+        # Events are not written here; their refresh below covers only loaded events.
+        if not nvs_complete(state):
+            raise ValueError("Complete NV discovery is required before saving.")
         if len(backup["nvs"]) != state.parameters.get(6) or any(
             type(value) is not int or not 0 <= value <= 255 for value in backup["nvs"]
         ):
@@ -210,7 +211,17 @@ class NvSave(QObject):
                 for state in service.node_states.values()
             )
         )
-        if self.verified and self.refresh_events and not self.events_refreshed:
+        # Events never loaded on this connection hold nothing that could be stale.
+        state = service.node_states.get(self.node_number)
+        events_loaded = (
+            state is not None and state.event_progress != DiscoveryProgress.NOT_STARTED
+        )
+        if (
+            self.verified
+            and self.refresh_events
+            and events_loaded
+            and not self.events_refreshed
+        ):
             self.events_refreshed = True
             if safe:
                 self.pending_result = success, message

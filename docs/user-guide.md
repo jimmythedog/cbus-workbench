@@ -126,8 +126,17 @@ save failures undo completed annotation changes and leave new layouts unpublishe
 ## Connecting and discovering nodes
 
 Select the layout, then choose **Layouts → Connect**. Workbench automatically
-looks for nodes and reads their configuration. Discovered nodes appear in the
-selected layout's **Nodes** navigator; values fill in as replies arrive.
+looks for nodes and reads their identities and parameters. Discovered nodes appear
+in the selected layout's **Nodes** navigator.
+
+A node's NVs and events are read the first time you need them: opening **Node
+Variables** reads its NVs; opening **Consumed Events** or the node's **Backups**
+reads its NVs and events. Each is read once per connection. If a read fails,
+use **Refresh Node** to try again. Layout backup **New** and **Compare**, and
+**Teach to Node…**, first read any online node not yet loaded (the window shows a
+wait cursor meanwhile), then carry on.
+While Workbench is reading, the layout shows a wait cursor and node selection,
+**Events** and **Backups** are unavailable.
 Choose **Layouts → Disconnect** to close the connection.
 
 Known nodes remain in the navigator and start Offline. Normal discovery marks
@@ -253,7 +262,7 @@ status. While disconnected, it shows only the layout name and connection status.
 | Status | Meaning |
 |---|---|
 | Discovering… | Workbench is waiting for nodes or reading configuration, including refresh after Save. |
-| Ready | All initiated reads for observed nodes succeeded or were inapplicable. |
+| Ready | All initiated reads for observed nodes succeeded or were inapplicable. Configuration not yet opened is not counted. |
 | Incomplete | No nodes were found, or some discovery information remains unconfirmed. |
 
 Workbench waits for a two-second response window, extended whenever a new node
@@ -368,7 +377,7 @@ indeterminate marks. Overloaded bit labels follow their controlling NV; known
 unmatched labels are hidden, while unread controlling NVs show “label unknown”.
 Annotations are skipped; template labels are displayed literally without substitution.
 
-1. Wait for complete node configuration discovery on a connected FLiM node.
+1. Open **Node Variables** on a connected FLiM node and wait for its NVs to be read.
 2. Choose **Edit** on **Node Variables**. Only this editor becomes active;
    the Events tabs remain available for read-only browsing.
 3. Enter NV values from 0 to 255. Switch tabs freely; your edits are retained.
@@ -484,7 +493,8 @@ EVs you leave blank keep the node's own defaults and are shown after Save.
 From the layout **Events** tab, right-click an event and choose
 **Teach to Node…**. The identity is shown read-only; choose an online node by
 node number and name (or module type when unnamed). Only nodes that can be
-edited now are listed. If the chosen node already consumes the event, the dialog
+edited now are listed. If some online consumer nodes have not been read yet,
+Workbench reads them before showing the list. If the chosen node already consumes the event, the dialog
 says so and **OK** is unavailable. Workbench then opens that node's **Consumed
 Events** tab with the event pending, as for **New Event**.
 

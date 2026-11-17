@@ -8,7 +8,12 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from workbench import cbus_service
-from workbench.cbus_service import CbusService, DiscoveryProgress, NodeState
+from workbench.cbus_service import (
+    CbusService,
+    DiscoveryProgress,
+    DiscoveryStatus,
+    NodeState,
+)
 from workbench.node_backup_files import node_backup
 from workbench.pnn import Pnn
 
@@ -28,10 +33,18 @@ class ConnectionStub(QObject):
         self.sent.append(frame)
 
 
+def full_discovery_service(connection, can_id):
+    """Most tests here cover the full PNN -> parameter/NV/event/EV chain that
+    Refresh and restore use; LazyDiscoveryTests covers connect-time loading."""
+    service = CbusService(connection, can_id)
+    service._full_discovery.update(range(1, 0x10000))
+    return service
+
+
 class CbusServiceTests(unittest.TestCase):
     def setUp(self):
         self.connection = ConnectionStub("Test Layout")
-        self.service = CbusService(self.connection, can_id=126)
+        self.service = full_discovery_service(self.connection, can_id=126)
         self.discovered = []
         self.updated = []
         self.parameter_updates = []
@@ -144,7 +157,7 @@ class CbusServiceTests(unittest.TestCase):
         self.service.presence = {258: True, 259: False}
         other_connection = ConnectionStub("Other Layout")
         other_connection.state = "Connected"
-        other = CbusService(other_connection, 125)
+        other = full_discovery_service(other_connection, 125)
         other.presence = {300: False}
         self.addCleanup(other.close)
         other.set_node_poll_seconds(0)
@@ -509,7 +522,7 @@ class CbusServiceTests(unittest.TestCase):
         self.assertFalse(any(b"N9C" in frame for frame in self.connection.sent))
 
         other = ConnectionStub("Unknown EV Count")
-        service = CbusService(other, can_id=127)
+        service = full_discovery_service(other, can_id=127)
         other.frame_received.emit(b":SB040NB601020D2203;")
         other.frame_received.emit(b":SB040N9B01020000;")
         other.frame_received.emit(b":SB040N74010201;")
@@ -1175,7 +1188,7 @@ class CbusServiceTests(unittest.TestCase):
         self.connection.frame_received.emit(b":SB040N9701020109;")
         self.assertEqual(self.service.node_states[258].nv_values, {1: 5})
 
-        new_service = CbusService(self.connection, can_id=126)
+        new_service = full_discovery_service(self.connection, can_id=126)
         self.connection.frame_received.emit(b":SB040NB601020D2203;")
         self.assertEqual(new_service.node_states[258].nv_values, {})
         self.assertEqual(
@@ -1185,7 +1198,7 @@ class CbusServiceTests(unittest.TestCase):
     def test_automatic_nv_state_is_separate_between_layouts(self):
         self.start_nv_reads(1)
         other_connection = ConnectionStub("Other Layout")
-        other_service = CbusService(other_connection, can_id=127)
+        other_service = full_discovery_service(other_connection, can_id=127)
         other_connection.frame_received.emit(b":SB040NB601020D2203;")
         other_connection.frame_received.emit(b":SB040N9B01020006;")
         for index in (2, 4, 5):
@@ -1417,7 +1430,7 @@ class CbusServiceTests(unittest.TestCase):
         ):
             with self.subTest(count=count):
                 connection = ConnectionStub("Other Layout")
-                service = CbusService(connection, can_id=127)
+                service = full_discovery_service(connection, can_id=127)
                 connection.frame_received.emit(b":SB040NB601020D2203;")
                 connection.frame_received.emit(f":SB040N9B010200{count:02X};".encode())
 
@@ -1476,7 +1489,7 @@ class CbusServiceTests(unittest.TestCase):
 
     def test_count_requests_stay_with_their_layout(self):
         other_connection = ConnectionStub("Other Layout")
-        other_service = CbusService(other_connection, can_id=127)
+        other_service = full_discovery_service(other_connection, can_id=127)
         pnn = b":SB040NB601020D2203;"
         self.connection.frame_received.emit(pnn)
         other_connection.frame_received.emit(pnn)
@@ -1577,7 +1590,7 @@ class CbusServiceTests(unittest.TestCase):
 
     def test_timeout_on_one_connection_does_not_advance_another(self):
         other_connection = ConnectionStub("Other Layout")
-        other_service = CbusService(other_connection, can_id=127)
+        other_service = full_discovery_service(other_connection, can_id=127)
         pnn = b":SB040NB601020D2203;"
         self.connection.frame_received.emit(pnn)
         other_connection.frame_received.emit(pnn)
@@ -1641,7 +1654,7 @@ class CbusServiceTests(unittest.TestCase):
         self.service._request_timer.timeout.emit()
         self.assertEqual(len(self.connection.sent), 2)
 
-        new_service = CbusService(self.connection, can_id=126)
+        new_service = full_discovery_service(self.connection, can_id=126)
         self.connection.frame_received.emit(b":SB040NB601020D2203;")
         self.connection.frame_received.emit(b":SB040N9B01020004;")
         self.assertEqual(
@@ -1727,7 +1740,7 @@ class CbusServiceTests(unittest.TestCase):
 
     def test_services_keep_layout_state_separate(self):
         other_connection = ConnectionStub("Other Layout")
-        other_service = CbusService(other_connection, can_id=127)
+        other_service = full_discovery_service(other_connection, can_id=127)
 
         self.connection.frame_received.emit(b":SB040NB601020D2203;")
         self.assertEqual(other_service.nodes, {})
@@ -1739,7 +1752,7 @@ class CbusServiceTests(unittest.TestCase):
 
     def test_services_keep_parameters_separate_for_same_node_number(self):
         other_connection = ConnectionStub("Other Layout")
-        other_service = CbusService(other_connection, can_id=127)
+        other_service = full_discovery_service(other_connection, can_id=127)
         pnn_frame = b":SB040NB601020D2203;"
         self.connection.frame_received.emit(pnn_frame)
         other_connection.frame_received.emit(pnn_frame)
@@ -1759,6 +1772,121 @@ class CbusServiceTests(unittest.TestCase):
         for can_id in (0, 99, 128):
             with self.subTest(can_id=can_id), self.assertRaises(ValueError):
                 CbusService(ConnectionStub("Test Layout"), can_id)
+
+
+class LazyDiscoveryTests(unittest.TestCase):
+    """Connecting reads identities and parameters; configuration loads on demand."""
+
+    def setUp(self):
+        self.app = QApplication.instance() or QApplication([])
+        self.connection = ConnectionStub("Lazy Layout")
+        self.connection.state = "Connected"
+        self.service = CbusService(self.connection, can_id=126)
+        # A short PNN quiet window lets discovery settle within each test.
+        timeout = patch.object(cbus_service.response_timeout, "RESPONSE_TIMEOUT_MS", 10)
+        timeout.start()
+        self.addCleanup(timeout.stop)
+
+    def tearDown(self):
+        if not self.service._closed:
+            self.service.close()
+
+    def receive(self, *frames: str) -> None:
+        for frame in frames:
+            self.connection.frame_received.emit(f":SB040N{frame};".encode())
+
+    def discover_node(self, flags: int = 0x03) -> NodeState:
+        """PNN, then parameters 2, 4, 5 (2 EVs), 6 (2 NVs), 1 and 3."""
+        self.receive(f"B601020D22{flags:02X}", "9B01020006")
+        for index, value in ((2, 0), (4, 8), (5, 2), (6, 2), (1, 0x0D), (3, 0x22)):
+            self.receive(f"9B0102{index:02X}{value:02X}")
+        QTest.qWait(20)
+        return self.service.node_states[258]
+
+    def sent_after(self, count: int) -> list[bytes]:
+        return self.connection.sent[count:]
+
+    def test_connect_reads_parameters_only_and_is_ready(self):
+        state = self.discover_node()
+
+        self.assertTrue(all(b"N73" in frame for frame in self.connection.sent))
+        self.assertEqual(state.parameter_progress, DiscoveryProgress.COMPLETE)
+        for progress in (state.nv_progress, state.event_progress, state.ev_progress):
+            self.assertEqual(progress, DiscoveryProgress.NOT_STARTED)
+        # Not yet loaded is not a failure.
+        self.assertEqual(self.service.discovery_status, DiscoveryStatus.READY)
+
+    def test_each_section_loads_once_on_demand(self):
+        state = self.discover_node()
+        before = len(self.connection.sent)
+
+        self.service.load_nvs(258)
+        self.receive("9701020105", "9701020207")
+        self.assertEqual(
+            self.sent_after(before), [b":SBFC0N71010201;", b":SBFC0N71010202;"]
+        )
+        self.assertEqual(state.nv_values, {1: 5, 2: 7})
+        self.assertEqual(state.nv_progress, DiscoveryProgress.COMPLETE)
+        self.assertEqual(state.event_progress, DiscoveryProgress.NOT_STARTED)
+
+        before = len(self.connection.sent)
+        self.service.load_events(258)
+        self.receive("74010201", "F20102000A001407", "B50102070109", "B50102070200")
+        self.assertEqual(
+            self.sent_after(before),
+            [
+                b":SBFC0N580102;",
+                b":SBFC0N570102;",
+                b":SBFC0N9C01020701;",
+                b":SBFC0N9C01020702;",
+            ],
+        )
+        self.assertTrue(node_backup(state)["complete"])
+
+        # Revisiting a tab does not repeat completed reads.
+        before = len(self.connection.sent)
+        self.service.load_nvs(258)
+        self.service.load_events(258)
+        self.assertEqual(self.sent_after(before), [])
+
+    def test_producer_only_node_skips_event_reads(self):
+        state = self.discover_node(flags=0x02)
+        before = len(self.connection.sent)
+        self.service.load_events(258)
+        self.assertEqual(self.sent_after(before), [])
+        self.assertEqual(state.event_progress, DiscoveryProgress.SKIPPED)
+
+    def test_failed_section_waits_for_refresh_node(self):
+        state = self.discover_node()
+        with self.assertLogs("workbench.cbus", level="WARNING"):
+            self.service.load_nvs(258)
+            QTest.qWait(50)  # First read and its single recovery read time out.
+        self.assertEqual(state.nv_progress, DiscoveryProgress.INCOMPLETE)
+        self.assertEqual(self.service.discovery_status, DiscoveryStatus.INCOMPLETE)
+
+        # Reopening a tab cannot loop on a node that does not answer.
+        before = len(self.connection.sent)
+        self.service.load_nvs(258)
+        self.assertEqual(self.sent_after(before), [])
+
+        # Refresh Node is the explicit retry, and it reads the node in full.
+        self.service.refresh_node(258)
+        self.receive("9B01020006")
+        for index, value in ((2, 0), (4, 8), (5, 2), (6, 2), (1, 0x0D), (3, 0x22)):
+            self.receive(f"9B0102{index:02X}{value:02X}")
+        self.assertIn(b":SBFC0N71010201;", self.sent_after(before))
+
+    def test_refresh_layout_reads_every_node_in_full(self):
+        self.discover_node()
+        before = len(self.connection.sent)
+        self.service.refresh_layout()
+        self.receive("B601020D2203", "9B01020006")
+        for index, value in ((2, 0), (4, 8), (5, 2), (6, 2), (1, 0x0D), (3, 0x22)):
+            self.receive(f"9B0102{index:02X}{value:02X}")
+        self.receive("9701020105", "9701020207")
+        sent = self.sent_after(before)
+        self.assertIn(b":SBFC0N71010201;", sent)
+        self.assertEqual(sent[-1], b":SBFC0N580102;")
 
 
 if __name__ == "__main__":
