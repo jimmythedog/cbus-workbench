@@ -105,8 +105,9 @@ make format        # ruff format
 make mdfs          # fetch pinned MMC MDF collection (git-ignored)
 
 # single test file / case
-QT_QPA_PLATFORM=offscreen uv run python -m unittest tests.test_nv_write
-QT_QPA_PLATFORM=offscreen uv run python -m unittest tests.test_nv_write.SomeTestCase.test_name
+# single test file / case
+QT_QPA_PLATFORM=offscreen uv run python -m tests tests.test_nv_write
+QT_QPA_PLATFORM=offscreen uv run python -m tests tests.test_nv_write.SomeTestCase.test_name
 ```
 
 On NixOS use plain `python` inside `nix-shell .shell.nix` (or direnv), not `uv run`.

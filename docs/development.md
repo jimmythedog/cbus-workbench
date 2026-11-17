@@ -546,13 +546,13 @@ make check
 The equivalent commands can also be run individually. For example, on NixOS:
 
 ```sh
-nix-shell .shell.nix --run 'python -m unittest discover -s tests'
+nix-shell .shell.nix --run 'QT_QPA_PLATFORM=offscreen python -m tests discover -s tests -b -q'
 ruff check .
 ruff format --check .
 git diff --check
 ```
 
-On other platforms, use `uv run python -m unittest discover -s tests` for the tests.
+On other platforms, use `QT_QPA_PLATFORM=offscreen uv run python -m tests discover -s tests -b -q` for the tests. `python -m tests` takes the same arguments as `python -m unittest`, but filters out three harmless warnings from Qt's offscreen platform plugin; `-b -q` shows test output only for failures.
 
 The Makefile requires GNU Make. Windows developers can use an environment such as MSYS2 or run the underlying commands directly.
 

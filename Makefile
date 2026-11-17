@@ -1,7 +1,7 @@
 .PHONY: test lint format check mdfs user-guide
 
 .DEFAULT_GOAL := help
-TEST_ARGS = -m unittest discover -s tests
+TEST_ARGS = -m tests discover -s tests -b -q
 MMC_VERSION ?=
 
 # Use Nix-provided Python on NixOS, uv elsewhere.

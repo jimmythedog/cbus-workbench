@@ -24,7 +24,7 @@ jobs:
           uv pip install --python .venv ruff
           echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
       - name: Run tests
-        run: uv run --no-sync python -m unittest discover -s tests -v
+        run: uv run --no-sync python -m tests discover -s tests -v
       - name: Check lint
         run: ruff check .
       - name: Check formatting

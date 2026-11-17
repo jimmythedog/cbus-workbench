@@ -45,3 +45,11 @@ Portable builds include the pinned MDF collection for offline use. For source ru
 use `make mdfs` to fetch it. See [MDF sourcing and release refresh instructions](docs/development.md#mdf-collection-for-development-and-portable-builds).
 On NixOS, follow the [NixOS development setup](docs/development.md#nixos-development)
 instead, using Nix-provided Python and PySide6.
+
+## Feedback and feature requests
+
+CBUS Workbench is in early development, and feedback from users is welcome.
+
+- **Found a bug?** [Raise a GitHub issue](https://github.com/jimmythedog/cbus-workbench/issues/new) with details of the problem.
+- **Want a new feature?** [Browse existing issues](https://github.com/jimmythedog/cbus-workbench/issues) before raising a new one.
+- **Like a proposed feature?** Add a 👍 reaction to its issue. This helps us gauge interest and prioritise future development.
