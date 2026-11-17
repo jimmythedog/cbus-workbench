@@ -57,7 +57,15 @@ def _validate_layout(name: object, value: object) -> dict:
     connection = value.get("connection")
     if not isinstance(connection, dict):
         raise SettingsError(f"Layout '{name}' needs a connection mapping")
-    if set(connection) - {"type", "host", "port", "serial_port", "can_id"} or not {
+    if set(connection) - {
+        "type",
+        "host",
+        "port",
+        "serial_port",
+        "can_id",
+        "auto_select",
+        "serial_identity",
+    } or not {
         "type",
         "host",
         "port",
@@ -78,6 +86,9 @@ def _validate_layout(name: object, value: object) -> dict:
     can_id = connection.get("can_id", 126)
     if type(can_id) is not int or not 100 <= can_id <= 127:
         raise SettingsError(f"Layout '{name}' CAN ID must be from 100 to 127")
+    if not isinstance(connection.get("auto_select", False), bool):
+        raise SettingsError(f"Layout '{name}' needs a Boolean auto_select")
+    _validate_serial_identity(name, connection.get("serial_identity"))
 
     return {
         "logical_layout": logical_layout,
@@ -85,6 +96,30 @@ def _validate_layout(name: object, value: object) -> dict:
         "node_poll_seconds": node_poll_seconds,
         "connection": {**connection, "can_id": can_id},
     }
+
+
+def _validate_serial_identity(name: str, identity: object) -> None:
+    """Check the last discovery-confirmed USB adapter, which may be absent."""
+    if identity is None:
+        return
+    if (
+        not isinstance(identity, dict)
+        or set(identity)
+        - {"vendor_id", "product_id", "serial_number", "manufacturer", "description"}
+        or any(
+            type(identity.get(key)) is not int or not 0 <= identity[key] <= 0xFFFF
+            for key in ("vendor_id", "product_id")
+        )
+        or any(
+            not isinstance(identity[key], str) or not identity[key]
+            for key in ("serial_number", "manufacturer", "description")
+            if key in identity
+        )
+    ):
+        raise SettingsError(
+            f"Layout '{name}' serial_identity needs a USB vendor_id and "
+            "product_id, with optional non-empty strings"
+        )
 
 
 def validate_settings(value: object, *, recover_default: bool = False) -> dict:
@@ -146,6 +181,9 @@ def layout_settings_for_ui(stored_layouts: dict[str, dict]) -> dict[str, dict]:
             "port": saved["connection"]["port"],
             "serial_port": saved["connection"]["serial_port"],
             "can_id": saved["connection"]["can_id"],
+            # Absent in settings saved before Auto existed: keep them manual.
+            "auto_select": saved["connection"].get("auto_select", False),
+            "serial_identity": saved["connection"].get("serial_identity"),
             "auto_connect": saved["auto_connect"],
             "node_poll_seconds": saved.get("node_poll_seconds", 10),
         }
@@ -155,21 +193,28 @@ def layout_settings_for_ui(stored_layouts: dict[str, dict]) -> dict[str, dict]:
 
 def layout_settings_for_storage(layouts: dict[str, dict]) -> dict[str, dict]:
     """Nest the window's layout settings for save_settings validation and storage."""
-    return {
-        name: {
+    stored = {}
+    for name, settings in layouts.items():
+        connection = {
+            "type": settings["connection_type"],
+            "host": settings["host"],
+            "port": settings["port"],
+            "serial_port": settings["serial_port"],
+            "can_id": settings["can_id"],
+        }
+        # Absent means manual, so settings saved before Auto existed keep
+        # their exact format when rewritten.
+        if settings.get("auto_select"):
+            connection["auto_select"] = True
+        if settings.get("serial_identity") is not None:
+            connection["serial_identity"] = settings["serial_identity"]
+        stored[name] = {
             "logical_layout": settings["logical_layout"],
             "auto_connect": settings["auto_connect"],
             "node_poll_seconds": settings.get("node_poll_seconds", 10),
-            "connection": {
-                "type": settings["connection_type"],
-                "host": settings["host"],
-                "port": settings["port"],
-                "serial_port": settings["serial_port"],
-                "can_id": settings["can_id"],
-            },
+            "connection": connection,
         }
-        for name, settings in layouts.items()
-    }
+    return stored
 
 
 def validate_layout_input(settings: dict, layouts: dict, current_name=None) -> None:

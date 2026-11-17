@@ -41,6 +41,7 @@ from .pnn import Pnn
 from .send_event_dialog import SendEventDialog
 from .send_frame_dialog import SendFrameDialog
 from .serial_connection import SerialConnection
+from .serial_ports import choose_serial_device
 from .tcp_connection import TcpConnection
 from .traffic import describe_frame
 from .ui_errors import ErrorReporter
@@ -429,6 +430,11 @@ class MainWindow(QMainWindow):
         service.discovery_status_changed.connect(
             lambda _status: self.update_refresh_action()
         )
+        service.discovery_status_changed.connect(
+            lambda status, layout=name, service=service: self.learn_serial_identity(
+                layout, service, status
+            )
+        )
         node_view.details.editing_changed.connect(
             lambda _editing: self.update_refresh_action()
         )
@@ -440,6 +446,60 @@ class MainWindow(QMainWindow):
 
         self.error_reporter.run(
             f"Could not discover nodes on layout '{name}'", service.discover_nodes
+        )
+
+    def learn_serial_identity(
+        self, name: str, service: CbusService, status: str
+    ) -> None:
+        """Remember the opened adapter once discovery confirms it carries CBUS.
+
+        Opening a port or receiving frames is not enough. Incomplete discovery,
+        failures and disconnects keep the previously confirmed adapter.
+        """
+        if status != DiscoveryStatus.READY:
+            return
+        connection = service.connection
+        # A replaced or closed service belongs to an earlier connection.
+        if self.cbus_services.get(name) is not service or not isinstance(
+            connection, SerialConnection
+        ):
+            return
+        identity = connection.device_identity
+        settings = self.layout_settings[name]
+        if identity is None:
+            trace(
+                connection_logger,
+                "Serial adapter not learned: no listed USB port with VID/PID",
+                extra={"fields": {"layout": name, "device": connection.device_path}},
+            )
+            return
+        if identity == settings["serial_identity"]:
+            trace(
+                connection_logger,
+                "Confirmed serial adapter unchanged",
+                extra={"fields": {"layout": name, "device": connection.device_path}},
+            )
+            return
+
+        def save():
+            proposed = self.layout_settings.copy()
+            proposed[name] = {**settings, "serial_identity": identity}
+            self.save_layouts(proposed, self.default_layout)
+            # Update in place: an open Edit dialog compares against this dict.
+            settings["serial_identity"] = identity
+            connection_logger.info(
+                "Confirmed serial adapter saved",
+                extra={
+                    "fields": {
+                        "layout": name,
+                        "device": connection.device_path,
+                        "identity": identity,
+                    }
+                },
+            )
+
+        self.error_reporter.run(
+            f"Could not save the confirmed serial adapter for '{name}'", save
         )
 
     def known_nodes(self, name: str) -> dict[int, bool]:
@@ -583,7 +643,7 @@ class MainWindow(QMainWindow):
         settings = self.layout_settings[name]
         serial = settings["connection_type"] == "Serial"
         endpoint = settings["serial_port"] if serial else settings["host"]
-        if not endpoint:
+        if not endpoint and not (serial and settings["auto_select"]):
             connection_logger.warning(
                 "Connection skipped: endpoint is empty",
                 extra={
@@ -599,6 +659,12 @@ class MainWindow(QMainWindow):
                 f"Set a {'serial device path' if serial else 'TCP host'} in Layout → Edit first.",
             )
             return
+        if serial:
+            # Auto may ask the user to choose, so decide before connecting.
+            device = choose_serial_device(self, name, settings)
+            if device is None:
+                return
+            endpoint, identity = device
 
         connection = self.connections.get(name)
         if connection is None:
@@ -630,7 +696,7 @@ class MainWindow(QMainWindow):
                 "Connecting to serial device",
                 extra={"fields": {"layout": name, "device": endpoint}},
             )
-            connection.connect(endpoint)
+            connection.connect(endpoint, identity)
         else:
             connection_logger.info(
                 "Connecting to TCP hub",
@@ -705,7 +771,7 @@ class MainWindow(QMainWindow):
         settings = self.layout_settings[name]
         serial = settings["connection_type"] == "Serial"
         endpoint = (
-            settings["serial_port"]
+            connection.device_path
             if serial
             else f"{settings['host']}:{settings['port']}"
         )
@@ -1056,6 +1122,8 @@ class MainWindow(QMainWindow):
                 return
 
             settings = dialog.settings()
+            # Discovery may have confirmed an adapter while the dialog was open.
+            settings["serial_identity"] = current["serial_identity"]
 
             if not self.validate_layout_settings(settings, old_name):
                 trace(

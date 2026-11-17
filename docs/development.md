@@ -1004,6 +1004,35 @@ one complete printable ASCII frame, queues it with `QSerialPort.write` and logs 
 TRACE. Both transports use the same Send GridConnect Frame dialog. Disconnecting,
 changing the device path, deleting the layout or closing the window closes the port.
 
+`workbench.serial_ports` lists ports with `QSerialPortInfo`, which reads OS
+metadata without opening a port. All ports are listed; USB ones first. Linux
+uses a `/dev/serial/by-id/` path only for adapters with a USB serial number:
+identical serial-less adapters share one by-id name that udev points at the
+last one plugged in, so a saved manual path could silently open its twin.
+The Auto prompt starts on a placeholder item. macOS lists only the
+`/dev/cu.*` callout device; Windows uses the COM name. A layout's `serial_port`
+is the manual path; `serial_identity` is separately the last adapter whose
+discovery reached Ready: USB VID/PID plus optional serial number, manufacturer
+and description. Absent `auto_select` means manual, so older settings are
+unchanged. Matching compares VID/PID and, when recorded, the serial number;
+strings are only labels (Windows reports a generic description). Without a
+serial number the identity names a model, so identical adapters are ambiguous.
+No adapter types are built in, and no port is probed.
+
+```text
+Connect -> manual: configured path (+ identity of the listed port it names)
+        -> Auto: confirmed identity matches exactly one listed port -> open it
+                 none confirmed / missing / several -> user chooses or cancels
+open -> normal QNN discovery -> Ready -> identity changed? -> save settings
+                             -> Incomplete / disconnect / replaced service
+                                -> keep previous identity
+```
+
+Learning is bound to the service that opened the port, so a stale or replaced
+connection cannot save, and each layout saves only its own identity. Ports
+without VID/PID can be used but not learned. An open Edit dialog keeps the
+identity learned meanwhile rather than its stale copy.
+
 ### Agreed CBUS service design
 
 Each connected layout has a CBUS service between its GridConnect transport and

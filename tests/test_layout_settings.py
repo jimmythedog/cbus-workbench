@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from workbench.layout_settings import LayoutSettingsDialog
+from workbench.serial_ports import SerialPort
 from workbench.window import MainWindow
 
 
@@ -260,15 +261,60 @@ class LayoutSettingsTests(unittest.TestCase):
             self.assertEqual(dialog.port_spin.isVisible(), tcp)
             self.assertEqual(dialog.serial_port_edit.isVisible(), not tcp)
             if not tcp:
-                type_gap = dialog.serial_port_edit.y() - (
+                type_gap = dialog.auto_select_check.y() - (
                     dialog.connection_type_combo.geometry().bottom() + 1
                 )
                 can_gap = dialog.can_id_spin.y() - (
-                    dialog.serial_port_edit.geometry().bottom() + 1
+                    dialog.confirmed_label.geometry().bottom() + 1
                 )
                 self.assertEqual(can_gap, type_gap)
                 self.assertEqual(dialog.can_id_spin.x(), dialog.serial_port_edit.x())
         self.assertLess(heights["Serial"], heights["TCP/IP"])
+
+    def test_serial_device_auto_default_detected_ports_and_manual_entry(self):
+        adapter = SerialPort(
+            "/dev/serial/by-id/usb-CAN-if00",
+            "/dev/ttyACM1",
+            "CAN USB4",
+            "SPROG DCC",
+            0x04D8,
+            0xF80C,
+            "",
+        )
+        ports = []
+        with patch(
+            "workbench.layout_settings.available_ports", side_effect=lambda: ports
+        ):
+            dialog = LayoutSettingsDialog(connection_type="Serial")
+            self.addCleanup(dialog.close)
+            # New serial layouts use Auto; the path is kept for manual mode.
+            self.assertTrue(dialog.auto_select_check.isChecked())
+            self.assertFalse(dialog.serial_port_edit.isEnabled())
+            self.assertEqual(dialog.confirmed_label.text(), "None yet")
+            dialog.auto_select_check.setChecked(False)
+            self.assertEqual(dialog.detected_combo.count(), 1)
+
+            ports.append(adapter)
+            dialog.refresh_button.click()
+            labels = [
+                dialog.detected_combo.itemText(index)
+                for index in range(dialog.detected_combo.count())
+            ]
+            self.assertIn("SPROG DCC CAN USB4 [04D8:F80C] — /dev/ttyACM1", labels)
+            dialog.detected_combo.activated.emit(1)
+            self.assertEqual(dialog.serial_port_edit.text(), adapter.path)
+            dialog.serial_port_edit.setText("/dev/ttyAMA0")
+            self.assertEqual(
+                {
+                    key: dialog.settings()[key]
+                    for key in ("auto_select", "serial_port", "serial_identity")
+                },
+                {
+                    "auto_select": False,
+                    "serial_port": "/dev/ttyAMA0",
+                    "serial_identity": None,
+                },
+            )
 
     def test_cancel_leaves_existing_layout_settings_unchanged(self):
         original = self.window.layout_settings["Home"].copy()

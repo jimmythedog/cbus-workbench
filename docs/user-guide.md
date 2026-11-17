@@ -29,8 +29,27 @@ A new installation starts with no layouts. Choose **Layouts → New…** to crea
 Enter a name and a logical layout, then choose the connection type:
 
 - **TCP/IP**: enter the hub's host and port.
-- **Serial**: enter the serial device path. The connection uses 9600 baud,
-  8 data bits, no parity, one stop bit and no flow control.
+- **Serial**: the connection uses 9600 baud, 8 data bits, no parity, one stop
+  bit and no flow control. Choose how the device is found:
+  - **Auto-select serial device** (the default for new layouts) connects to an
+    adapter matching the one this layout last used successfully, even if its
+    device name (for example `COM3` or `/dev/ttyACM0`) has changed. An adapter is
+    remembered only after a connection's discovery shows **Ready**. Matching uses
+    the adapter's USB vendor and product IDs, plus its serial number when it has
+    one. Adapters without a serial number, such as the CANUSB4, are recognised
+    by model only: a different adapter of the same model is also accepted. If no
+    adapter has been remembered yet, it is not plugged in, or several matching
+    adapters are connected, Workbench lists every serial port and asks you to
+    choose. **Confirmed adapter** shows the remembered adapter. Devices without
+    USB IDs can never be remembered, so turn Auto-select off for them.
+  - With Auto-select off, choose a port from **Detected** (use **Refresh** after
+    plugging in an adapter) or type any device path. Every serial port is
+    listed, including unrecognised adapters. On Linux, a stable
+    `/dev/serial/by-id/` path is used for adapters that report a serial
+    number.
+
+  Listing ports never opens them or sends CBUS traffic. Layouts saved before
+  Auto-select existed keep using their configured device path.
 
 The **CAN ID** is Workbench's transmitting identifier, from 100 to 127, defaulting
 to 126. Choose an ID unique on your network. Enable **Auto-connect on startup**

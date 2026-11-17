@@ -7,8 +7,11 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QGroupBox,
+    QHBoxLayout,
+    QLabel,
     QLayout,
     QLineEdit,
+    QPushButton,
     QSizePolicy,
     QSpinBox,
     QVBoxLayout,
@@ -16,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from .app_settings import validate_layout_input
 from .logging_config import trace
+from .serial_ports import available_ports, find_port, identity_label
 
 logger = logging.getLogger("workbench.layouts")
 
@@ -76,7 +80,9 @@ class LayoutSettingsDialog(QDialog):
         connection_type="TCP/IP",
         host="",
         port=5550,
-        serial_port="/dev/ttyACM0",
+        serial_port="",
+        auto_select=True,
+        serial_identity=None,
         can_id=126,
         auto_connect=False,
         node_poll_seconds=10,
@@ -102,7 +108,27 @@ class LayoutSettingsDialog(QDialog):
         self.port_spin.setRange(1, 65535)
         self.port_spin.setValue(port)
 
+        # Auto defaults on for new layouts; saved manual layouts pass False.
+        self.auto_select_check = QCheckBox("Auto-select serial device")
+        self.auto_select_check.setChecked(auto_select)
+        self.auto_select_check.setToolTip(
+            "Connect to the adapter last confirmed by discovery, even if its "
+            "device name has changed. You are asked to choose when it is "
+            "missing or ambiguous."
+        )
+        # Choosing a detected port fills in the editable path below, which also
+        # accepts any manually entered device path.
+        self.detected_combo = QComboBox()
+        self.detected_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToContents
+        )
+        self.refresh_button = QPushButton("Refresh")
+        self.detected_row = QHBoxLayout()
+        self.detected_row.addWidget(self.detected_combo, 1)
+        self.detected_row.addWidget(self.refresh_button)
         self.serial_port_edit = QLineEdit(serial_port)
+        self.serial_identity = serial_identity
+        self.confirmed_label = QLabel(identity_label(serial_identity))
 
         self.can_id_spin = QSpinBox()
         self.can_id_spin.setRange(100, 127)
@@ -142,7 +168,10 @@ class LayoutSettingsDialog(QDialog):
         self.connection_form.addRow("Type:", self.connection_type_combo)
         self.connection_form.addRow("Host:", self.host_edit)
         self.connection_form.addRow("Port:", self.port_spin)
-        self.connection_form.addRow("Port:", self.serial_port_edit)
+        self.connection_form.addRow(self.auto_select_check)
+        self.connection_form.addRow("Detected:", self.detected_row)
+        self.connection_form.addRow("Device:", self.serial_port_edit)
+        self.connection_form.addRow("Confirmed adapter:", self.confirmed_label)
         self.connection_form.addRow("CAN ID:", self.can_id_spin)
 
         advanced_group = QGroupBox("Advanced")
@@ -162,6 +191,9 @@ class LayoutSettingsDialog(QDialog):
                 self.connection_type_combo,
                 self.host_edit,
                 self.port_spin,
+                self.auto_select_check,
+                self.detected_combo,
+                self.refresh_button,
                 self.serial_port_edit,
                 self.can_id_spin,
             ):
@@ -184,14 +216,57 @@ class LayoutSettingsDialog(QDialog):
         self.connection_type_combo.currentTextChanged.connect(
             self.update_connection_fields
         )
+        self.refresh_button.clicked.connect(self.refresh_ports)
+        self.detected_combo.activated.connect(self.use_detected_port)
+        self.auto_select_check.toggled.connect(self.update_serial_fields)
+        self.refresh_ports()
         self.update_connection_fields(connection_type)
+        if not connection_active:
+            self.update_serial_fields()
+
+    def refresh_ports(self):
+        """List ports without opening them, keeping the entered device path."""
+        ports = available_ports()
+        self.detected_combo.clear()
+        self.detected_combo.addItem(
+            f"{len(ports)} serial port(s) found" if ports else "No serial ports found"
+        )
+        for port in ports:
+            self.detected_combo.addItem(port.label(), port.path)
+        current = find_port(self.serial_port_edit.text().strip(), ports)
+        if current is not None:
+            self.detected_combo.setCurrentIndex(
+                self.detected_combo.findData(current.path)
+            )
+        trace(
+            logger,
+            "Serial port list refreshed",
+            extra={"fields": {"ports": len(ports)}},
+        )
+
+    def use_detected_port(self, index):
+        path = self.detected_combo.itemData(index)
+        if path is not None:
+            self.serial_port_edit.setText(path)
+
+    def update_serial_fields(self):
+        # Auto ignores the configured path, which is kept for switching back.
+        manual = not self.auto_select_check.isChecked()
+        for field in (self.detected_combo, self.refresh_button, self.serial_port_edit):
+            field.setEnabled(manual)
 
     def update_connection_fields(self, connection_type):
         # Unlike a stack, hidden form rows contribute neither height nor spacing.
         tcp = connection_type == "TCP/IP"
         self.connection_form.setRowVisible(self.host_edit, tcp)
         self.connection_form.setRowVisible(self.port_spin, tcp)
-        self.connection_form.setRowVisible(self.serial_port_edit, not tcp)
+        for field in (
+            self.auto_select_check,
+            self.detected_row,
+            self.serial_port_edit,
+            self.confirmed_label,
+        ):
+            self.connection_form.setRowVisible(field, not tcp)
         self.adjustSize()
 
     def settings(self):
@@ -202,6 +277,9 @@ class LayoutSettingsDialog(QDialog):
             "host": self.host_edit.text().strip(),
             "port": self.port_spin.value(),
             "serial_port": self.serial_port_edit.text().strip(),
+            "auto_select": self.auto_select_check.isChecked(),
+            # Learned only from discovery, never edited here.
+            "serial_identity": self.serial_identity,
             "can_id": self.can_id_spin.value(),
             "auto_connect": self.auto_connect_check.isChecked(),
             "node_poll_seconds": self.node_poll_spin.value(),

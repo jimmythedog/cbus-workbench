@@ -74,6 +74,13 @@ class AppSettingsTests(unittest.TestCase):
                         "port": 5550,
                         "serial_port": "/dev/ttyACM1",
                         "can_id": 127,
+                        "auto_select": True,
+                        "serial_identity": {
+                            "vendor_id": 0x04D8,
+                            "product_id": 0xF80C,
+                            "manufacturer": "SPROG DCC",
+                            "description": "CAN USB4",
+                        },
                     },
                 },
             },
@@ -86,6 +93,9 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(set(load_settings(self.path)["layouts"]), {"Home", "Workshop"})
 
         ui = layout_settings_for_ui(load_settings(self.path)["layouts"])
+        self.assertEqual(layout_settings_for_storage(ui), settings["layouts"])
+        self.assertFalse(ui["Home"]["auto_select"])
+        self.assertIsNone(ui["Home"]["serial_identity"])
         self.assertEqual(ui["Home"]["node_poll_seconds"], 10)
         self.assertEqual(ui["Workshop"]["node_poll_seconds"], 0)
         settings["layouts"]["Home"]["node_poll_seconds"] = 25
@@ -249,6 +259,37 @@ class AppSettingsTests(unittest.TestCase):
                     self.assertRaisesRegex(SettingsError, "CAN ID"),
                 ):
                     save_settings(settings, self.path)
+
+    def test_invalid_serial_auto_settings_are_rejected(self):
+        connection = {
+            "type": "Serial",
+            "host": "",
+            "port": 5550,
+            "serial_port": "",
+        }
+        for field, value in (
+            ("auto_select", "yes"),
+            ("serial_identity", {"vendor_id": 0x04D8}),
+            ("serial_identity", {"vendor_id": 0x10000, "product_id": 1}),
+            ("serial_identity", {"vendor_id": 1, "product_id": 1, "serial_number": ""}),
+        ):
+            with (
+                self.subTest(field=field, value=value),
+                self.assertLogs("workbench.settings", level="ERROR"),
+                self.assertRaisesRegex(SettingsError, field),
+            ):
+                save_settings(
+                    {
+                        "default_layout": "Home",
+                        "layouts": {
+                            "Home": {
+                                "logical_layout": "home",
+                                "connection": {**connection, field: value},
+                            }
+                        },
+                    },
+                    self.path,
+                )
 
     def test_stale_default_with_no_layouts_recovers_to_none(self):
         self.path.parent.mkdir(parents=True)

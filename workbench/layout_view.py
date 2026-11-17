@@ -173,7 +173,8 @@ class LayoutView(QWidget):
     def show_summary(self, name, settings):
         """Show configured values independently of the connection's current status."""
         if settings["connection_type"] == "Serial":
-            endpoint = f"Device: {settings['serial_port']}"
+            device = "Auto" if settings["auto_select"] else settings["serial_port"]
+            endpoint = f"Device: {device}"
         else:
             endpoint = f"Host: {settings['host']}  Port: {settings['port']}"
         summary = f"{name} — {endpoint}  CAN ID: {settings['can_id']}"

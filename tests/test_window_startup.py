@@ -94,8 +94,11 @@ class RecordingTcpConnection(RecordingConnection):
 
 
 class RecordingSerialConnection(RecordingConnection):
-    connect = RecordingConnection.connect
     disconnect = RecordingConnection.disconnect
+
+    def connect(self, device_path, device_identity):
+        self.device_path = device_path
+        RecordingConnection.connect(self, device_path, device_identity)
 
 
 class WindowStartupTests(unittest.TestCase):
@@ -475,6 +478,8 @@ class WindowStartupTests(unittest.TestCase):
                 "port": 5551,
                 "serial_port": "/dev/ttyACM0",
                 "can_id": 126,
+                "auto_select": False,
+                "serial_identity": None,
             },
         )
         self.assertEqual(
@@ -489,6 +494,8 @@ class WindowStartupTests(unittest.TestCase):
             window.layout_settings["Workshop"]["serial_port"], "/dev/ttyACM1"
         )
         self.assertFalse(window.layout_settings["Workshop"]["auto_connect"])
+        # Saved before Auto existed: stays a manual device path.
+        self.assertFalse(window.layout_settings["Workshop"]["auto_select"])
         self.assertEqual(window.connections, {})
         self.assertEqual(
             window.connection_states,
@@ -561,7 +568,7 @@ class WindowStartupTests(unittest.TestCase):
     def test_one_tcp_or_serial_layout_auto_connects(self):
         for connection_type, expected_type, endpoint in (
             ("TCP/IP", "RecordingTcpConnection", ("other.example", 5551)),
-            ("Serial", "RecordingSerialConnection", ("/dev/other",)),
+            ("Serial", "RecordingSerialConnection", ("/dev/other", None)),
         ):
             with self.subTest(connection_type=connection_type):
                 RecordingConnection.attempts = []

@@ -10,13 +10,24 @@ from unittest.mock import patch
 from layout_fixture import sample_settings
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtSerialPort import QSerialPort
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QMessageBox
 
 from workbench.logging_config import TRACE
 from workbench.pnn import Pnn
 from workbench.send_frame_dialog import SendFrameDialog
 from workbench.serial_connection import SerialConnection
+from workbench.serial_ports import SerialPort
 from workbench.window import MainWindow
+
+# Discovery replies from one module with no NVs or events: enough to reach Ready.
+READY_REPLIES = (
+    b":SB040NB601020D2203;",
+    b":SB040N9B01020006;",
+    *(f":SB040N9B0102{index:02X}00;".encode() for index in (2, 4, 5, 6, 1, 3)),
+    b":SB040N74010200;",
+)
+CANUSB4 = {"vendor_id": 0x04D8, "product_id": 0xF80C, "description": "CAN USB4"}
 
 
 class FakeSerialPort(QObject):
@@ -487,6 +498,116 @@ class SerialLayoutTests(unittest.TestCase):
         self.assertEqual(self.window.connection_status.text(), "Disconnected")
         self.window.connect_layout()
         self.assertEqual(FakeSerialPort.ports[-1].name, "/dev/ttyACM1")
+
+
+class SerialAdapterLearningTests(unittest.TestCase):
+    """A layout learns its adapter only from discovery that reaches Ready."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        FakeSerialPort.ports = []
+        FakeSerialPort.open_succeeds = True
+        self.ports = []
+        for target, value in (
+            ("workbench.serial_connection.QSerialPort", FakeSerialPort),
+            ("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 20),
+        ):
+            patcher = patch(target, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = patch(
+            "workbench.serial_ports.available_ports", side_effect=lambda: self.ports
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        with patch("workbench.window.load_settings", return_value=sample_settings()):
+            self.window = MainWindow()
+        self.addCleanup(self.window.close)
+        patcher = patch("workbench.window.save_settings")
+        self.save = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def use_adapter(self, path, vid=0x04D8, pid=0xF80C):
+        self.ports = [
+            SerialPort(path, path, "CAN USB4", "", vid, pid, ""),
+            SerialPort("/dev/ttyS0", "/dev/ttyS0", "", "", None, None, ""),
+        ]
+
+    def configure(self, **settings):
+        self.window.layout_settings["Home"].update(connection_type="Serial", **settings)
+
+    def saved_identity(self):
+        layouts = self.save.call_args.args[0]["layouts"]
+        return layouts["Home"]["connection"].get("serial_identity")
+
+    def test_ready_learns_manual_adapter_and_auto_follows_name_change(self):
+        self.use_adapter("/dev/ttyACM1")
+        self.configure(auto_select=False, serial_port="/dev/ttyACM1")
+        self.window.connect_layout()
+        for frame in READY_REPLIES:
+            FakeSerialPort.ports[-1].feed(frame)
+        QTest.qWait(80)
+        self.assertEqual(self.window.discovery_status.text(), "Ready")
+        self.assertEqual(
+            self.window.layout_settings["Home"]["serial_identity"], CANUSB4
+        )
+        self.assertEqual(self.saved_identity(), CANUSB4)
+        self.window.disconnect_layout()
+
+        self.use_adapter("/dev/ttyACM4")
+        self.configure(auto_select=True)
+        with patch("workbench.serial_ports.QInputDialog.getItem") as ask:
+            self.window.connect_layout()
+        ask.assert_not_called()
+        self.assertEqual(FakeSerialPort.ports[-1].name, "/dev/ttyACM4")
+
+    def test_incomplete_or_disconnected_discovery_keeps_previous_identity(self):
+        previous = {"vendor_id": 0x0403, "product_id": 0x6001}
+        self.use_adapter("/dev/ttyACM1")
+        self.configure(
+            auto_select=False, serial_port="/dev/ttyACM1", serial_identity=previous
+        )
+        self.window.connect_layout()
+        QTest.qWait(80)
+        self.assertEqual(self.window.discovery_status.text(), "Incomplete")
+
+        self.window.disconnect_layout()
+        self.window.connect_layout()
+        FakeSerialPort.ports[-1].feed(READY_REPLIES[0])
+        self.window.disconnect_layout()
+        QTest.qWait(80)
+
+        self.assertEqual(
+            self.window.layout_settings["Home"]["serial_identity"], previous
+        )
+        self.save.assert_not_called()
+
+    def test_port_without_usb_metadata_connects_but_is_not_learned(self):
+        self.use_adapter("/dev/ttyACM1")
+        self.configure(auto_select=False, serial_port="/dev/ttyS0")
+        self.window.connect_layout()
+        for frame in READY_REPLIES:
+            FakeSerialPort.ports[-1].feed(frame)
+        QTest.qWait(80)
+
+        self.assertEqual(self.window.discovery_status.text(), "Ready")
+        self.assertIsNone(self.window.layout_settings["Home"]["serial_identity"])
+        self.save.assert_not_called()
+
+    def test_cancelled_auto_choice_leaves_layout_disconnected(self):
+        self.use_adapter("/dev/ttyACM1")
+        self.configure(auto_select=True)
+        with patch(
+            "workbench.serial_ports.QInputDialog.getItem", return_value=("", False)
+        ):
+            self.window.connect_layout()
+
+        self.assertEqual(FakeSerialPort.ports, [])
+        self.assertEqual(self.window.connection_status.text(), "Disconnected")
 
 
 if __name__ == "__main__":

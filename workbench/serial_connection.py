@@ -21,18 +21,30 @@ class SerialConnection(QObject):
         super().__init__(parent)
         self.layout_name = layout_name
         self.state = "Disconnected"
+        self.device_path = ""
+        # USB identity of the opened adapter, remembered by the layout only
+        # once discovery reaches Ready. None when the port has no VID/PID.
+        self.device_identity: dict | None = None
         self._receive_buffer = bytearray()
         self.port = QSerialPort(self)
         self.port.errorOccurred.connect(self._error)
         self.port.readyRead.connect(self._receive_data)
 
-    def connect(self, device_path: str) -> None:
+    def connect(self, device_path: str, device_identity: dict | None = None) -> None:
         if self.state == "Error":
             self._set_state("Disconnected")
+        self.device_path = device_path
+        self.device_identity = device_identity
         trace(
             logger,
             "Opening serial port",
-            extra={"fields": {"layout": self.layout_name, "device": device_path}},
+            extra={
+                "fields": {
+                    "layout": self.layout_name,
+                    "device": device_path,
+                    "identity": device_identity,
+                }
+            },
         )
         self.port.setPortName(device_path)
         # Use Qt's default 9600, 8 data bits, no parity, one stop bit and no flow
