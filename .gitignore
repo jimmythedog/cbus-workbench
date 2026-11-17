@@ -222,3 +222,6 @@ __marimo__/
 
 # Generated MMC-SERVER MDF collection
 /resources/mdfs/
+
+# Generated offline user guide
+/resources/user-guide/

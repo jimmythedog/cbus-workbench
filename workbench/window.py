@@ -1,6 +1,7 @@
 import logging
 import sys
 import tomllib
+import webbrowser
 from importlib import metadata
 from pathlib import Path
 
@@ -37,6 +38,7 @@ from .mmc_import_dialog import MmcImportDialog
 from .node_metadata import save_metadata
 from .node_number_dialog import NodeNumberDialog
 from .observed_events import EventIdentity, ObservedEvents, decode_event
+from .paths import user_guide_path
 from .pnn import Pnn
 from .send_event_dialog import SendEventDialog
 from .send_frame_dialog import SendFrameDialog
@@ -240,6 +242,11 @@ class MainWindow(QMainWindow):
             action.setChecked(level == current_level)
 
         help_menu = self.menuBar().addMenu("&Help")
+
+        user_guide_action = QAction("&User Guide", self)
+        user_guide_action.setShortcut(QKeySequence.StandardKey.HelpContents)
+        user_guide_action.triggered.connect(self.show_user_guide)
+        help_menu.addAction(user_guide_action)
 
         directories_action = QAction("Application Directories…", self)
         directories_action.triggered.connect(
@@ -1361,6 +1368,29 @@ class MainWindow(QMainWindow):
         for name in tuple(self.connections):
             self.close_layout_connection(name)
         super().closeEvent(event)
+
+    def show_user_guide(self) -> None:
+        """Open the bundled HTML guide in the default browser; it needs no network.
+
+        webbrowser asks for a browser explicitly (xdg-open on Linux, the default
+        handler on Windows, the default browser on macOS). QDesktopServices
+        opens local files through the desktop portal on Linux, whose app
+        chooser ignores the system's default HTML application.
+        """
+        logger = logging.getLogger("workbench")
+        path = user_guide_path()
+        trace(logger, "Opening user guide: path=%s", path)
+        if not path.is_file():
+            # Source runs need "make user-guide"; packaged builds always include it.
+            logger.warning("User guide not found: %s", path)
+            QMessageBox.warning(
+                self, "User Guide", f"The user guide was not found:\n{path}"
+            )
+        elif not webbrowser.open(path.as_uri()):
+            logger.warning("Could not open user guide: %s", path)
+            QMessageBox.warning(
+                self, "User Guide", f"Could not open the user guide:\n{path}"
+            )
 
     def show_about(self):
         try:

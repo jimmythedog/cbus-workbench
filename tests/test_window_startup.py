@@ -169,6 +169,45 @@ class WindowStartupTests(unittest.TestCase):
             window.show_about()
         self.assertIn("<p>Version: Development</p>", about.call_args.args[2])
 
+    def trigger_user_guide(self, window):
+        help_menu = next(
+            action.menu()
+            for action in window.menuBar().actions()
+            if action.text() == "&Help"
+        )
+        next(a for a in help_menu.actions() if a.text() == "&User Guide").trigger()
+
+    def test_user_guide_menu_opens_local_guide_in_browser(self):
+        window = self.open_window()
+        guide = Path(self.path).parent / "user-guide.html"
+        guide.write_text("guide", encoding="utf-8")
+        with (
+            patch("workbench.window.user_guide_path", return_value=guide),
+            patch("workbench.window.webbrowser.open", return_value=True) as open_url,
+            patch("workbench.window.QMessageBox.warning") as warning,
+        ):
+            self.trigger_user_guide(window)
+        self.assertEqual(open_url.call_args.args[0], guide.as_uri())
+        warning.assert_not_called()
+
+    def test_user_guide_reports_missing_or_unopenable_guide(self):
+        window = self.open_window()
+        guide = Path(self.path).parent / "user-guide.html"
+        for exists in (False, True):
+            with self.subTest(exists=exists):
+                if exists:
+                    guide.write_text("guide", encoding="utf-8")
+                with (
+                    patch("workbench.window.user_guide_path", return_value=guide),
+                    patch(
+                        "workbench.window.webbrowser.open",
+                        return_value=False,
+                    ),
+                    patch("workbench.window.QMessageBox.warning") as warning,
+                ):
+                    self.trigger_user_guide(window)
+                self.assertIn(str(guide), warning.call_args.args[2])
+
     def test_chosen_logging_level_is_saved_and_kept_by_layout_changes(self):
         workbench_logger = logging.getLogger("workbench")
         self.addCleanup(workbench_logger.setLevel, workbench_logger.level)

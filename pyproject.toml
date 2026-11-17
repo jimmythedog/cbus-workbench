@@ -16,3 +16,8 @@ mmc_version = "v0.23.2"
 
 [tool.hatch.build.targets.wheel]
 packages = ["workbench"]
+
+[dependency-groups]
+dev = [
+    "markdown>=3.11.3",
+]

@@ -51,8 +51,10 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
+      # The dev group supplies the Markdown converter for the user guide;
+      # PyInstaller bundles only what the application imports.
       - name: Install build dependencies
-        run: uv sync --no-dev
+        run: uv sync --locked
       - name: Install PyInstaller
         run: uv pip install --python .venv pyinstaller
       - name: Read version
@@ -67,13 +69,17 @@ jobs:
           echo "INSTALLER=dist/cbus-workbench-$version-${{ matrix.platform }}${{ matrix.installer_suffix }}" >> "$GITHUB_ENV"
       - name: Fetch pinned MDF collection
         run: uv run --no-sync python scripts/fetch_mdfs.py
+      - name: Build offline user guide
+        run: uv run --no-sync python scripts/build_user_guide.py
       - name: Bundle application
-        run: uv run --no-sync pyinstaller --noconfirm --clean --windowed --onedir --add-data "resources/mdfs:resources/mdfs" --copy-metadata cbus-workbench ${{ matrix.icon_option }} --name "CBUS Workbench" main.py
+        run: uv run --no-sync pyinstaller --noconfirm --clean --windowed --onedir --add-data "resources/mdfs:resources/mdfs" --add-data "resources/user-guide:resources/user-guide" --copy-metadata cbus-workbench ${{ matrix.icon_option }} --name "CBUS Workbench" main.py
       - name: Verify bundle exists
         shell: bash
         run: test -e "${{ matrix.executable }}"
       - name: Verify packaged MDF collection
         run: uv run --no-sync python scripts/check_bundled_mdfs.py "${{ matrix.resource_root }}"
+      - name: Verify packaged user guide
+        run: uv run --no-sync python scripts/check_bundled_user_guide.py "${{ matrix.resource_root }}"
 
       - name: Build Debian package
         if: runner.os == 'Linux'
@@ -86,6 +92,7 @@ jobs:
           test -f deb-contents/usr/share/applications/cbus-workbench.desktop
           test -f deb-contents/usr/share/icons/hicolor/256x256/apps/cbus-workbench.png
           uv run --no-sync python scripts/check_bundled_mdfs.py deb-contents/opt/cbus-workbench/_internal
+          uv run --no-sync python scripts/check_bundled_user_guide.py deb-contents/opt/cbus-workbench/_internal
       - name: Install, launch and remove Debian package on clean Ubuntu
         if: runner.os == 'Linux'
         run: docker run --rm -v "$PWD:/repo" ubuntu:24.04 /repo/packaging/linux/check_deb.sh "/repo/$INSTALLER"
@@ -111,6 +118,8 @@ jobs:
           if ($setup.ExitCode -ne 0) { throw "Installer exited with $($setup.ExitCode)" }
           if (-not (Test-Path $shortcut)) { throw "Start Menu shortcut missing" }
           uv run --no-sync python scripts/check_bundled_mdfs.py "$app\_internal"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv run --no-sync python scripts/check_bundled_user_guide.py "$app\_internal"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $run = Start-Process $exe -PassThru
           Start-Sleep 10
@@ -138,6 +147,7 @@ jobs:
           test -L dmg-mount/Applications
           codesign --verify --deep --strict "$app"
           uv run --no-sync python scripts/check_bundled_mdfs.py "$app/Contents/Resources"
+          uv run --no-sync python scripts/check_bundled_user_guide.py "$app/Contents/Resources"
           "$app/Contents/MacOS/CBUS Workbench" &
           pid=$!
           sleep 10

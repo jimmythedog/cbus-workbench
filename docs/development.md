@@ -205,6 +205,31 @@ presentation and a user override on each target platform before releasing.
 Changing `MMC_VERSION` locally does not change the release pin. The application
 never downloads MDFs at runtime.
 
+### Offline user guide
+
+`docs/user-guide.md` is the only source of the user guide. `make user-guide` (or
+`python scripts/build_user_guide.py`) converts it with Python-Markdown, a `dev`
+dependency, into `resources/user-guide/user-guide.html`, copying the images it
+uses alongside. That directory is generated and ignored by Git. The `toc`
+extension gives headings ids, so the guide's `#section` links work offline as
+well as on GitHub. Relative links to other documents, which are not
+bundled, are rewritten to their online copies on GitHub. A missing image fails
+the build.
+Python-Markdown's heading ids match GitHub's only for plain headings (it collapses
+repeated hyphens, for example), so a test checks that every `#section` link in
+the real guide has a target.
+
+The packaging workflow builds the guide before PyInstaller and adds it with
+`--add-data "resources/user-guide:resources/user-guide"`, next to the MDFs. After
+each build and install, `scripts/check_bundled_user_guide.py` compares the bundled
+files with the generated ones. At runtime, `user_guide_path()` resolves the page
+from the source root or `sys._MEIPASS`, and Help → User Guide opens it in the
+default web browser with Python's `webbrowser` module. `QDesktopServices` is not
+used here: on Linux it opens local files through the desktop portal, whose app
+chooser ignores the system's default HTML application. If the page is missing,
+typically in a source run before `make user-guide`, the app shows a warning
+naming the path.
+
 ### Release packaging
 
 `.github/workflows/portable-builds.yml` runs on manual dispatch, or as part of
@@ -213,12 +238,14 @@ job (Windows x64, Linux x64, macOS Intel, macOS Apple Silicon) builds one
 PyInstaller onedir bundle natively on its runner and wraps that same bundle in a
 native installer, so the portable and installed applications are identical:
 
-    pyproject version + pinned MDFs -> PyInstaller bundle -> MDF check
+    pyproject version + pinned MDFs + user guide -> PyInstaller bundle
+        -> MDF and user guide checks
         -> portable artifact (-portable)
         -> Windows: Inno Setup setup.exe  (packaging/windows/cbus-workbench.iss)
            Linux:   .deb                  (packaging/linux/build_deb.sh)
            macOS:   .dmg with .app and an Applications link (hdiutil)
-        -> install/open, MDF check, launch, uninstall -> installer artifact
+        -> install/open, MDF and user guide checks, launch, uninstall
+        -> installer artifact
 
 Artifact names include `[project].version`. When the workflow runs on a tag, the
 job fails if the tag is not `v<version>`. Releases are drafted automatically and
@@ -229,10 +256,10 @@ Each installer is checked in CI after it is built. The checks are against the
 installed or mounted result, not the build directory:
 
 - **Windows:** silent per-machine install to Program Files, Start Menu shortcut,
-  MDF check, a ten-second launch, then silent uninstall. The installer's `AppId`
+  MDF and user guide checks, a ten-second launch, then silent uninstall. The installer's `AppId`
   must never change, because Windows uses it to upgrade an existing installation.
   An upgrade deletes the previous `_internal/` before copying the new one.
-- **Linux:** the package contents are extracted and MDF-checked. Then
+- **Linux:** the package contents are extracted and the MDFs and user guide checked. Then
   `packaging/linux/check_deb.sh` installs the package into a clean `ubuntu:24.04`
   container, so only the declared `Depends` are present. There it checks that
   every bundled library resolves, launches `cbus-workbench` under Xvfb and removes
@@ -245,7 +272,7 @@ installed or mounted result, not the build directory:
   `Depends` in `build_deb.sh` needs updating. Building on Ubuntu 24.04 sets the
   minimum glibc to 2.39.
 - **macOS:** the DMG is mounted, then its app signature is verified (PyInstaller
-  signs ad hoc), the MDFs are checked and the app is launched from the image.
+  signs ad hoc), the MDFs and user guide are checked and the app is launched from the image.
   Intel (`macos-x64`) and Apple Silicon (`macos-arm64`) are separate native builds,
   not a universal binary.
 
@@ -502,6 +529,7 @@ The project provides a `Makefile` with convenient commands for common developmen
 | `make` | Show available commands |
 | `make run` | Run the application |
 | `make mdfs` | Download the pinned development MDF collection |
+| `make user-guide` | Build the offline HTML user guide |
 | `make test` | Run the full Python test suite |
 | `make lint` | Run Ruff lint checks |
 | `make format` | Format Python source files |

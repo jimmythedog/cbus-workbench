@@ -7,6 +7,7 @@ pkgs.mkShell {
     (pkgs.python3.withPackages (ps: [
       ps.pyside6
       ps.pyyaml
+      ps.markdown
     ]))
     pkgs.bashInteractive
     pkgs.uv
