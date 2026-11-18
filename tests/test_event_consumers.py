@@ -1,15 +1,17 @@
 """Event dependencies (#87): configured consumers shown below event rows."""
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QLabel
 
 from workbench.cbus_service import CbusService, DiscoveryProgress, NodeState
 from workbench.layout_view import LayoutView
+from workbench.mdfs import MdfRepository
 from workbench.node_metadata import save_metadata
 from workbench.observed_events import EventIdentity, ObservedEvents
 from workbench.pnn import Pnn
@@ -49,6 +51,30 @@ def rows(item):
         for child in (item.child(i) for i in range(item.childCount()))
         for children in [[child.child(j) for j in range(child.childCount())]]
     ]
+
+
+def presentation(tree, event):
+    """What an event's visible EV rows and their MDF control rows show."""
+    shown = []
+    for ev in (event.child(i) for i in range(event.childCount())):
+        if ev.isHidden():
+            continue
+        form = tree.itemWidget(ev, 1)
+        controls = []
+        for row in (ev.child(i) for i in range(ev.childCount())):
+            control = tree.itemWidget(row, 1).findChild(QComboBox) or tree.itemWidget(
+                row, 1
+            ).findChild(QCheckBox)
+            value = (
+                control.currentText()
+                if isinstance(control, QComboBox)
+                else control.isChecked()
+            )
+            label = tree.itemWidget(row, 0).findChild(QLabel).text()
+            controls.append((label, value, row.isHidden(), control.isEnabled()))
+        raw = (form.raw_value.text(), form.raw_value.isReadOnly()) if form else None
+        shown.append((ev.text(0), raw, controls))
+    return shown
 
 
 def event_row(table, label):
@@ -144,8 +170,13 @@ class EventConsumerTests(unittest.TestCase):
         self.add_live(consumer(260, {(258, 102): {1: 4, 2: None}}))
         self.add_live(consumer(261, {}))
         none = [("No configured consumers", "", [])]
-        unread = ("Not determined", "Right-click to load unread nodes", [])
-        unknown = ("Not determined", "Use Layouts → Refresh", [])
+
+        def unread(*nodes):
+            return ("Not determined", "Right-click to load unread nodes", list(nodes))
+
+        def unknown(*nodes):
+            return ("Not determined", "Use Layouts → Refresh", list(nodes))
+
         confirmed = ("Node 260 - CANMIO", "", [("EV 1", "4")])
         self.assertEqual(rows(self.layout_event("258:7")), none)
 
@@ -154,7 +185,7 @@ class EventConsumerTests(unittest.TestCase):
         undetermined = {
             "not loaded": consumer(262, {}, progress=DiscoveryProgress.NOT_STARTED),
             "loading": consumer(262, {}, progress=DiscoveryProgress.IN_PROGRESS),
-            "incomplete": consumer(
+            "discovery incomplete": consumer(
                 262, {(258, 7): {1: 6}}, progress=DiscoveryProgress.INCOMPLETE
             ),
             "Offline": consumer(262, {(258, 7): {1: 8}}),
@@ -165,7 +196,9 @@ class EventConsumerTests(unittest.TestCase):
                 self.service.presence[262] = reason != "Offline"
                 self.view.refresh_consumers()
                 # Only unread nodes can be loaded without Layouts → Refresh.
-                hint = unread if reason == "not loaded" else unknown
+                # Each undetermined node is listed with its reason.
+                node = ("Node 262", reason)
+                hint = unread(node) if reason == "not loaded" else unknown(node)
                 self.assertEqual(rows(self.layout_event("258:7")), [hint])
                 self.assertEqual(rows(self.layout_event("258:102")), [confirmed, hint])
 
@@ -176,14 +209,26 @@ class EventConsumerTests(unittest.TestCase):
         # Without a connection nothing is confirmed, even previously read nodes.
         self.connection.state = "Disconnected"
         self.view.refresh_consumers()
-        self.assertEqual(rows(self.layout_event("258:102")), [unknown])
+        # Refresh needs a connection, so the hint is to connect first.
+        self.assertEqual(
+            rows(self.layout_event("258:102")),
+            [
+                (
+                    "Not determined",
+                    "Use Layouts → Connect",
+                    [(f"Node {n}", "disconnected") for n in (260, 261, 262)],
+                )
+            ],
+        )
         self.connection.state = "Connected"
 
         # A saved-only node's metadata is not confirmed live configuration.
         save_metadata("test", consumer(265, {(258, 7): {1: 1}}))
         self.view.node_view.show_saved_nodes("test")
         self.view.refresh_consumers()
-        self.assertEqual(rows(self.layout_event("258:7")), [unknown])
+        self.assertEqual(
+            rows(self.layout_event("258:7")), [unknown(("Node 265", "Offline"))]
+        )
 
     def test_configuration_changes_refresh_while_keeping_expansion(self):
         state = consumer(260, {(258, 102): {1: 4}})
@@ -211,6 +256,52 @@ class EventConsumerTests(unittest.TestCase):
         self.assertTrue(event.child(0).isExpanded())
         self.assertIs(table.currentItem(), event.child(0).child(0))
 
+    def test_consumer_evs_show_its_consumed_events_mdf_presentation_read_only(self):
+        # One presentation in two places: group labels, token renames, values
+        # and NV-dependent labels come from the same MDF code (#168/#169).
+        mdf = json.loads(
+            (Path(__file__).parent / "fixtures/mdfs/canmio-3d-ev2.json").read_text()
+        )
+        mdf |= {"moduleName": "CANMIO", "nodeVariables": []}
+        system = self.root / "mdfs"
+        system.mkdir()
+        (system / "CANMIO-A520-3d.json").write_text(json.dumps(mdf))
+        self.view.node_view.mdf_repository = MdfRepository(system, self.root / "user")
+        self.view.annotations.save({"tokens": {"channel": {"1": "Points"}}}, 260)
+        details = self.view.node_view.details
+        table = self.view.layout_events.table
+
+        # Load Unread Nodes reads no NVs: their labels stay unknown, not guessed.
+        for nvs, action in (
+            ({}, "Unknown label (NV 16 unread)"),
+            ({16: 1}, "Points - ON"),
+        ):
+            with self.subTest(nvs=nvs):
+                state = consumer(260, {(258, 102): {1: 0, 2: 137}})
+                state.parameters |= {2: ord("d"), 7: 3}
+                state.nv_values |= nvs
+                self.add_live(state)
+                self.view.refresh_consumers()
+                node = self.layout_event("258:102").child(0)
+                node.setExpanded(True)
+                shown = presentation(table, node)
+
+                self.view.select_node(260)
+                consumed = event_row(details.node_events.consumed_table, "258:102")
+                consumed.setExpanded(True)
+                self.assertEqual(
+                    shown, presentation(details.node_events.consumed_table, consumed)
+                )
+                ev2 = shown[1]
+                self.assertEqual(ev2[1], ("137", True))
+                self.assertEqual(ev2[2][0][:2], ("Action:", action))
+                self.assertFalse(any(enabled for *_, enabled in ev2[2]))
+
+        # Renaming a token updates an already expanded consumer.
+        self.view.annotations.save({"tokens": {"channel": {"1": "Junction"}}}, 260)
+        node = event_row(table, "258:102").child(0)
+        self.assertEqual(presentation(table, node)[1][2][0][1], "Junction - ON")
+
     def test_consumer_opens_that_nodes_consumed_event(self):
         self.add_live(consumer(258, {}, flags=0x02, progress=DiscoveryProgress.SKIPPED))
         self.add_live(consumer(260, {(1, 1): {1: 9}, (258, 102): {1: 4}}))
@@ -234,10 +325,13 @@ class EventConsumerTests(unittest.TestCase):
                 )
                 self.assertEqual(details.node_events.selected_identity(), (258, 102))
 
-    def test_load_unread_nodes_reads_only_unread_consumers_events(self):
-        self.add_live(consumer(260, {(258, 102): {1: 4, 2: None}}))
+    def test_load_unread_nodes_reads_only_unread_consumers_events_and_nvs(self):
+        # 260's events were read, but not the NVs its MDF labels may need.
+        read = consumer(260, {(258, 102): {1: 4, 2: None}})
+        read.parameters[6] = 1
+        self.add_live(read)
         unread = consumer(261, {}, progress=DiscoveryProgress.NOT_STARTED)
-        unread.parameters[6] = 2  # Its NVs could be read too, but are not needed.
+        unread.parameters[6] = 2
         self.add_live(unread)
         self.add_live(
             consumer(262, {}, flags=0x02, progress=DiscoveryProgress.NOT_STARTED)
@@ -253,17 +347,30 @@ class EventConsumerTests(unittest.TestCase):
             self.assertTrue(action.isEnabled())
         self.view.layout_events.consumers.load_action(self.service).trigger()
 
-        # Only Online consumer 261 (0x0105) is asked for its stored event count.
-        self.assertEqual(self.connection.sent[sent:], [b":SBFC0N580105;"])
-        self.connection.frame_received.emit(b":SB040N74010500;")
+        # Answer each request in turn: NVRD with NVANS, RQEVN with NUMEV 0.
+        requests = []
+        while len(self.connection.sent) > sent:
+            frame = self.connection.sent[sent].decode()
+            sent += 1
+            opcode, node = frame[7:9], frame[9:13]
+            requests.append((opcode, int(node, 16), frame[13:-1]))
+            reply = {"71": f"97{node}{frame[13:15]}00", "58": f"74{node}00"}[opcode]
+            self.connection.frame_received.emit(f":SB040N{reply};".encode())
         self.view.refresh_consumers()
+
+        # Only Online possible consumers: 260's NV, 261's NVs and stored events
+        # (0x0104 = 260, 0x0105 = 261). Non-consumer 262 and Offline 263 are not read.
+        self.assertCountEqual(
+            requests,
+            [("71", 260, "01"), ("71", 261, "01"), ("71", 261, "02"), ("58", 261, "")],
+        )
 
         # Offline 263 still needs Layouts → Refresh; nothing is left to load.
         self.assertEqual(
             rows(event),
             [
                 ("Node 260 - CANMIO", "", [("EV 1", "4")]),
-                ("Not determined", "Use Layouts → Refresh", []),
+                ("Not determined", "Use Layouts → Refresh", [("Node 263", "Offline")]),
             ],
         )
         self.assertFalse(

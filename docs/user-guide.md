@@ -219,14 +219,22 @@ seen again is added back automatically with its saved name.
 
 Expand an event (using its arrow) in the layout **Events** tab or a node's **Produced Events** to
 see which nodes on this connection are configured to consume it, with each
-node's raw EV values. Double-click a consumer to open its **Consumed Events**
-with that event selected. Expanding only uses configuration already read.
+node's raw EV values. Expand a consumer to see its EVs exactly as its
+**Consumed Events** shows them, with the same module descriptor controls and
+renamed labels, but read-only. EV values that have not been read show
+**Unknown**. Labels and visibility that depend on NVs not yet read show as
+unknown; right-click and choose **Load Unread Nodes** to read them.
+Double-click a consumer to open its **Consumed Events** with that event
+selected. Expanding only uses configuration already read.
 Consumers are labelled by module type. **Not determined** means at least one
 node that might consume the event has not been fully read on this connection:
 not yet loaded, still reading, incompletely read, Offline or disconnected.
-The row says **Right-click to load unread nodes** when some Online nodes
-have not been read yet: choose **Load Unread Nodes** to read just their events
-and EVs. Otherwise it says **Use Layouts → Refresh**, which rereads the layout
+Expand it to see each such node and why.
+When the layout is disconnected the row says **Use Layouts → Connect**.
+Otherwise it says **Right-click to load unread nodes** when some Online nodes
+have not been read yet: choose **Load Unread Nodes** to read just their events,
+EVs and NVs. It also reads the NVs of consumers whose events were already
+read. If not, it says **Use Layouts → Refresh**, which rereads the layout
 and finds nodes not yet known; **Refresh Node** retries a single node.
 **No configured consumers** appears only when every
 known consumer has been read; nodes that do not consume events are left out. Seeing an event on the network does not

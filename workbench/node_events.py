@@ -12,8 +12,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QSpinBox,
-    QStyle,
-    QStyledItemDelegate,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -22,27 +20,19 @@ from PySide6.QtWidgets import (
 
 from .cbus_service import NodeState
 from .event_consumers import ConsumerTree
-from .event_mdf import EvContainer, EvValueValidator, add_ev_controls, ev_definitions
+from .event_mdf import (
+    EvContainer,
+    EvValueValidator,
+    NoHoverDelegate,
+    add_ev_controls,
+    ev_definitions,
+)
 from .logging_config import trace
 from .observed_events import EventIdentity
 from .pnn import Pnn
 from .send_event_dialog import event_menu
 
 logger = logging.getLogger(__name__)
-
-
-class NoHoverDelegate(QStyledItemDelegate):
-    def paint(self, painter, option, index):
-        if index.parent().isValid() and not index.siblingAtColumn(0).data():
-            option.state &= ~QStyle.StateFlag.State_MouseOver
-
-        super().paint(painter, option, index)
-
-    def createEditor(self, parent, option, index):
-        if index.column() == 0:
-            return None
-
-        return super().createEditor(parent, option, index)
 
 
 class RawEvDelegate(NoHoverDelegate):

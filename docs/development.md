@@ -71,21 +71,45 @@ consumer only when Online with `event_progress` complete. Non-consumers
 in the navigator inventory, including saved-only and Offline nodes, is listed
 as undetermined (not loaded, loading, discovery incomplete, Offline or
 disconnected), so a missing consumer is never shown as absent. The tree shows
-one *Not determined* row rather than per-node reasons, which are traced. Its
-hint offers Load Unread Nodes only when a node is not loaded; that set does
+one *Not determined* row, collapsed, whose children list each node and reason.
+Its hint is Layouts → Connect when disconnected (Refresh needs a connection);
+otherwise it offers Load Unread Nodes only when a node is not loaded; that set does
 not depend on the event. Consumers are labelled by module type, not annotation name: refreshes
 follow every discovery step and must not reread annotation files. Observed traffic, backups and metadata are never evidence. Raw EVs show
 confirmed values; confirmed absence is hidden, unread values show `Unknown`.
 
+Expanding a consumer interprets its EVs with Consumed Events' own code:
+`LayoutView.consumer_mdf()` selects the MDF from the same confirmed PNN/PARAN
+evidence and applies the node's token renames (read only on expansion), then
+`ev_definitions()` and `add_ev_controls()` build the same control rows. No
+token editor is passed and `MdfSettings` is not put into editing, so the controls
+are read-only. NV context is the node's discovered NVs only; unread NVs leave
+labels and visibility unknown, as in Consumed Events. No MDF (or an invalid one)
+leaves the raw EV rows. Refresh empties collapsed events and keeps expanded
+events whose `Consumers` are unchanged. When only a consumer's NVs changed, its
+built controls are refreshed in place with `show_values()` (as #151), so
+discovery replies neither rebuild widgets nor reread annotation files. Any
+other change rebuilds that event; a node annotation change rebuilds all, for
+renamed tokens. An MDF that appears after a consumer was expanded is not picked
+up until that event is rebuilt.
+
 ```text
 expand event row -> find_consumers(identity) -> consumer rows + EV rows
                                               -> Not determined (any undetermined)
+                                                   -> node + reason rows
                                               -> No configured consumers
                     (state only: no frames sent)
+expand consumer row (first time) -> consumer_mdf(node)
+    -> MDF + token renames -> add_ev_controls() read-only control rows
+    -> None / MdfError     -> raw EV rows only (error logged)
 node_state_updated / presence / disconnect -> LayoutView.refresh_consumers()
-    -> rebuild expanded rows, restoring expansion and selection by key
-Load Unread Nodes -> unread_nodes(): Online, events never read, not non-consumer
-    -> CbusService.load_events(n) each (existing FIFO; events + EVs, no NVs)
+    -> expanded + unchanged: keep; NVs only: show_values() in place
+    -> otherwise empty/rebuild, restoring expansion and selection by key
+node annotations changed -> refresh(rebuild=True)
+Load Unread Nodes -> unread_nodes(): Online, not non-consumer,
+                     events or NVs (with known NV count) never read
+    -> CbusService.load_nvs(n) + load_events(n) each (existing FIFO;
+       each skips a section already read)
     -> replies -> node_state_updated -> refresh
     failed read -> incomplete, never retried here -> Layouts → Refresh / Refresh Node
 double-click consumer -> (next event loop turn) select node

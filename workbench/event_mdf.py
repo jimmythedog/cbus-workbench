@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLineEdit,
     QStyle,
+    QStyledItemDelegate,
     QTreeWidgetItem,
     QWidget,
 )
@@ -25,6 +26,22 @@ _SUPPORTED = {
     "EventVariableBitSingle",
     "EventVariableBitArray",
 }
+
+
+class NoHoverDelegate(QStyledItemDelegate):
+    """No hover highlight on MDF control rows, whose labels are cell widgets."""
+
+    def paint(self, painter, option, index):
+        if index.parent().isValid() and not index.siblingAtColumn(0).data():
+            option.state &= ~QStyle.StateFlag.State_MouseOver
+
+        super().paint(painter, option, index)
+
+    def createEditor(self, parent, option, index):
+        if index.column() == 0:
+            return None
+
+        return super().createEditor(parent, option, index)
 
 
 class EvValueValidator(QIntValidator):
@@ -252,6 +269,13 @@ def add_ev_controls(
 
     for index, entries in forms.items():
         item = ev_rows[index]
+        # Control rows sit one level below the EV row; top-level rows are
+        # indented too because the trees decorate their roots.
+        depth = 1
+        ancestor = item
+        while ancestor is not None:
+            depth += 1
+            ancestor = ancestor.parent()
         container = EvContainer(tree, item)
         for contents, controls, settings in entries:
             settings.setParent(container)
@@ -270,8 +294,8 @@ def add_ev_controls(
                 if label is not None:
                     label_cell = row_cell(label)
                     tree.setItemWidget(child, 0, label_cell)
-                    # Labels sit two levels deep (event, then EV), inside the
-                    # item text rect, whose margins Qt derives from this metric.
+                    # Labels sit inside the item text rect, whose margins Qt
+                    # derives from this metric.
                     margins = 2 * (
                         tree.style().pixelMetric(
                             QStyle.PixelMetric.PM_FocusFrameHMargin, None, tree
@@ -282,7 +306,7 @@ def add_ev_controls(
                         0,
                         max(
                             tree.columnWidth(0),
-                            3 * tree.indentation()
+                            depth * tree.indentation()
                             + margins
                             + label_cell.sizeHint().width(),
                         ),

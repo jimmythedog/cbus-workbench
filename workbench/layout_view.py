@@ -31,6 +31,7 @@ from .layout_restore_dialog import LayoutRestoreDialog
 from .layout_restore_selection import LayoutRestoreSelection
 from .layout_restore_workflow import LayoutRestoreWorkflow
 from .logging_config import trace
+from .mdf_tokens import substitute_tokens
 from .node_snapshot import create_node_snapshot, restore_node_snapshot
 from .node_view import NodeView, node_number
 
@@ -130,6 +131,7 @@ class LayoutView(QWidget):
         for consumers in self.consumer_trees():
             consumers.lookup = self.find_consumers
             consumers.open_node = self.open_consumer
+            consumers.mdf_lookup = self.consumer_mdf
 
         self.node_view.details.editing_changed.connect(self.on_editing_changed)
         self.node_view.discovering_changed.connect(self.on_discovering_changed)
@@ -165,6 +167,10 @@ class LayoutView(QWidget):
     def annotations_changed(self, number):
         if number == -1:
             self.refresh_observed_events()
+        else:
+            # A token rename changes expanded consumers' control labels.
+            for consumers in self.consumer_trees():
+                consumers.refresh(rebuild=True)
         self.node_view.refresh_annotation_names(number)
         details = self.node_view.details
         if (
@@ -252,6 +258,37 @@ class LayoutView(QWidget):
             self.node_view.details.cbus_service,
             [node_number(node) for node in self.nodes()],
         )
+
+    def consumer_mdf(self, number):
+        """A consumer's MDF as Consumed Events presents it, or None for raw EVs.
+
+        Selected from the same confirmed identity and parameters, with the
+        node's token renames; never from saved or observed data.
+        """
+        service = self.node_view.details.cbus_service
+        state = service.node_states.get(number) if service is not None else None
+        if state is None or not state.identity_confirmed:
+            return None
+        try:
+            mdf = self.node_view.mdf_repository.lookup(state.identity, state.parameters)
+            if mdf is None:
+                return None
+            annotations = getattr(self, "annotations", None)
+            if annotations is None:
+                return mdf.data
+            return substitute_tokens(
+                mdf.data, annotations.load(number).get("tokens", {})
+            )
+        except ValueError, KeyError, TypeError, OSError, yaml.YAMLError:
+            # MdfError is a ValueError; annotation reads can fail with OS or
+            # YAML errors. The node keeps its raw EVs.
+            logger.exception(
+                "Consumer MDF unavailable",
+                extra={
+                    "fields": {"layout": self.logical_layout, "node_number": number}
+                },
+            )
+            return None
 
     def refresh_consumers(self, *_args):
         """Consumed-event discovery, Save or Restore changed; presence changed."""
