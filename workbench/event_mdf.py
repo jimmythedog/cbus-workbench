@@ -1,6 +1,7 @@
 """Inline raw and MDF editors of the same desired EV bytes."""
 
 import logging
+from collections import Counter
 
 from PySide6.QtCore import QEvent
 from PySide6.QtGui import QIntValidator, QValidator
@@ -100,8 +101,11 @@ def row_cell(widget):
     return cell
 
 
-def ev_definitions(items, conditions=()):
-    """Flatten containers only; preserve duplicate indices and ancestor conditions."""
+def ev_definitions(items, conditions=(), group=""):
+    """Flatten containers only; preserve duplicate indices and ancestor conditions.
+
+    Each control also carries its nearest nonblank group (or tab panel) title.
+    """
     for definition in items:
         try:
             inherited = conditions
@@ -111,7 +115,9 @@ def ev_definitions(items, conditions=()):
                 inherited += (condition,)
             kind = definition["type"]
             if kind == "EventVariableGroup":
-                yield from ev_definitions(definition["groupItems"], inherited)
+                title = definition.get("displayTitle")
+                nearest = title if isinstance(title, str) and title.strip() else group
+                yield from ev_definitions(definition["groupItems"], inherited, nearest)
             elif kind == "EventVariableTabs":
                 for panel in definition["tabPanels"]:
                     # Panels may carry a condition independently of their tabs.
@@ -124,12 +130,13 @@ def ev_definitions(items, conditions=()):
                             }
                         ],
                         inherited,
+                        group,
                     )
             elif kind in _SUPPORTED:
                 index = definition["eventVariableIndex"]
                 if type(index) is not int or not 1 <= index <= 255:
                     raise ValueError("EV index must be an integer from 1 to 255")
-                yield index, definition, inherited
+                yield index, definition, inherited, group
             else:
                 trace(logger, "Skip unsupported EV MDF type=%s", kind)
         except ValueError, KeyError, TypeError:
@@ -150,14 +157,28 @@ def add_ev_controls(
 ):
     """Construct forms on expansion; retain them so editing can change visibility."""
     forms = {}
-    for position, (index, definition, conditions) in enumerate(definitions):
-        source = (
-            source_definitions[position][1]
-            if source_definitions is not None
-            else definition
-        )
+    # Titles repeated within one EV (e.g. a bit or mask per output) are told
+    # apart by their group (#169); unique titles stay as the MDF gives them.
+    titles = Counter(
+        (index, definition.get("displayTitle"))
+        for index, definition, _, _ in definitions
+        if isinstance(definition.get("displayTitle"), str)
+    )
+    for position, (index, definition, conditions, group) in enumerate(definitions):
+        if source_definitions is not None:
+            _, source, _, source_group = source_definitions[position]
+        else:
+            source, source_group = definition, group
         if index not in ev_rows:
             continue
+        title = definition.get("displayTitle")
+        if group and titles[index, title] > 1:
+            definition = {**definition, "displayTitle": f"{group} — {title}"}
+            # The source keeps its tokens so double-click can edit the group name.
+            source = {
+                **source,
+                "displayTitle": f"{source_group} — {source['displayTitle']}",
+            }
         settings = None
         try:
             # Reuse existing byte widgets, not the NV navigation or editing path.
@@ -204,11 +225,12 @@ def add_ev_controls(
 
             trace(
                 logger,
-                "Construct EV MDF control node=%s event=%s ev=%s type=%s value=%s controls=%s conditions=%s",
+                "Construct EV MDF control node=%s event=%s ev=%s type=%s title=%r value=%s controls=%s conditions=%s",
                 node_number,
                 event.text(0),
                 index,
                 definition["type"],
+                definition["displayTitle"],
                 ev_values.get(index),
                 len(controls),
                 conditions,

@@ -119,6 +119,9 @@ class NodeEvents(QWidget):
 
         self.consumed_table = QTreeWidget()
         self.consumed_table.setExpandsOnDoubleClick(False)
+        # Expand animation draws a snapshot, then swaps in the real EV control
+        # row widgets (#168), which shows as a flicker.
+        self.consumed_table.setAnimated(False)
         self.consumed_table.itemChanged.connect(self.update_configuration_value)
         self.consumed_table.itemExpanded.connect(self.show_event_controls)
         self.consumed_table.setItemDelegate(RawEvDelegate(self.consumed_table))

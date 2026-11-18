@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from workbench.cbus_service import NodeState
+from workbench.mdf_tokens import substitute_tokens
 from workbench.node_events import NodeEvents
 from workbench.pnn import Pnn
 
@@ -332,6 +333,126 @@ class EventMdfTests(unittest.TestCase):
         ev = self.show().child(1)
         self.assertEqual(self.control(ev, QComboBox).currentIndex(), -1)
         self.assertEqual(self.control(ev, QComboBox).placeholderText(), "6")
+
+    def test_repeated_titles_take_nearest_group_title(self):
+        # CANACC8-style: one bit/mask per output, grouped per ${channel N} (#169).
+        def channel(number):
+            mask = 1 << (number - 1)
+            return {
+                "type": "EventVariableGroup",
+                "displayTitle": f"${{channel {number}}}",
+                "groupItems": [
+                    {
+                        "type": "EventVariableBitSingle",
+                        "eventVariableIndex": 1,
+                        "displayTitle": "Set Output",
+                        "bit": number - 1,
+                    },
+                    {
+                        "type": "EventVariableSelect",
+                        "eventVariableIndex": 2,
+                        "displayTitle": "Polarity",
+                        "bitMask": mask,
+                        "options": [
+                            {"value": 0, "label": "Normal"},
+                            {"value": mask, "label": "Invert"},
+                        ],
+                    },
+                ],
+            }
+
+        source = {
+            "channelNames": {"1": "Output 1", "2": "Output 2"},
+            "eventVariables": [
+                {
+                    "type": "EventVariableSelect",
+                    "eventVariableIndex": 3,
+                    "displayTitle": "Event Direction",
+                    "bitMask": 128,
+                    "options": [
+                        {"value": 0, "label": "Consumed Event"},
+                        {"value": 128, "label": "Produced Event"},
+                    ],
+                },
+                {
+                    "type": "EventVariableGroup",
+                    "displayTitle": "Consumed Event",
+                    "groupItems": [
+                        channel(1),
+                        channel(2),
+                        {
+                            "type": "EventVariableSelect",
+                            "eventVariableIndex": 3,
+                            "displayTitle": "Start of Day",
+                            "bitMask": 3,
+                            "options": [
+                                {"value": 0, "label": "disabled"},
+                                {"value": 2, "label": "ON"},
+                            ],
+                        },
+                    ],
+                },
+            ],
+        }
+        self.state.ev_values[1] = {1: 2, 2: 2, 3: 130}
+        self.events.source_mdf = source
+        event = self.show(substitute_tokens(source, {}))
+        set_output, polarity, ev3 = (event.child(i) for i in range(3))
+        self.assertEqual(
+            self.labels(set_output),
+            ["Output 1 — Set Output:", "Output 2 — Set Output:"],
+        )
+        self.assertEqual(
+            [box.isChecked() for box in self.controls(set_output, QCheckBox)],
+            [False, True],
+        )
+        self.assertEqual(
+            self.labels(polarity), ["Output 1 — Polarity:", "Output 2 — Polarity:"]
+        )
+        # Masked selects compare option values in place, without shifting.
+        self.assertEqual(
+            [box.currentText() for box in self.controls(polarity, QComboBox)],
+            ["Normal", "Invert"],
+        )
+        self.assertEqual(self.labels(ev3), ["Event Direction:", "Start of Day:"])
+        self.assertEqual(
+            [box.currentText() for box in self.controls(ev3, QComboBox)],
+            ["Produced Event", "ON"],
+        )
+
+    def test_unique_or_ungrouped_titles_keep_their_mdf_label(self):
+        def number(index, title):
+            return {
+                "type": "EventVariableNumber",
+                "eventVariableIndex": index,
+                "displayTitle": title,
+            }
+
+        mdf = {
+            "eventVariables": [
+                # Repeated without any group: nothing to add.
+                number(1, "Delay"),
+                number(1, "Delay"),
+                # Repeated, one grouped: a blank inner title uses the outer one.
+                number(2, "Speed"),
+                {
+                    "type": "EventVariableGroup",
+                    "displayTitle": "Servo",
+                    "groupItems": [
+                        {
+                            "type": "EventVariableGroup",
+                            "displayTitle": " ",
+                            "groupItems": [number(2, "Speed"), number(3, "Speed")],
+                        }
+                    ],
+                },
+            ]
+        }
+        event = self.show(mdf)
+        self.assertEqual(self.labels(event.child(0)), ["Delay:", "Delay:"])
+        self.assertEqual(self.labels(event.child(1)), ["Speed:", "Servo — Speed:"])
+        # The same title on another EV is already distinct under its EV row.
+        self.assertEqual(self.labels(event.child(2)), ["Speed:"])
 
     def test_visibility_per_definition_including_groups_and_tab_panels(self):
         number = {

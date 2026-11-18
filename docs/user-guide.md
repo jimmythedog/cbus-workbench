@@ -311,7 +311,8 @@ or a matching file is invalid. Error details are recorded in the application log
 an invalid user override does not silently fall back to a system file.
 The selected MDF also supplies NV forms when its presentation constructs
 are supported. In consumed events, each EV row keeps its raw value and expands to
-its supported EV controls, one per row.
+its supported EV controls, one per row. Where several controls of one EV share a
+title, each is prefixed with its MDF group title, for example `Output 1 — Polarity`.
 
 **Online** means the node responded during discovery or its latest presence check.
 Known nodes start **Offline** and return to Offline after one failed check or
