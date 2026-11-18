@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from .configuration_load import load_online_configuration
+from .event_consumers import ConsumerTree
 from .event_description_edit import EventDescriptionDialog
 from .event_teach import TeachEventDialog, teach_targets
 from .logging_config import trace
@@ -40,6 +41,9 @@ class LayoutEvents(QWidget):
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_event_menu)
         self.table.setEditTriggers(QTreeWidget.EditTrigger.NoEditTriggers)
+        # Connected before edit_description: that dialog's refresh can delete
+        # the clicked item, which a later slot for the same signal would receive.
+        self.consumers = ConsumerTree(self.table)
         self.table.itemDoubleClicked.connect(self.edit_description)
         self.table.setHeaderLabels(["Event", "Description"])
         self.table.setColumnWidth(0, 250)
@@ -51,6 +55,7 @@ class LayoutEvents(QWidget):
         self.refresh()
 
     def refresh(self):
+        consumers_state = self.consumers.save()
         self.table.clear()
         observations = getattr(self, "observed_events", None)
         if observations is not None:
@@ -68,6 +73,7 @@ class LayoutEvents(QWidget):
                     Qt.ItemDataRole.UserRole,
                     (identity.node_number, identity.event_number),
                 )
+            self.consumers.restore(consumers_state)
             return
 
         for node_number, node_events in self.events.items():
@@ -130,6 +136,7 @@ class LayoutEvents(QWidget):
             forget_all.setEnabled(bool(observations.events))
             forget_all.triggered.connect(self.forget_all_events)
             actions.append(forget_all)
+            actions.append(self.consumers.load_action(service))
         # With no identity, event_menu() omits Send and shows only these actions.
         event_menu(self.table, position, service, identity, actions)
 

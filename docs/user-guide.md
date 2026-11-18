@@ -215,6 +215,23 @@ Events…** and confirm. This removes identities only from the selected logical 
 event names, node configuration and backups are kept. A forgotten event that is
 seen again is added back automatically with its saved name.
 
+### Event consumers
+
+Expand an event (using its arrow) in the layout **Events** tab or a node's **Produced Events** to
+see which nodes on this connection are configured to consume it, with each
+node's raw EV values. Double-click a consumer to open its **Consumed Events**
+with that event selected. Expanding only uses configuration already read.
+Consumers are labelled by module type. **Not determined** means at least one
+node that might consume the event has not been fully read on this connection:
+not yet loaded, still reading, incompletely read, Offline or disconnected.
+The row says **Right-click to load unread nodes** when some Online nodes
+have not been read yet: choose **Load Unread Nodes** to read just their events
+and EVs. Otherwise it says **Use Layouts → Refresh**, which rereads the layout
+and finds nodes not yet known; **Refresh Node** retries a single node.
+**No configured consumers** appears only when every
+known consumer has been read; nodes that do not consume events are left out. Seeing an event on the network does not
+make a node a consumer.
+
 ## Editing node annotations
 
 Double-click the read-only **Name** label on **Node Details** to open a small

@@ -59,6 +59,45 @@ only for NN zero, never under a frame sender inferred as their physical owner.
 Even a long NN is an identity filter, not verified physical-producer discovery.
 No extra protocol requests or module-specific interpretation are involved.
 
+## Event consumers
+
+Both event panes (Layout → Events and Node → Produced Events) expand an event
+to its configured consumers, using `event_consumers.py`. `find_consumers()` reads
+only the selected connection's `CbusService.node_states`, matched by `(NN, EN)`
+identity; slots locate EVs. Short identities are `(0, EN)` in both the
+catalogue and ENRSP, so no extra normalisation is needed. A node is a confirmed
+consumer only when Online with `event_progress` complete. Non-consumers
+(`SKIPPED`, or a PNN without the consumer flag) are omitted. Any other node
+in the navigator inventory, including saved-only and Offline nodes, is listed
+as undetermined (not loaded, loading, discovery incomplete, Offline or
+disconnected), so a missing consumer is never shown as absent. The tree shows
+one *Not determined* row rather than per-node reasons, which are traced. Its
+hint offers Load Unread Nodes only when a node is not loaded; that set does
+not depend on the event. Consumers are labelled by module type, not annotation name: refreshes
+follow every discovery step and must not reread annotation files. Observed traffic, backups and metadata are never evidence. Raw EVs show
+confirmed values; confirmed absence is hidden, unread values show `Unknown`.
+
+```text
+expand event row -> find_consumers(identity) -> consumer rows + EV rows
+                                              -> Not determined (any undetermined)
+                                              -> No configured consumers
+                    (state only: no frames sent)
+node_state_updated / presence / disconnect -> LayoutView.refresh_consumers()
+    -> rebuild expanded rows, restoring expansion and selection by key
+Load Unread Nodes -> unread_nodes(): Online, events never read, not non-consumer
+    -> CbusService.load_events(n) each (existing FIFO; events + EVs, no NVs)
+    -> replies -> node_state_updated -> refresh
+    failed read -> incomplete, never retried here -> Layouts → Refresh / Refresh Node
+double-click consumer -> (next event loop turn) select node
+    -> Consumed Events tab -> select identity
+```
+
+Event rows expand by their arrow only: double-click keeps its existing
+meaning (description editing) and opens a consumer. Navigation is deferred
+because it rebuilds the clicked tree, while other
+`itemDoubleClicked` slots still hold the clicked item. Multiple connections
+sharing a logical layout are not aggregated.
+
 ## Local annotations
 
 `annotations.yaml` sits beside `observed-events.yaml` in the logical layout

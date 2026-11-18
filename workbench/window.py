@@ -405,6 +405,8 @@ class MainWindow(QMainWindow):
             node_number
         )
         service.node_state_updated.connect(node_view.refresh_state)
+        service.node_state_updated.connect(self.layouts[name].refresh_consumers)
+        service.presence_changed.connect(self.layouts[name].refresh_consumers)
         service.parameter_updated.connect(
             lambda number, _index, _value: (
                 None
@@ -633,6 +635,7 @@ class MainWindow(QMainWindow):
         logical_layout = self.layout_settings[name]["logical_layout"]
         view.node_view.details.logical_layout = logical_layout
         view.node_view.show_saved_nodes(logical_layout)
+        view.refresh_consumers()  # Without a service, every node is undetermined.
         if saving_configuration:
             details.show_configuration_result(save_result)
         connection_logger.info(

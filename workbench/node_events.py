@@ -14,8 +14,6 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QStyle,
     QStyledItemDelegate,
-    QTableWidget,
-    QTableWidgetItem,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -23,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from .cbus_service import NodeState
+from .event_consumers import ConsumerTree
 from .event_mdf import EvContainer, EvValueValidator, add_ev_controls, ev_definitions
 from .logging_config import trace
 from .observed_events import EventIdentity
@@ -105,13 +104,15 @@ class NodeEvents(QWidget):
         produced = self.produced_page
         produced_layout = QVBoxLayout(produced)
 
-        self.produced_table = QTableWidget(0, 2)
-        self.produced_table.verticalHeader().hide()
-        self.produced_table.setHorizontalHeaderLabels(["Event", "Description"])
-        self.produced_table.horizontalHeader().setStretchLastSection(True)
+        # A tree, like Layout → Events, so events can expand to their consumers.
+        self.produced_table = QTreeWidget()
+        self.produced_table.setHeaderLabels(["Event", "Description"])
+        self.produced_table.setColumnWidth(0, 250)
+        self.produced_table.header().setStretchLastSection(True)
         self.produced_table.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers
         )
+        self.produced_consumers = ConsumerTree(self.produced_table)
         produced_layout.addWidget(self.produced_table)
 
         consumed = QGroupBox("Consumed events")
@@ -153,7 +154,12 @@ class NodeEvents(QWidget):
             return
         if item is None:
             return
-        identity = tuple(map(int, table.item(item.row(), 0).text().split(":")))
+        load = self.produced_consumers.load_action(self.cbus_service)
+        if item.parent() is not None:
+            # Consumer and EV rows are not events: offer only the node load.
+            event_menu(table, position, self.cbus_service, None, [load])
+            return
+        identity = item.data(0, Qt.ItemDataRole.UserRole)
         actions = []
         # Only observed rows can be forgotten; Forget All stays in Layout → Events.
         observations = getattr(self, "observed_events", None)
@@ -163,6 +169,7 @@ class NodeEvents(QWidget):
                 lambda: self.forget_event(observations, EventIdentity(*identity))
             )
             actions.append(forget)
+        actions.append(load)
         event_menu(table, position, self.cbus_service, identity, actions)
 
     def forget_event(self, observations, identity):
@@ -171,6 +178,15 @@ class NodeEvents(QWidget):
             observations.forget({identity})
         except OSError as error:
             QMessageBox.warning(self, "Event not forgotten", str(error))
+
+    def select_event(self, identity) -> None:
+        """Select a consumed event by identity, e.g. when opened from a consumer."""
+        for row in range(self.consumed_table.topLevelItemCount()):
+            item = self.consumed_table.topLevelItem(row)
+            if item.data(0, Qt.ItemDataRole.UserRole) == tuple(identity):
+                self.consumed_table.setCurrentItem(item)
+                self.consumed_table.scrollToItem(item)
+                return
 
     def selected_identity(self):
         """The selected consumed event's identity, or None for EV/detail rows."""
@@ -184,7 +200,6 @@ class NodeEvents(QWidget):
         self.pending_ev_controls.clear()
         self.offline_identities = set()
         self.live_state = None
-        self.produced_table.setRowCount(0)
         expanded_events = set()
 
         if node is self.node:
@@ -197,6 +212,7 @@ class NodeEvents(QWidget):
         self.consumed_table.clear()
 
         if node is None:
+            self.produced_table.clear()
             return
 
         self.show_produced_events(node.number)
@@ -269,12 +285,12 @@ class NodeEvents(QWidget):
                 for number, details in self.events.get(node_number, {}).items()
                 if node_number != 0
             ]
-        self.produced_table.setRowCount(len(produced))
-        for row, (event, description) in enumerate(produced):
-            event_item = QTableWidgetItem(event)
-            event_item.setFlags(event_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.produced_table.setItem(row, 0, event_item)
-            self.produced_table.setItem(row, 1, QTableWidgetItem(description))
+        consumers_state = self.produced_consumers.save()
+        self.produced_table.clear()
+        for event, description in produced:
+            item = QTreeWidgetItem(self.produced_table, [event, description])
+            item.setData(0, Qt.ItemDataRole.UserRole, tuple(map(int, event.split(":"))))
+        self.produced_consumers.restore(consumers_state)
 
     def show_live_state(self, state: NodeState, mdf=None) -> None:
         """Use stable event identities in the UI; indices belong to discovery only."""
@@ -467,8 +483,6 @@ class NodeEvents(QWidget):
                 form.set_editing(self.desired_configuration is not None)
 
     def set_editing(self, editing):
-        self.produced_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-
         self.consumed_table.setEditTriggers(
             QTreeWidget.EditTrigger.DoubleClicked
             if editing

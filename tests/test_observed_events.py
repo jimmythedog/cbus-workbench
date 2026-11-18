@@ -117,7 +117,7 @@ class ObservedEventsTests(unittest.TestCase):
         state = NodeState(Pnn(258, 1, 1, 0))
         view.node_view.state_lookup = lambda number: state
         view.node_view.show_identity(state.identity)
-        self.assertEqual(events.produced_table.rowCount(), 1)
+        self.assertEqual(events.produced_table.topLevelItemCount(), 1)
         self.assertEqual(view.layout_events.table.topLevelItemCount(), 1)
         # Removing the old service stops observations; reconnect retains identities.
         service.close()
@@ -139,15 +139,15 @@ class ObservedEventsTests(unittest.TestCase):
         restored_view.set_observed_events(ObservedEvents("a"))
         restored_events = restored_view.node_view.details.node_events
         restored_events.show_produced_events(258)
-        self.assertEqual(restored_events.produced_table.rowCount(), 1)
+        self.assertEqual(restored_events.produced_table.topLevelItemCount(), 1)
         restored_events.show_produced_events(259)
-        self.assertEqual(restored_events.produced_table.rowCount(), 0)
+        self.assertEqual(restored_events.produced_table.topLevelItemCount(), 0)
         # Short events do not get attributed to their sender's node pane.
         reconnect.frame_received.emit(b":SB040N980102002D;")
         events.show_produced_events(258)
-        self.assertEqual(events.produced_table.rowCount(), 1)
+        self.assertEqual(events.produced_table.topLevelItemCount(), 1)
         events.show_produced_events(0)
-        self.assertEqual(events.produced_table.rowCount(), 0)
+        self.assertEqual(events.produced_table.topLevelItemCount(), 0)
         self.assertEqual(view.layout_events.table.topLevelItem(0).text(0), "0:45")
         view.set_observed_events(b)
         self.assertEqual(view.layout_events.table.topLevelItem(0).text(0), "259:46")
@@ -169,12 +169,12 @@ class ObservedEventsTests(unittest.TestCase):
         view.node_view.state_lookup = lambda number: state
         view.node_view.show_identity(state.identity)
         produced = view.node_view.details.node_events.produced_table
-        self.assertEqual(produced.rowCount(), 2)
+        self.assertEqual(produced.topLevelItemCount(), 2)
 
         # Forgetting from the node view updates both views from one catalogue.
         view.node_view.details.node_events.forget_event(a, EventIdentity(258, 45))
-        self.assertEqual(produced.rowCount(), 1)
-        self.assertEqual(produced.item(0, 0).text(), "258:46")
+        self.assertEqual(produced.topLevelItemCount(), 1)
+        self.assertEqual(produced.topLevelItem(0).text(0), "258:46")
         self.assertEqual(view.layout_events.table.topLevelItemCount(), 1)
         self.assertEqual(ObservedEvents("a").events, {EventIdentity(258, 46)})
 
@@ -182,9 +182,9 @@ class ObservedEventsTests(unittest.TestCase):
         answers = [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes]
         with patch.object(QMessageBox, "question", side_effect=answers):
             view.layout_events.forget_all_events()
-            self.assertEqual(produced.rowCount(), 1)
+            self.assertEqual(produced.topLevelItemCount(), 1)
             view.layout_events.forget_all_events()
-        self.assertEqual(produced.rowCount(), 0)
+        self.assertEqual(produced.topLevelItemCount(), 0)
         self.assertEqual(view.layout_events.table.topLevelItemCount(), 0)
         self.assertEqual(ObservedEvents("a").events, set())
         self.assertEqual(ObservedEvents("b").events, {EventIdentity(258, 45)})
@@ -192,7 +192,7 @@ class ObservedEventsTests(unittest.TestCase):
 
         connection.frame_received.emit(b":SB040N910102002D;")
         self.assertEqual(ObservedEvents("a").events, {EventIdentity(258, 45)})
-        self.assertEqual(produced.item(0, 1).text(), "Platform 1")
+        self.assertEqual(produced.topLevelItem(0).text(1), "Platform 1")
         self.assertEqual(view.layout_events.table.topLevelItem(0).text(1), "Platform 1")
 
     def test_catalogue_short_events_use_layout_identity_without_node_attribution(self):
@@ -205,9 +205,9 @@ class ObservedEventsTests(unittest.TestCase):
         self.assertEqual(table.topLevelItem(1).text(0), "258:30001")
         events = view.node_view.details.node_events
         events.show_produced_events(0)
-        self.assertEqual(events.produced_table.rowCount(), 0)
+        self.assertEqual(events.produced_table.topLevelItemCount(), 0)
         events.show_produced_events(258)
-        self.assertEqual(events.produced_table.item(0, 0).text(), "258:30001")
+        self.assertEqual(events.produced_table.topLevelItem(0).text(0), "258:30001")
 
     def test_failed_save_preserves_existing_file_and_allows_next_reception_to_retry(
         self,

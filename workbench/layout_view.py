@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from .annotations import Annotations
 from .backup_view import backup_contents
 from .configuration_load import load_online_configuration
+from .event_consumers import find_consumers
 from .layout_backup_compare import LayoutBackupCompare
 from .layout_backup_view import LayoutBackupView
 from .layout_backup_workflow import create_layout_backup
@@ -126,6 +127,10 @@ class LayoutView(QWidget):
 
         layout.addWidget(self.tabs)
 
+        for consumers in self.consumer_trees():
+            consumers.lookup = self.find_consumers
+            consumers.open_node = self.open_consumer
+
         self.node_view.details.editing_changed.connect(self.on_editing_changed)
         self.node_view.discovering_changed.connect(self.on_discovering_changed)
         self.tabs.currentChanged.connect(self.on_tab_changed)
@@ -219,16 +224,75 @@ class LayoutView(QWidget):
         ):
             self.node_view.show_selected_node(self.node_view.node_list.currentItem())
 
-    def teach_event(self, number, identity):
-        """Open the target node's Consumed Events editor with a pending event."""
+    def select_node(self, number) -> bool:
         self.tabs.setCurrentWidget(self.node_view)
         node_list = self.node_view.node_list
         for index in range(node_list.count()):
             item = node_list.item(index)
             if node_number(item.data(Qt.ItemDataRole.UserRole)) == number:
                 node_list.setCurrentItem(item)
-                break
+                return True
+        return False
+
+    def teach_event(self, number, identity):
+        """Open the target node's Consumed Events editor with a pending event."""
+        self.select_node(number)
         self.node_view.details.start_new_event(number, identity)
+
+    def consumer_trees(self):
+        return (
+            self.layout_events.consumers,
+            self.node_view.details.node_events.produced_consumers,
+        )
+
+    def find_consumers(self, identity):
+        """This connection's discovery, plus saved nodes as undetermined (#87)."""
+        return find_consumers(
+            identity,
+            self.node_view.details.cbus_service,
+            [node_number(node) for node in self.nodes()],
+        )
+
+    def refresh_consumers(self, *_args):
+        """Consumed-event discovery, Save or Restore changed; presence changed."""
+        for consumers in self.consumer_trees():
+            consumers.refresh()
+
+    def open_consumer(self, number, identity):
+        """Show a consuming node's Consumed Events with the event selected."""
+        # Node selection is suspended while editing or discovering.
+        unavailable = self.node_view.editing or self.node_view.discovering
+        if unavailable or not self.select_node(number):
+            trace(
+                logger,
+                "Open consuming node ignored",
+                extra={
+                    "fields": {
+                        "layout": self.logical_layout,
+                        "node": number,
+                        "selection_unavailable": unavailable,
+                    }
+                },
+            )
+            window = self.window()
+            if isinstance(window, QMainWindow):
+                window.statusBar().showMessage(f"Cannot open node {number} now", 5000)
+            return
+        details = self.node_view.details
+        details.tabs.setCurrentWidget(details.consumed_events_page)
+        details.node_events.select_event(identity)
+        trace(
+            logger,
+            "Opened consuming node",
+            extra={
+                "fields": {
+                    "layout": self.logical_layout,
+                    "node": number,
+                    "identity": identity,
+                    "selected": details.node_events.selected_identity(),
+                }
+            },
+        )
 
     def on_editing_changed(self, _editing):
         self.update_tab_availability()
@@ -279,6 +343,7 @@ class LayoutView(QWidget):
         self.node_view.details.update_connection_details()
         self.node_view.details.update_backup_buttons()
         self.update_backup_buttons()
+        self.refresh_consumers()
 
     def view_backup(self):
         selected = self.layout_backups.selectedItems()

@@ -109,22 +109,15 @@ class AnnotationTests(unittest.TestCase):
                 view.node_view.details.produced_events_page
             )
             table = view.node_view.details.node_events.produced_table
-            row = next(
-                row
-                for row in range(table.rowCount())
-                if table.item(row, 0).text() == identity
-            )
-            header = table.horizontalHeader()
-            item = table.item(row, 0)
         else:
             view.tabs.setCurrentWidget(view.layout_events)
             table = view.layout_events.table
-            item = next(
-                table.topLevelItem(row)
-                for row in range(table.topLevelItemCount())
-                if table.topLevelItem(row).text(0) == identity
-            )
-            header = table.header()
+        item = next(
+            table.topLevelItem(row)
+            for row in range(table.topLevelItemCount())
+            if table.topLevelItem(row).text(0) == identity
+        )
+        header = table.header()
         self.app.processEvents()
         position = QPoint(
             header.sectionViewportPosition(column) + 25,
@@ -148,10 +141,10 @@ class AnnotationTests(unittest.TestCase):
             self.view, "Produced event", new_observation=EventIdentity(42, 2)
         )
         events = self.view.node_view.details.node_events
+        self.assertEqual(events.produced_table.headerItem().text(1), "Description")
         self.assertEqual(
-            events.produced_table.horizontalHeaderItem(1).text(), "Description"
+            events.produced_table.topLevelItem(0).text(1), "Produced event"
         )
-        self.assertEqual(events.produced_table.item(0, 1).text(), "Produced event")
         self.assertEqual(
             load_annotations("test"),
             {"events": {"0:1": "Short event", "42:1": "Produced event"}},
@@ -160,7 +153,9 @@ class AnnotationTests(unittest.TestCase):
         self.assertEqual(editor.table.topLevelItem(1).text(1), "Produced event")
         self.edit_layout_description(self.view, "From produced view", produced=True)
         self.assertEqual(editor.table.topLevelItem(1).text(1), "From produced view")
-        self.assertEqual(events.produced_table.item(0, 1).text(), "From produced view")
+        self.assertEqual(
+            events.produced_table.topLevelItem(0).text(1), "From produced view"
+        )
         # Clearing/recreating observations never owns or deletes the names.
         self.view.observed_events.path.unlink()
         fresh = ObservedEvents("test")
@@ -385,7 +380,7 @@ class AnnotationTests(unittest.TestCase):
         )
         self.edit_layout_description(self.view, "From layout")
         self.assertEqual(
-            details.node_events.produced_table.item(0, 1).text(), "From layout"
+            details.node_events.produced_table.topLevelItem(0).text(1), "From layout"
         )
         self.edit_layout_description(self.view, "From produced", produced=True)
         self.assertEqual(

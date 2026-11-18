@@ -379,11 +379,11 @@ class MmcImportTests(unittest.TestCase):
         )
         produced = view.node_view.details.node_events
         produced.show_produced_events(42)
-        self.assertEqual(produced.produced_table.rowCount(), 1)
-        self.assertEqual(produced.produced_table.item(0, 0).text(), "42:1")
-        self.assertEqual(produced.produced_table.item(0, 1).text(), "Route")
+        self.assertEqual(produced.produced_table.topLevelItemCount(), 1)
+        self.assertEqual(produced.produced_table.topLevelItem(0).text(0), "42:1")
+        self.assertEqual(produced.produced_table.topLevelItem(0).text(1), "Route")
         produced.show_produced_events(43)
-        self.assertEqual(produced.produced_table.rowCount(), 0)
+        self.assertEqual(produced.produced_table.topLevelItemCount(), 0)
         self.assertFalse(
             list(annotation_path(logical).parent.glob("nodes/*/metadata.yaml"))
         )
@@ -522,7 +522,7 @@ class MmcImportTests(unittest.TestCase):
                 view.node_view.node_list.setCurrentItem(item)
                 break
         produced = view.node_view.details.node_events.produced_table
-        self.assertEqual(produced.rowCount(), 1)
+        self.assertEqual(produced.topLevelItemCount(), 1)
         connection.frame_received.emit(b":SB040N90002A0004;")
         table = view.layout_events.table
         self.assertEqual(
@@ -533,7 +533,10 @@ class MmcImportTests(unittest.TestCase):
             {"0:2", "42:1", "42:4"},
         )
         self.assertEqual(
-            {produced.item(row, 0).text() for row in range(produced.rowCount())},
+            {
+                produced.topLevelItem(row).text(0)
+                for row in range(produced.topLevelItemCount())
+            },
             {"42:1", "42:4"},
         )
         self.assertEqual(
@@ -572,12 +575,12 @@ class MmcImportTests(unittest.TestCase):
         self.assertEqual(table.topLevelItemCount(), 3)
         produced = restarted.layouts["Home"].node_view.details.node_events
         produced.show_produced_events(42)
-        self.assertEqual(produced.produced_table.rowCount(), 1)
-        self.assertEqual(produced.produced_table.item(0, 0).text(), "42:1")
-        self.assertEqual(produced.produced_table.item(0, 1).text(), "Existing")
+        self.assertEqual(produced.produced_table.topLevelItemCount(), 1)
+        self.assertEqual(produced.produced_table.topLevelItem(0).text(0), "42:1")
+        self.assertEqual(produced.produced_table.topLevelItem(0).text(1), "Existing")
         produced.show_produced_events(99)
-        self.assertEqual(produced.produced_table.item(0, 0).text(), "99:1")
-        self.assertEqual(produced.produced_table.item(0, 1).text(), "Keep")
+        self.assertEqual(produced.produced_table.topLevelItem(0).text(0), "99:1")
+        self.assertEqual(produced.produced_table.topLevelItem(0).text(1), "Keep")
 
     def test_cancel_layout_review_leaves_batch_untouched(self):
         self.fixture("First")

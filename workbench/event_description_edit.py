@@ -49,7 +49,7 @@ class NodeEventNameEditor(QObject):
         self.details = details
         self.dialog = None
         details.node_events.consumed_table.itemDoubleClicked.connect(self.edit_consumed)
-        details.node_events.produced_table.cellDoubleClicked.connect(self.edit_produced)
+        details.node_events.produced_table.itemDoubleClicked.connect(self.edit_produced)
 
     def cancel(self):
         if self.dialog is not None:
@@ -59,11 +59,9 @@ class NodeEventNameEditor(QObject):
         if column == 1 and item.parent() is None and self.details.node is not None:
             self.edit(item.text(0), self.details.annotation_number())
 
-    def edit_produced(self, row, column):
-        if column == 1:
-            item = self.details.node_events.produced_table.item(row, 0)
-            if item is not None:
-                self.edit(item.text())
+    def edit_produced(self, item, column):
+        if column == 1 and item.parent() is None:
+            self.edit(item.text(0))
 
     def edit(self, identity, number=None):
         details = self.details

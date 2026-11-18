@@ -373,7 +373,7 @@ class WindowStartupTests(unittest.TestCase):
             home = restarted.layouts["Home"]
             self.assertEqual(home.layout_events.table.topLevelItem(0).text(0), "258:45")
             self.assertEqual(
-                home.node_view.details.node_events.produced_table.rowCount(),
+                home.node_view.details.node_events.produced_table.topLevelItemCount(),
                 1,
             )
             self.assertEqual(home.layout_events.table.topLevelItem(0).text(1), "")
