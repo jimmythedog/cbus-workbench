@@ -310,7 +310,8 @@ whose firmware versions differ only in letter case.
 or a matching file is invalid. Error details are recorded in the application log;
 an invalid user override does not silently fall back to a system file.
 The selected MDF also supplies NV forms when its presentation constructs
-are supported. Supported EV controls appear beside the raw values in consumed events.
+are supported. In consumed events, each EV row keeps its raw value and expands to
+its supported EV controls, one per row.
 
 **Online** means the node responded during discovery or its latest presence check.
 Known nodes start **Offline** and return to Offline after one failed check or

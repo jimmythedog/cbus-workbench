@@ -323,12 +323,16 @@ class NodeEvents(QWidget):
         expanded = set()
         selected = None
         if same_node:
+            current = self.consumed_table.currentItem()
+            if current is not None and current.parent() is not None:
+                # A selected MDF control row (#168) restores as its EV row.
+                while current.parent().parent() is not None:
+                    current = current.parent()
             for row in range(self.consumed_table.topLevelItemCount()):
                 item = self.consumed_table.topLevelItem(row)
                 identity = item.data(0, Qt.ItemDataRole.UserRole)
                 if item.isExpanded():
                     expanded.add(identity)
-                current = self.consumed_table.currentItem()
                 if current is item:
                     selected = (identity, None)
                 elif current is not None and current.parent() is item:
@@ -421,7 +425,9 @@ class NodeEvents(QWidget):
             )
 
     def show_event_controls(self, event):
-        """Construct the existing MDF layout once, on first expansion."""
+        """Construct the existing MDF layout once, on an event's first expansion."""
+        if event.parent() is not None:
+            return  # EV rows expand only to show their existing control rows.
         identity = event.data(0, Qt.ItemDataRole.UserRole)
         pending = self.pending_ev_controls.pop(identity, None)
         if pending is None or self.ev_presentation is None:
@@ -566,9 +572,7 @@ class NodeEvents(QWidget):
                     nvs, evs = context
                     for settings in form.settings:
                         settings.show_values(evs, nv_values=nvs, ev_values=evs)
-                    blocked = tree.blockSignals(True)
-                    item.setSizeHint(1, form.sizeHint())
-                    tree.blockSignals(blocked)
+                    form.show_rows()
         trace(logger, "Refreshed EV controls node=%s", self.node.node_number)
 
     def update_configuration_value(self, item, column):

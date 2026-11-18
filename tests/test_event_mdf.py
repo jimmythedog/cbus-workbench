@@ -69,13 +69,7 @@ class EventMdfTests(unittest.TestCase):
         self.mdf["eventVariables"][0]["groupItems"][0]["displayTitle"] = "New action"
         event = self.show(expand=False)
         self.assertTrue(event.isExpanded())
-        self.assertIn(
-            "New action:",
-            [
-                label.text()
-                for label in tree.itemWidget(event.child(1), 1).findChildren(QLabel)
-            ],
-        )
+        self.assertIn("New action:", self.labels(event.child(1)))
 
     def test_expand_during_edit_preserves_unread_raw_values(self):
         self.state.ev_values[1].pop(2)
@@ -236,14 +230,15 @@ class EventMdfTests(unittest.TestCase):
         event.child(1).setText(1, "138")
         self.assertIsNone(self.events.consumed_table.itemWidget(event.child(1), 1))
         event.setExpanded(True)
-        form = self.events.consumed_table.itemWidget(event.child(1), 1)
-        numbers = form.findChildren(QDoubleSpinBox)
+        numbers = self.controls(event.child(1), QDoubleSpinBox)
         self.assertEqual([n.value() for n in numbers], [10, 10])
-        flag = form.findChild(QCheckBox)
+        flag = self.control(event.child(1), QCheckBox)
         self.assertTrue(flag.isHidden())
+        self.assertTrue(self.row_of(event.child(1), flag).isHidden())
         desired["nvs"][15] = 1
         self.events.refresh_configuration_controls()
         self.assertFalse(flag.isHidden())
+        self.assertFalse(self.row_of(event.child(1), flag).isHidden())
         flag.click()
         self.assertEqual(desired["events"][0]["eventVariables"][1], 10)
         numbers[0].setValue(3)
@@ -255,22 +250,40 @@ class EventMdfTests(unittest.TestCase):
         self.assertEqual(event.child(1).text(1), "137")
         self.assertFalse(self.control(event.child(1), QDoubleSpinBox).isEnabled())
 
+    def control_rows(self, ev):
+        return [ev.child(i) for i in range(ev.childCount())]
+
+    def controls(self, ev, kind):
+        """Controls of one type in an EV's child rows, in MDF order."""
+        tree = self.events.consumed_table
+        return [
+            control
+            for row in self.control_rows(ev)
+            for control in tree.itemWidget(row, 1).findChildren(kind)
+        ]
+
     def control(self, ev, kind):
-        widget = self.events.consumed_table.itemWidget(ev, 1)
-        return widget.findChild(kind)
+        return self.controls(ev, kind)[0]
+
+    def labels(self, ev):
+        tree = self.events.consumed_table
+        return [
+            tree.itemWidget(row, 0).findChild(QLabel).text()
+            for row in self.control_rows(ev)
+        ]
+
+    def row_of(self, ev, control):
+        tree = self.events.consumed_table
+        return next(
+            row
+            for row in self.control_rows(ev)
+            if control in tree.itemWidget(row, 1).findChildren(type(control))
+        )
 
     def test_canmio_multiple_controls_mask_bits_and_unknown_labels(self):
         ev = self.show().child(1)
         self.assertEqual((ev.text(0), ev.text(1)), ("EV 2", "137"))
-        self.assertEqual(
-            [
-                label.text()
-                for label in self.events.consumed_table.itemWidget(ev, 1).findChildren(
-                    QLabel
-                )
-            ],
-            ["Action:", "Simultaneous:"],
-        )
+        self.assertEqual(self.labels(ev), ["Action:", "Simultaneous:"])
         action = self.control(ev, QComboBox)
         simultaneous = self.control(ev, QCheckBox)
         self.assertEqual(action.currentData(), 9)  # 137 & 127, without shifting
@@ -278,36 +291,40 @@ class EventMdfTests(unittest.TestCase):
         self.assertTrue(simultaneous.isChecked())
         self.assertFalse(action.isEnabled())
         self.assertFalse(simultaneous.isEnabled())
-        self.assertEqual(ev.childCount(), 0)
-        parent = ev.parent()
-        parent.setExpanded(True)
+        # Each control has its own normal-height row under the EV, beside its
+        # label, so native branch connectors line up with the labels (#168).
+        tree = self.events.consumed_table
+        self.assertEqual(ev.childCount(), 2)
+        self.assertTrue(ev.isExpanded())
         self.events.resize(1100, 500)
         self.events.show()
         self.app.processEvents()
-        container = self.events.consumed_table.itemWidget(ev, 1)
-        self.assertGreaterEqual(
-            self.events.consumed_table.visualItemRect(ev).height(),
-            container.sizeHint().height(),
-        )
-        self.assertLess(
-            container.raw_value.geometry().right(), action.geometry().left()
-        )
-        self.assertLess(action.geometry().right(), simultaneous.geometry().left())
-        for control in (action, simultaneous):
-            self.assertAlmostEqual(
-                container.raw_value.geometry().center().y(),
-                control.geometry().center().y(),
-                delta=1,
-            )
-        self.assertLessEqual(
-            container.height(),
-            max(container.raw_value.sizeHint().height(), action.sizeHint().height()),
-        )
-        for label in container.findChildren(QLabel):
+        self.assertEqual(tree.itemWidget(ev, 1).raw_value.text(), "137")
+        ev_height = tree.visualItemRect(ev).height()
+        for row, control in zip(self.control_rows(ev), (action, simultaneous)):
+            rect = tree.visualItemRect(row)
+            label = tree.itemWidget(row, 0).findChild(QLabel)
+            self.assertLess(rect.height(), 2 * ev_height)
+            self.assertGreaterEqual(rect.height(), control.sizeHint().height())
+            # Label and control share the row; the label shows its full text.
+            for widget in (label, control):
+                centre = widget.mapTo(tree.viewport(), widget.rect().center()).y()
+                self.assertAlmostEqual(centre, rect.center().y(), delta=2)
             self.assertGreaterEqual(
                 label.width(), label.fontMetrics().horizontalAdvance(label.text())
             )
+            self.assertLess(
+                label.mapTo(tree.viewport(), label.rect().topRight()).x(),
+                control.mapTo(tree.viewport(), control.rect().topLeft()).x(),
+            )
         self.assertGreaterEqual(action.width(), action.minimumSizeHint().width())
+        # EV rows expand and collapse their control rows natively.
+        ev.setExpanded(False)
+        self.app.processEvents()
+        self.assertFalse(tree.visualItemRect(ev.child(0)).isValid())
+        ev.setExpanded(True)
+        self.app.processEvents()
+        self.assertTrue(tree.visualItemRect(ev.child(0)).isValid())
         self.state.nv_values.clear()
         ev = self.show().child(1)
         self.assertIn("Unknown label", self.control(ev, QComboBox).currentText())
@@ -352,18 +369,20 @@ class EventMdfTests(unittest.TestCase):
             ]
         }
         ev = self.show(mdf).child(1)
-        self.assertEqual(ev.childCount(), 0)
-        self.assertIsNotNone(self.control(ev, QCheckBox))  # Unknown stays visible.
+        self.assertEqual(ev.childCount(), 2)
+        # Unknown visibility stays visible.
+        self.assertFalse(self.row_of(ev, self.control(ev, QCheckBox)).isHidden())
         self.assertIn("Visibility unknown", self.control(ev, QDoubleSpinBox).toolTip())
         self.state.ev_values[1][3] = 1
         self.state.ev_values[1][2] = 9
         ev = self.show(mdf).child(1)
         self.assertTrue(self.control(ev, QCheckBox).isHidden())
+        self.assertTrue(self.row_of(ev, self.control(ev, QCheckBox)).isHidden())
         self.assertEqual(self.control(ev, QDoubleSpinBox).value(), 9)
         self.state.nv_values[16] = 0
-        self.assertTrue(
-            self.control(self.show(mdf).child(1), QDoubleSpinBox).isHidden()
-        )
+        ev = self.show(mdf).child(1)
+        self.assertTrue(self.control(ev, QDoubleSpinBox).isHidden())
+        self.assertEqual([row.isHidden() for row in self.control_rows(ev)], [True] * 2)
 
     def test_numeric_bits_array_and_unread_values(self):
         mdf = {
@@ -399,49 +418,23 @@ class EventMdfTests(unittest.TestCase):
         self.events.set_editing(True)
         unread = parent.child(2)
         self.assertEqual(unread.text(1), "")
-        widget = self.events.consumed_table.itemWidget(unread, 1)
-        bits = widget.findChildren(QCheckBox)
+        bits = self.controls(unread, QCheckBox)
         self.assertEqual(
             [b.checkState() for b in bits], [Qt.CheckState.PartiallyChecked] * 2
         )
         self.assertEqual(self.control(unread, QDoubleSpinBox).text(), "")
-        parent.setExpanded(True)
-        self.events.resize(1100, 500)
-        self.events.show()
-        self.app.processEvents()
-        self.assertEqual(unread.childCount(), 0)
-        # Two BitArray checkboxes plus the number are three actual controls,
-        # so the raw value, array and number retain separate lines.
-        number = self.control(unread, QDoubleSpinBox)
-        self.assertLess(
-            widget.raw_value.geometry().bottom(),
-            bits[0].mapTo(widget, bits[0].rect().topLeft()).y(),
-        )
-        self.assertLess(
-            bits[1].mapTo(widget, bits[1].rect().bottomLeft()).y(),
-            number.mapTo(widget, number.rect().topLeft()).y(),
-        )
-        self.assertGreaterEqual(
-            self.events.consumed_table.visualItemRect(unread).height(),
-            widget.sizeHint().height(),
+        # Two array bits and a number: three rows, the array title on its first bit.
+        self.assertEqual(unread.childCount(), 3)
+        self.assertEqual(self.labels(unread), ["Flags:", "", "Unknown number:"])
+        self.assertEqual(
+            [self.row_of(unread, control) for control in bits],
+            self.control_rows(unread)[:2],
         )
         self.state.ev_values[1][3] = 128
         unread = self.show(mdf).child(2)
-        widget = self.events.consumed_table.itemWidget(unread, 1)
         self.assertEqual(
-            [b.isChecked() for b in widget.findChildren(QCheckBox)], [False, True]
+            [b.isChecked() for b in self.controls(unread, QCheckBox)], [False, True]
         )
-        # A BitArray alone with two checkboxes uses the same compact rule.
-        mdf["eventVariables"].pop()
-        unread = self.show(mdf).child(2)
-        self.app.processEvents()
-        widget = self.events.consumed_table.itemWidget(unread, 1)
-        for bit in widget.findChildren(QCheckBox):
-            self.assertAlmostEqual(
-                widget.raw_value.geometry().center().y(),
-                bit.geometry().center().y(),
-                delta=1,
-            )
 
     def test_raw_editing_refresh_selection_and_expansion(self):
         parent = self.show()
@@ -454,8 +447,17 @@ class EventMdfTests(unittest.TestCase):
         parent = self.show()
         ev = parent.child(1)
         self.assertTrue(parent.isExpanded())
-        self.assertEqual(ev.childCount(), 0)
+        self.assertEqual(ev.childCount(), 2)
         self.assertIs(self.events.consumed_table.currentItem(), ev)
+        # A selected control row is restored as its EV row.
+        self.events.consumed_table.setCurrentItem(ev.child(0))
+        self.state.ev_values = {4: {1: 0, 2: 137}}
+        parent = self.show()
+        ev = parent.child(1)
+        self.assertIs(self.events.consumed_table.currentItem(), ev)
+        self.state.ev_values = {4: {1: 0, 2: 138}}
+        parent = self.show()
+        ev = parent.child(1)
         desired = {
             "nvs": [None] * 15 + [1],
             "events": [
@@ -544,7 +546,7 @@ class EventMdfTests(unittest.TestCase):
             ]
         }
         parent = self.show(mdf)
-        self.assertEqual([parent.child(i).childCount() for i in range(3)], [0, 0, 0])
+        self.assertEqual([parent.child(i).childCount() for i in range(3)], [0, 0, 1])
         self.assertIsNone(self.events.consumed_table.itemWidget(parent.child(0), 1))
         self.assertIsNone(self.events.consumed_table.itemWidget(parent.child(1), 1))
         self.assertEqual(parent.child(1).text(1), "137")

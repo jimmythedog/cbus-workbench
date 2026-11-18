@@ -2,9 +2,15 @@
 
 import logging
 
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent
 from PySide6.QtGui import QIntValidator, QValidator
-from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLineEdit,
+    QStyle,
+    QTreeWidgetItem,
+    QWidget,
+)
 
 from .logging_config import trace
 from .mdf_visibility import evaluate_visibility
@@ -30,17 +36,22 @@ class EvValueValidator(QIntValidator):
 
 
 class EvContainer(QWidget):
-    """Keep the raw editor on the existing tree-item/save path."""
+    """Keep the raw editor on the existing tree-item/save path.
 
-    def __init__(self, tree, item, *, compact):
+    Each MDF control has its own child row of the EV row (#168): one tall row
+    holding a whole form made Qt draw branch connectors halfway down it.
+    """
+
+    def __init__(self, tree, item):
         super().__init__()
         self.settings = []
+        # (child tree item, control) for every control of this EV's forms.
+        self.rows = []
         self.tree = tree
         self.item = item
         self.setAutoFillBackground(True)
-        layout = QHBoxLayout(self) if compact else QVBoxLayout(self)
+        layout = QHBoxLayout(self)
         layout.setContentsMargins(2, 0, 2, 0)
-        layout.setSpacing(8 if compact else 2)
         self.raw_value = QLineEdit(item.text(1))
         self.raw_value.setAccessibleName(f"{item.text(0)} raw value")
         self.raw_value.setFixedWidth(52)
@@ -48,6 +59,7 @@ class EvContainer(QWidget):
         self.raw_value.editingFinished.connect(self.update_raw_value)
         self.raw_value.installEventFilter(self)
         layout.addWidget(self.raw_value)
+        layout.addStretch()
         self.set_editing(False)
 
     def eventFilter(self, watched, event):
@@ -66,6 +78,26 @@ class EvContainer(QWidget):
         self.raw_value.setFrame(editing)
         for settings in self.settings:
             settings.set_editing(editing)
+        self.show_rows()
+
+    def show_rows(self):
+        """Hide the rows of controls MdfSettings hid (visibility, blank labels)."""
+        for row, control in self.rows:
+            row.setHidden(control.isHidden())
+
+
+def row_cell(widget):
+    """Wrap a control for a tree cell.
+
+    The tree shows and hides cell widgets itself, so MdfSettings must hide the
+    wrapped control, never the cell, for its visibility state to stay reliable.
+    """
+    cell = QWidget()
+    layout = QHBoxLayout(cell)
+    layout.setContentsMargins(2, 0, 2, 0)
+    layout.addWidget(widget)
+    layout.addStretch()
+    return cell
 
 
 def ev_definitions(items, conditions=()):
@@ -198,9 +230,7 @@ def add_ev_controls(
 
     for index, entries in forms.items():
         item = ev_rows[index]
-        count = sum(len(controls) for _, controls, _ in entries)
-        compact = count <= 2
-        container = EvContainer(tree, item, compact=compact)
+        container = EvContainer(tree, item)
         for contents, controls, settings in entries:
             settings.setParent(container)
             settings.hide()
@@ -208,36 +238,50 @@ def add_ev_controls(
             settings.value_edited.connect(
                 lambda _index, value, row=item: row.setText(1, str(value))
             )
-            if compact:
-                # Transfer the existing labels/widgets; a two-bit array must also
-                # occupy one line. Qt layouts reparent the transferred widgets.
-                for control in controls:
-                    row = contents.layout().takeRow(control)
-                    label = row.labelItem.widget() if row.labelItem else None
-                    settings.labels[control] = label
-                    if label is not None:
-                        container.layout().addWidget(label)
-                    container.layout().addWidget(control)
-                contents.deleteLater()
-            else:
-                container.layout().addWidget(contents)
+            for control in controls:
+                # Move each form row into a child row. MdfSettings finds a
+                # moved row's label in labels, as for any non-form layout.
+                row = contents.layout().takeRow(control)
+                label = row.labelItem.widget() if row.labelItem else None
+                settings.labels[control] = label
+                child = QTreeWidgetItem(item)
+                if label is not None:
+                    label_cell = row_cell(label)
+                    tree.setItemWidget(child, 0, label_cell)
+                    # Labels sit two levels deep (event, then EV), inside the
+                    # item text rect, whose margins Qt derives from this metric.
+                    margins = 2 * (
+                        tree.style().pixelMetric(
+                            QStyle.PixelMetric.PM_FocusFrameHMargin, None, tree
+                        )
+                        + 1
+                    )
+                    tree.setColumnWidth(
+                        0,
+                        max(
+                            tree.columnWidth(0),
+                            3 * tree.indentation()
+                            + margins
+                            + label_cell.sizeHint().width(),
+                        ),
+                    )
+                control_cell = row_cell(control)
+                tree.setItemWidget(child, 1, control_cell)
+                child.setSizeHint(1, control_cell.sizeHint())
+                tree.setColumnWidth(
+                    1, max(tree.columnWidth(1), control_cell.sizeHint().width())
+                )
+                container.rows.append((child, control))
+            contents.deleteLater()
             settings.show_values(ev_values, nv_values=nv_values, ev_values=ev_values)
-        if compact:
-            container.layout().addStretch()
         tree.setItemWidget(item, 1, container)
-        item.setSizeHint(1, container.sizeHint())
-        alignment = (
-            Qt.AlignmentFlag.AlignVCenter if compact else Qt.AlignmentFlag.AlignTop
-        )
-        item.setTextAlignment(0, Qt.AlignmentFlag.AlignLeft | alignment)
-        # Reserve enough width for the complete labels and native controls.
-        tree.setColumnWidth(1, max(tree.columnWidth(1), container.sizeHint().width()))
+        container.show_rows()
+        item.setExpanded(True)
         trace(
             logger,
-            "EV layout node=%s event=%s ev=%s controls=%s compact=%s",
+            "EV layout node=%s event=%s ev=%s control_rows=%s",
             node_number,
             event.text(0),
             index,
-            count,
-            compact,
+            len(container.rows),
         )

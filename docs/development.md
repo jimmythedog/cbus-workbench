@@ -383,8 +383,12 @@ The UI specification is the prototype screenshots in
 [`screenshots/prototype/NV Globals.png`](screenshots/prototype/NV%20Globals.png),
 [`NV Channel1.png`](screenshots/prototype/NV%20Channel1.png) and
 [`EVs.png`](screenshots/prototype/EVs.png). Preserve their compact native forms
-and left-hand NV navigation. Live NV forms use the descriptor already selected
-by `NodeView`. Root `NodeVariableTabs` panels become left-hand navigation entries;
+and left-hand NV navigation. Consumed Events departs from `EVs.png` (#168): each
+EV row keeps its raw editor, and `add_ev_controls()` moves every `MdfSettings`
+form row into its own child row (label, control). One tall row per EV made
+native branch connectors land mid-form. `MdfSettings` still hides the controls
+themselves; `EvContainer.show_rows()` hides the matching tree rows. Live NV
+forms use the descriptor already selected by `NodeView`. Root `NodeVariableTabs` panels become left-hand navigation entries;
 flat definitions share a Settings page. Mixed flat runs and root tabs retain their
 order, using Settings, Settings 2, etc. for the flat runs. `NodeVariableGroup`
 uses native `QGroupBox` borders with a compact `QFormLayout` inside each box,
