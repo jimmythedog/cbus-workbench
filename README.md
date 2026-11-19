@@ -53,3 +53,9 @@ CBUS Workbench is in early development, and feedback from users is welcome.
 - **Found a bug?** [Raise a GitHub issue](https://github.com/jimmythedog/cbus-workbench/issues/new) with details of the problem.
 - **Want a new feature?** [Browse existing issues](https://github.com/jimmythedog/cbus-workbench/issues) before raising a new one.
 - **Like a proposed feature?** Add a 👍 reaction to its issue. This helps us gauge interest and prioritise future development.
+
+## 💬 Community & Discussions
+
+Have a question, suggestion or feedback about CBUS Workbench?
+Join the [CBUS Workbench Discussions](https://github.com/jimmythedog/cbus-workbench/discussions) to exchange ideas, ask questions and help shape the project's future.
+For bugs and specific feature requests, please use [GitHub Issues](https://github.com/jimmythedog/cbus-workbench/issues).
