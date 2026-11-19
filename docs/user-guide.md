@@ -22,6 +22,7 @@ needing a network connection.
 - [Backup descriptions and warning icons](#backup-descriptions-and-warning-icons)
 - [Viewing and comparing backups](#viewing-and-comparing-backups)
 - [Restoring a node backup](#restoring-a-node-backup)
+- [Logical layout IDs](#logical-layout-ids)
 - [CBUS simulator](#cbus-simulator)
 - [Diagnostics and application directories](#diagnostics-and-application-directories)
 
@@ -62,7 +63,8 @@ to attempt this connection after the application window opens.
 The logical layout identifies the stored node configuration and backup directory.
 Connections can share a logical layout, but discovery is separate for each connection.
 Changing a connection's logical layout switches its stored configuration and backup
-directory after confirmation; existing data is not moved or deleted.
+directory after confirmation; existing data is not moved or deleted. See
+[Logical layout IDs](#logical-layout-ids) for how best to use them.
 
 The summary to the right of **Nodes | Events | Backups** shows the selected
 layout name and configured host/port or serial device, plus CAN ID. Hover over
@@ -768,6 +770,53 @@ warning before using **Layouts → Refresh** to reread hardware and compare
 again. Refreshing does not retry failed writes or clear safety blocks. Reconnect
 when the transport has failed; a report from a disconnected service cannot retry
 through a replacement connection. Ordinary backup Compare has no Retry.
+
+## Logical layout IDs
+
+Each entry in the **Layouts** menu is a *named connection*: how Workbench reaches
+a network (serial, TCP/IP or simulator), with its own name, CAN ID and polling
+interval. Its **Logical layout** setting is an ID for the railway layout it
+belongs to. Several connections can use the same logical layout ID.
+
+Connections that share a logical layout ID share what Workbench has saved about
+that railway layout:
+
+- remembered nodes and their identity, so they appear (Offline) before you connect;
+- node names, event names and MDF token overrides (annotations);
+- the list of observed events;
+- node and layout backups.
+
+They do **not** share anything live. Each connection discovers nodes for itself,
+has its own Online/Offline status, discovery progress and editing, and connecting
+or disconnecting one leaves the others unaffected.
+
+**Use one logical layout ID per physical railway layout.** Reuse it whenever you
+reach the same layout another way, so names, backups and remembered nodes are
+available whichever connection you use. Give genuinely different railway
+layouts different IDs, so their nodes, names and backups never mix.
+
+For example, with logical layout ID `home`:
+
+| Connection name | Type | Logical layout |
+|---|---|---|
+| Home (Serial) | Serial, a USB adapter at the layout | `home` |
+| Home (TCP) | TCP/IP, a network hub on the same layout | `home` |
+| Home (Simulator) | Simulator | `home` |
+
+A backup made through **Home (Serial)** can be compared or restored through
+**Home (TCP)**, and a name given to a node through either is shown by all three.
+
+For the simulator this means:
+
+- **Home (Simulator)** starts from the nodes remembered for `home`, using their
+  saved identity, with NVs set to 0 and no consumed events.
+- Restoring a `home` backup copies a real configuration into the simulated nodes
+  to experiment with. Those changes live only in that connection's memory and
+  are lost when it disconnects; they never reach the physical nodes, which
+  change only through a connection to the real network.
+- Names you edit and backups you make while simulated are shared, `home` layout
+  data, so they remain and appear on the other connections. Give simulator
+  backups a description that says so.
 
 ## CBUS simulator
 
