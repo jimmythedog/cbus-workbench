@@ -99,14 +99,19 @@ def unread_nodes(service) -> list[int]:
     ]
 
 
-def find_consumers(identity, service, known_numbers) -> Consumers:
-    """Confirmed consumers of identity, plus nodes that might still consume it."""
+def find_consumers(identity, service, known_names: dict[int, str]) -> Consumers:
+    """Confirmed consumers of identity, plus nodes that might still consume it.
+
+    known_names maps navigator nodes to the label it shows (user-defined name,
+    else module type); consumers missing from it (or with an empty label) fall
+    back to module type.
+    """
     identity = tuple(identity)
     connected = service is not None and service.connection.state == "Connected"
     states = service.node_states if connected else {}
     presence = service.presence if connected else {}
     result = Consumers()
-    for number in sorted(set(known_numbers) | set(states)):
+    for number in sorted(set(known_names) | set(states)):
         state = states.get(number)
         if not connected:
             result.undetermined[number] = DISCONNECTED
@@ -127,12 +132,13 @@ def find_consumers(identity, service, known_numbers) -> Consumers:
         )
         if slot is None:
             continue
-        # Module type only: refreshes run on every discovery step, so avoid
-        # rereading each node's annotation file here.
+        # The navigator's cached label: refreshes run on every discovery step,
+        # so avoid rereading each node's annotation file here.
         result.confirmed.append(
             Consumer(
                 number,
-                module_name(state.identity.manufacturer, state.identity.module_type),
+                known_names.get(number)
+                or module_name(state.identity.manufacturer, state.identity.module_type),
                 state.parameters.get(5),
                 dict(state.ev_values.get(slot, {})),
                 dict(state.nv_values),

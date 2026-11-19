@@ -152,6 +152,33 @@ class EventConsumerTests(unittest.TestCase):
         # Expansion reads only discovered state; it never interrogates hardware.
         self.assertEqual(self.connection.sent[sent:], [])
 
+    def test_consumers_show_the_navigator_name_and_follow_renames(self):
+        # #180: a user-defined node name, else module type, as the navigator shows.
+        self.view.annotations.save({"name": "Relays"}, 261)
+        self.add_live(consumer(258, {}, flags=0x02, progress=DiscoveryProgress.SKIPPED))
+        self.add_live(consumer(260, {(258, 102): {1: 4}}))
+        self.add_live(consumer(261, {(258, 102): {1: 2}}))
+
+        for name, open_event in (
+            ("Layout Events", self.layout_event),
+            ("Produced Events", lambda label: self.produced_event(258, label)),
+        ):
+            with self.subTest(name):
+                event = open_event("258:102")
+                self.assertEqual(
+                    [event.child(i).text(0) for i in range(event.childCount())],
+                    ["Node 260 - CANMIO", "Node 261 - Relays"],
+                )
+                # Renaming updates already expanded consumers without discovery.
+                sent = len(self.connection.sent)
+                self.view.annotations.save({"name": "Frogs"}, 260)
+                self.assertEqual(
+                    [event.child(i).text(0) for i in range(event.childCount())],
+                    ["Node 260 - Frogs", "Node 261 - Relays"],
+                )
+                self.assertEqual(self.connection.sent[sent:], [])
+                self.view.annotations.save({}, 260)  # Unnamed again for next view.
+
     def test_short_and_long_identities_match_exactly(self):
         # A short event is (0, EN); a long event with the same EN is distinct.
         self.add_live(consumer(260, {(0, 5): {1: 1, 2: None}}))

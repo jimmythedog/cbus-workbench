@@ -32,6 +32,9 @@ class NodeListItem(QListWidgetItem):
         super().__init__(text)
         # Keep the resolved label separate so annotation edits need no MDF lookup.
         self.module_label = module_label
+        # User-defined name, else module label; set by refresh_annotation_names()
+        # so event consumers can reuse it without rereading annotation files.
+        self.display_label = module_label
 
     def __lt__(self, other):
         return node_number(self.data(Qt.ItemDataRole.UserRole)) < node_number(
@@ -168,6 +171,7 @@ class NodeView(QSplitter):
                 continue
             name = annotations.load(nn).get("name", "") if annotations else ""
             label = name or item.module_label
+            item.display_label = label
             base = f"{nn} - {label}" if label else str(nn)
             base += " (Online)" if self.is_online(item) else " (Offline)"
             item.setText(base)

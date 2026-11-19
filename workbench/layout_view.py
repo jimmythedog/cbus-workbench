@@ -165,13 +165,14 @@ class LayoutView(QWidget):
         self.annotations_changed(-1)
 
     def annotations_changed(self, number):
+        # Consumer rows reuse the navigator's names, so refresh those first.
+        self.node_view.refresh_annotation_names(number)
         if number == -1:
             self.refresh_observed_events()
         else:
-            # A token rename changes expanded consumers' control labels.
+            # A node or token rename changes expanded consumers' labels.
             for consumers in self.consumer_trees():
                 consumers.refresh(rebuild=True)
-        self.node_view.refresh_annotation_names(number)
         details = self.node_view.details
         if (
             details.live_state is not None
@@ -253,11 +254,12 @@ class LayoutView(QWidget):
 
     def find_consumers(self, identity):
         """This connection's discovery, plus saved nodes as undetermined (#87)."""
-        return find_consumers(
-            identity,
-            self.node_view.details.cbus_service,
-            [node_number(node) for node in self.nodes()],
-        )
+        node_list = self.node_view.node_list
+        names = {
+            node_number(item.data(Qt.ItemDataRole.UserRole)): item.display_label
+            for item in (node_list.item(row) for row in range(node_list.count()))
+        }
+        return find_consumers(identity, self.node_view.details.cbus_service, names)
 
     def consumer_mdf(self, number):
         """A consumer's MDF as Consumed Events presents it, or None for raw EVs.
