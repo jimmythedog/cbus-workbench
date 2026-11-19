@@ -60,36 +60,43 @@ class NodeEditingTests(unittest.TestCase):
 
         from workbench.mdfs import Mdf
 
+        controls = [
+            {
+                "type": "NodeVariableNumber",
+                "nodeVariableIndex": 2,
+                "displayTitle": "Delay",
+                "displayScale": 0.1,
+                "displayOffset": 2,
+            },
+            {
+                "type": "NodeVariableSelect",
+                "nodeVariableIndex": 2,
+                "displayTitle": "Mode",
+                "bitMask": 3,
+                "options": [
+                    {"label": "Zero", "value": 0},
+                    {"label": "Three", "value": 3},
+                ],
+            },
+        ]
+        # Controls inside group -> nested tabs share the same edit session.
+        nested = {
+            "type": "NodeVariableGroup",
+            "displayTitle": "Outputs",
+            "groupItems": [
+                {
+                    "type": "NodeVariableTabs",
+                    "tabPanels": [{"displayTitle": "Output 1", "items": controls}],
+                }
+            ],
+        }
         mdf = Mdf(
             Path("test.json"),
             {
                 "nodeVariables": [
                     {
                         "type": "NodeVariableTabs",
-                        "tabPanels": [
-                            {
-                                "displayTitle": "Timing",
-                                "items": [
-                                    {
-                                        "type": "NodeVariableNumber",
-                                        "nodeVariableIndex": 2,
-                                        "displayTitle": "Delay",
-                                        "displayScale": 0.1,
-                                        "displayOffset": 2,
-                                    },
-                                    {
-                                        "type": "NodeVariableSelect",
-                                        "nodeVariableIndex": 2,
-                                        "displayTitle": "Mode",
-                                        "bitMask": 3,
-                                        "options": [
-                                            {"label": "Zero", "value": 0},
-                                            {"label": "Three", "value": 3},
-                                        ],
-                                    },
-                                ],
-                            }
-                        ],
+                        "tabPanels": [{"displayTitle": "Timing", "items": [nested]}],
                     }
                 ]
             },
@@ -109,9 +116,12 @@ class NodeEditingTests(unittest.TestCase):
         self.assertEqual(combo.currentData(), 3)
         self.assertTrue(spin.isEnabled())
         self.assertEqual(self.details.desired_configuration["nvs"], [7, 31])
+        combo.setCurrentIndex(combo.findData(0))  # Masked edit keeps other bits.
+        self.assertAlmostEqual(spin.value(), 4.8)
+        self.assertEqual(self.details.desired_configuration["nvs"], [7, 28])
         self.assertEqual(self.state.nv_values, {1: 7, 2: 8})
         self.details.show_live_state(self.state, mdf)
-        self.assertAlmostEqual(spin.value(), 5.1)
+        self.assertAlmostEqual(spin.value(), 4.8)
         self.details.cancel_button.click()
         self.assertAlmostEqual(spin.value(), 2.8)
         self.assertEqual(combo.currentData(), 0)

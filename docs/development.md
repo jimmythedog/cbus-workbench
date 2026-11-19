@@ -261,6 +261,14 @@ under the bundle resource root: `_internal/` in Windows/Linux onedir builds and
 through `sys._MEIPASS`. The post-build check compares every JSON filename and its
 contents with the fetched source collection before uploading artifacts.
 
+To inspect how an MDF's NV settings render without hardware, show it with chosen
+NV values (unlisted NVs are 0). Editing is enabled, but edits stay in memory:
+nothing is written to a node or saved.
+
+```sh
+python -m scripts.show_mdf resources/mdfs/MMCTEST-0001-1a.json 2=1 5=55 6=8 7=77
+```
+
 To refresh MDFs for a subsequent release, change `mmc_version` in `pyproject.toml`
 to an explicit MMC-SERVER release tag, run `make mdfs`, review compatibility and
 run `make check`. Build the portable artifacts and manually check offline MDF
@@ -456,8 +464,11 @@ flat definitions share a Settings page. Mixed flat runs and root tabs retain the
 order, using Settings, Settings 2, etc. for the flat runs. `NodeVariableGroup`
 uses native `QGroupBox` borders with a compact `QFormLayout` inside each box,
 including nested groups. Ancestor visibility conditions apply to every descendant
-row. Empty groups and groups without visible children are omitted. Nested tabs inside groups or
-panels remain an explicit unsupported structure; no nested navigation is created.
+row. Empty groups and groups without visible children are omitted. `NodeVariableTabs`
+nested inside groups or panels, at any depth, become a native `QTabWidget` row built
+by the same recursive `add_items()`; only root tabs become navigation. Their panels
+follow group rules: panels without supported controls are omitted, a tab is hidden
+while none of its rows are visible, and the whole tab widget is hidden like a group.
 The supported leaves remain selection, byte-number, slider, dual-byte number, single-bit and bit-array. Unsupported controls are skipped with their type, panel and
 original item number logged; supported controls retain MDF order. Panels with
 no supported controls are omitted. If none remain, the raw table is shown.

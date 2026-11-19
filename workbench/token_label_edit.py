@@ -49,6 +49,18 @@ class TokenLabelEditor(QObject):
             item.setData(Qt.ItemDataRole.UserRole, template)
             item.setToolTip("Double-click to edit token names")
 
+    def bind_tabs(self, tabs, templates):
+        """Nested MDF tab titles edit like navigation pages, by double-click."""
+        bar = tabs.tabBar()
+        for index, template in enumerate(templates):
+            if editable_tokens(template):
+                bar.setTabData(index, template)
+                bar.setTabToolTip(index, "Double-click to edit token names")
+        # A double-click outside any tab gives index -1 and no data: edit() ignores it.
+        tabs.tabBarDoubleClicked.connect(
+            lambda index: self.edit(bar.tabData(index), bar.tabText(index))
+        )
+
     def bind_choices(self, widget, options):
         templates = [option.get("label", "") for option in options]
         if any(isinstance(text, str) and editable_tokens(text) for text in templates):

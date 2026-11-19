@@ -632,36 +632,33 @@ class AnnotationTests(unittest.TestCase):
         self.assertEqual(load_annotations("test", 42), saved)
         self.assertIn("disk full", warning.call_args.args[2])
 
-    def test_page_group_and_displayed_selection_tokens_are_contextually_editable(self):
-        from PySide6.QtWidgets import QComboBox, QGroupBox
+    def test_page_tab_group_and_displayed_selection_tokens_are_contextually_editable(
+        self,
+    ):
+        from PySide6.QtWidgets import QComboBox, QGroupBox, QTabWidget
 
         mdf = self.token_mdf()
+        group = {
+            "type": "NodeVariableGroup",
+            "displayTitle": "Route ${palette1}",
+            "groupItems": [
+                {
+                    "type": "NodeVariableSelect",
+                    "nodeVariableIndex": 1,
+                    "displayTitle": "Choice",
+                    "options": [{"value": 4, "label": "Selected ${palette1}"}],
+                }
+            ],
+        }
+        nested_tabs = {
+            "type": "NodeVariableTabs",
+            "tabPanels": [{"displayTitle": "Lane ${palette1}", "items": [group]}],
+        }
         mdf.data["nodeVariables"] = [
             {
                 "type": "NodeVariableTabs",
                 "tabPanels": [
-                    {
-                        "displayTitle": "${channel1} settings",
-                        "items": [
-                            {
-                                "type": "NodeVariableGroup",
-                                "displayTitle": "Route ${palette1}",
-                                "groupItems": [
-                                    {
-                                        "type": "NodeVariableSelect",
-                                        "nodeVariableIndex": 1,
-                                        "displayTitle": "Choice",
-                                        "options": [
-                                            {
-                                                "value": 4,
-                                                "label": "Selected ${palette1}",
-                                            }
-                                        ],
-                                    }
-                                ],
-                            }
-                        ],
-                    }
+                    {"displayTitle": "${channel1} settings", "items": [nested_tabs]}
                 ],
             }
         ]
@@ -719,10 +716,26 @@ class AnnotationTests(unittest.TestCase):
             details.mdf_values.pages.widget(1).findChild(QComboBox).currentText(),
             "Selected Green",
         )
+
+        # A nested tab title edits its tokens like a page or group title.
+        tabs = details.mdf_values.pages.widget(1).findChild(QTabWidget)
+        self.assertEqual(tabs.tabText(0), "Lane Green")
+        bar = tabs.tabBar()
+        shown = self.edit_token_label(
+            None,
+            {"palette1": "Blue"},
+            activate=lambda: QTest.mouseDClick(
+                bar, Qt.MouseButton.LeftButton, pos=bar.tabRect(0).center()
+            ),
+        )
+        self.assertEqual(shown["context"][0], "Lane Green")
+        form = details.mdf_values.pages.widget(1)
+        self.assertEqual(form.findChild(QTabWidget).tabText(0), "Lane Blue")
+        self.assertEqual(form.findChild(QComboBox).currentText(), "Selected Blue")
         self.assertEqual(state.nv_values, before)
         self.assertEqual(
             load_annotations("test", 42)["tokens"],
-            {"channel": {"1": "West"}, "palette": {"1": "Green"}},
+            {"channel": {"1": "West"}, "palette": {"1": "Blue"}},
         )
 
     def test_backups_include_annotations_without_changing_hardware_comparison(self):

@@ -6,7 +6,17 @@ Takes the same arguments as ``python -m unittest``, e.g.
 
 import os
 import sys
+import tempfile
 import unittest
+
+# Isolate per-user application directories for the whole run, before anything
+# resolves them. Without this, tests that do not patch paths write into the real
+# ~/.local/share under the name PySide gives the app: the first test module to
+# create QApplication (e.g. test_annotations.py). Removed when the run ends.
+# Linux only: Qt reads XDG variables there, and CI runs on Linux.
+isolated = tempfile.TemporaryDirectory(prefix="cbus-workbench-tests-")
+for kind in ("CONFIG", "DATA", "STATE", "CACHE"):
+    os.environ[f"XDG_{kind}_HOME"] = os.path.join(isolated.name, kind.lower())
 
 from PySide6.QtCore import qFormatLogMessage, qInstallMessageHandler
 
@@ -31,4 +41,5 @@ def filter_offscreen_noise(mode, context, message):
 if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
     qInstallMessageHandler(filter_offscreen_noise)
 
-unittest.main(module=None)
+with isolated:
+    unittest.main(module=None)

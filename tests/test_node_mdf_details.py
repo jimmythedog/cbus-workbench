@@ -529,13 +529,13 @@ class NodeMdfDetailsTests(unittest.TestCase):
         self.assertFalse(self.details.edit_button.isEnabled())
 
     def test_unsupported_mdf_leaves_raw_values_live_and_offline(self):
-        # Valid for MMC, but nested tabs are an explicit unsupported structure.
+        # A malformed structure the renderer rejects: tabPanels must be a list.
         data = json.loads((FIXTURES / ACE).read_text())
         data["nodeVariables"].append(
             {
                 "type": "NodeVariableGroup",
                 "displayTitle": "Group",
-                "groupItems": [{"type": "NodeVariableTabs", "tabPanels": []}],
+                "groupItems": [{"type": "NodeVariableTabs", "tabPanels": {}}],
             }
         )
         (self.system / ACE).write_text(json.dumps(data))

@@ -13,10 +13,18 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QGroupBox,
     QLabel,
+    QPushButton,
+    QTabWidget,
 )
 
+from workbench.mdf_tokens import substitute_tokens
 from workbench.node import Node
 from workbench.node_variables import MdfNodeVariables
+from workbench.paths import system_mdf_directory
+
+# Fetched by `make mdfs` (git-ignored); tests needing them are optional.
+MDFS = system_mdf_directory()
+MMCTEST = MDFS / "MMCTEST-0001-1a.json"
 
 
 def select_page(view, index):
@@ -901,7 +909,213 @@ class MdfFormTests(unittest.TestCase):
         self.assertEqual(control.value(), 43)
         self.assertEqual(control.toolTip(), "")
 
-    def test_invalid_group_structures_and_nested_tabs_remain_errors(self):
+    def test_nested_tabs_in_groups_and_tabs_show_edit_and_hide_known_values(self):
+        def number(index, title, **extra):
+            return {
+                "type": "NodeVariableNumber",
+                "nodeVariableIndex": index,
+                "displayTitle": title,
+                **extra,
+            }
+
+        inner_tabs = {
+            "type": "NodeVariableTabs",
+            "visibilityLogic": {"nv": 4, "equals": 1},
+            "tabPanels": [
+                {
+                    "displayTitle": "Deep",
+                    "items": [
+                        {
+                            "type": "NodeVariableGroup",
+                            "displayTitle": "Inner",
+                            "groupItems": [number(2, "Deep value")],
+                        }
+                    ],
+                },
+                {
+                    "displayTitle": "Servo",
+                    "items": [number(3, "Position", outputOnWrite=True)],
+                },
+            ],
+        }
+        outer_tabs = {
+            "type": "NodeVariableTabs",
+            "tabPanels": [
+                {
+                    "displayTitle": "Timing ${channel1}",
+                    "items": [number(1, "Delay"), inner_tabs],
+                },
+                {
+                    "displayTitle": "Mode",
+                    "items": [
+                        {
+                            "type": "NodeVariableSelect",
+                            "nodeVariableIndex": 4,
+                            "displayTitle": "Mode",
+                            "options": [
+                                {"label": "Simple", "value": 0},
+                                {"label": "Advanced", "value": 1},
+                            ],
+                        }
+                    ],
+                },
+                {
+                    "displayTitle": "Optional",
+                    "items": [
+                        number(5, "Optional", visibilityLogic={"nv": 5, "equals": 0})
+                    ],
+                },
+                {
+                    "displayTitle": "Unsupported only",
+                    "items": [{"type": "NodeVariableUnknown"}],
+                },
+            ],
+        }
+        source = {
+            "nodeVariables": [
+                {
+                    "type": "NodeVariableGroup",
+                    "displayTitle": "Outputs ${channel1}",
+                    "groupItems": [outer_tabs],
+                }
+            ]
+        }
+        view = MdfNodeVariables()
+        self.addCleanup(view.close)
+        view.set_definition(
+            substitute_tokens(source, {"channel": {"1": "West"}}), source=source
+        )
+        self.assertEqual(
+            [view.navigation.item(i).text() for i in range(view.navigation.count())],
+            ["Raw Values", "Settings"],
+        )
+        values = [10, 20, 30, 1, 0]
+        view.show_node(self.node, values)
+        form = select_page(view, 1)
+        group = form.findChild(QGroupBox)
+        self.assertEqual(group.title(), "Outputs West")
+        outer, inner = form.findChildren(QTabWidget)
+        self.assertIs(outer.parentWidget(), group)
+        self.assertTrue(group.isAncestorOf(inner) and outer.isAncestorOf(inner))
+        # Panels without supported controls are omitted, as for root panels.
+        self.assertEqual(
+            [outer.tabText(i) for i in range(outer.count())],
+            ["Timing West", "Mode", "Optional"],
+        )
+        self.assertEqual([inner.tabText(i) for i in range(2)], ["Deep", "Servo"])
+        # Each control sits in its own tab page.
+        delay = outer.widget(0).findChild(
+            QDoubleSpinBox, options=Qt.FindChildOption.FindDirectChildrenOnly
+        )
+        deep = inner.widget(0).findChild(QDoubleSpinBox)
+        position = inner.widget(1).findChild(QDoubleSpinBox)
+        optional = outer.widget(2).findChild(QDoubleSpinBox)
+        self.assertEqual(
+            [spin.value() for spin in (delay, deep, position, optional)],
+            [10, 20, 30, 0],
+        )
+        (test,) = inner.widget(1).findChildren(QPushButton)
+        self.assertTrue(test.isEnabled())
+
+        # Edits at any depth update the shared NV working copy.
+        view.set_editing(True)
+        self.assertTrue(deep.isEnabled())
+        deep.setValue(25)
+        outer.widget(1).findChild(QComboBox).setCurrentIndex(0)
+        self.assertEqual(values, [10, 25, 30, 0, 0])
+        select_page(view, 0)
+        self.assertEqual(view.raw_values.item(1, 1).text(), "25")
+        select_page(view, 1)
+
+        # Conditions hide a whole nested tab widget, or one tab, and restore them.
+        view.refresh_values()
+        self.assertTrue(inner.isHidden())
+        self.assertFalse(outer.isHidden())
+        values[3] = 1
+        values[4] = 1
+        outer.setCurrentIndex(2)
+        view.refresh_values()
+        self.assertFalse(inner.isHidden())
+        self.assertEqual([outer.isTabVisible(i) for i in range(3)], [True, True, False])
+        self.assertNotEqual(outer.currentIndex(), 2)
+        values[4] = 0
+        view.refresh_values()
+        self.assertTrue(outer.isTabVisible(2))
+
+        # Unknown conditions keep nested rows visible but read-only.
+        view.show_live_values(3, {1: 10, 2: 20, 3: 30})
+        self.assertFalse(inner.isHidden())
+        self.assertFalse(deep.isEnabled())
+        self.assertIn("Visibility unknown", deep.toolTip())
+        self.assertTrue(outer.isTabVisible(2))
+        self.assertEqual(optional.value(), optional.minimum())
+        view.show_live_values(5, {1: 10, 2: 20, 3: 30, 4: 0, 5: 1})
+        self.assertTrue(inner.isHidden())
+        self.assertFalse(outer.isTabVisible(2))
+        self.assertTrue(outer.isTabVisible(0))
+
+    @unittest.skipUnless(MMCTEST.exists(), "run `make mdfs` for the MMC test MDFs")
+    def test_real_mmc_test_mdfs_render_nested_tabs_with_known_values(self):
+        for name in ("INDEXTEST-0003-1a", "SLOTTEST-0002-1a", "VLCBTEST-000A-1a"):
+            path = MDFS / f"{name}.json"
+            if path.exists():
+                with self.subTest(mdf=name):
+                    data = json.loads(path.read_text())
+                    view = MdfNodeVariables(substitute_tokens(data, {}))
+                    self.addCleanup(view.close)
+                    self.assertGreater(view.navigation.count(), 1)
+
+        data = json.loads(MMCTEST.read_text())
+        view = MdfNodeVariables()
+        self.addCleanup(view.close)
+        view.set_definition(substitute_tokens(data, {}), source=data)
+        pages = [view.navigation.item(i).text() for i in range(view.navigation.count())]
+        self.assertEqual(pages[:2], ["Raw Values", "Settings"])
+        self.assertIn("Tabs in Tab", pages)
+        values = {index: 0 for index in range(1, 44)}
+        values.update({2: 1, 5: 55, 6: 8, 7: 77})
+        view.show_node(self.node, values)
+
+        # Settings: group -> tabs -> group, three levels below the page.
+        form = select_page(view, 1)
+        group = next(
+            box
+            for box in form.findChildren(QGroupBox)
+            if box.title() == "NodeVariableGroup"
+        )
+        tabs = group.findChild(QTabWidget)
+        self.assertIs(tabs.parentWidget(), group)
+        self.assertEqual(
+            [tabs.tabText(i) for i in range(tabs.count())],
+            ["Single Bit", "Group test"],
+        )
+        self.assertEqual(
+            tabs.widget(0).findChild(QCheckBox).checkState(), Qt.CheckState.Checked
+        )
+        tabs.setCurrentIndex(1)
+        group_2 = next(
+            box
+            for box in tabs.currentWidget().findChildren(QGroupBox)
+            if box.title() == "Group 2"
+        )
+        self.assertEqual(group_2.findChild(QComboBox).currentText(), "Options 4")
+        self.assertEqual(group_2.findChild(QDoubleSpinBox).value(), 77)
+
+        # Root tab panel -> tabs: a nested control edits the shared NV.
+        form = select_page(view, pages.index("Tabs in Tab"))
+        tabs = form.findChild(QTabWidget)
+        self.assertEqual(
+            [tabs.tabText(i) for i in range(tabs.count())],
+            ["NodeVariableNumber", "Slider"],
+        )
+        number = tabs.widget(0).findChild(QDoubleSpinBox)
+        self.assertEqual(number.value(), 55)
+        self.assertEqual(tabs.widget(1).findChild(QDoubleSpinBox).value(), 77)
+        view.set_editing(True)
+        number.setValue(56)
+        self.assertEqual(values[5], 56)
+
+    def test_invalid_group_and_tab_structures_remain_errors(self):
         for group in [
             {"type": "NodeVariableGroup", "displayTitle": "Missing items"},
             {
@@ -916,8 +1130,22 @@ class MdfFormTests(unittest.TestCase):
             },
             {
                 "type": "NodeVariableGroup",
-                "displayTitle": "Nested tabs",
-                "groupItems": [{"type": "NodeVariableTabs", "tabPanels": []}],
+                "displayTitle": "Bad tabs",
+                "groupItems": [{"type": "NodeVariableTabs", "tabPanels": {}}],
+            },
+            {
+                "type": "NodeVariableGroup",
+                "displayTitle": "Bad panel",
+                "groupItems": [
+                    {"type": "NodeVariableTabs", "tabPanels": [{"displayTitle": 1}]}
+                ],
+            },
+            {
+                "type": "NodeVariableGroup",
+                "displayTitle": "Missing panel items",
+                "groupItems": [
+                    {"type": "NodeVariableTabs", "tabPanels": [{"displayTitle": "A"}]}
+                ],
             },
         ]:
             with self.subTest(group=group):

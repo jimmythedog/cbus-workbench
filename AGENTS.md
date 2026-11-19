@@ -104,10 +104,9 @@ make check         # tests + ruff check + format check + git diff --check
 make format        # ruff format
 make mdfs          # fetch pinned MMC MDF collection (git-ignored)
 
-# single test file / case
-# single test file / case
-QT_QPA_PLATFORM=offscreen uv run python -m tests tests.test_nv_write
-QT_QPA_PLATFORM=offscreen uv run python -m tests tests.test_nv_write.SomeTestCase.test_name
+# single test file / case (discovery puts tests/ on the path for shared helpers)
+QT_QPA_PLATFORM=offscreen uv run python -m tests discover -s tests -p test_nv_write.py
+QT_QPA_PLATFORM=offscreen uv run python -m tests discover -s tests -p test_nv_write.py -k test_name
 ```
 
 On NixOS use plain `python` inside `nix-shell .shell.nix` (or direnv), not `uv run`.

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QWidget,
 )
 
@@ -417,6 +418,7 @@ class MdfSettings(QScrollArea):
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setWidget(contents)
         self.group_rows = []
+        self.tab_pages = []
         self.bit_arrays = []
         self.test_buttons = {}
         self.add_items(
@@ -519,7 +521,7 @@ class MdfSettings(QScrollArea):
         parent_conditions=(),
         source_definitions=None,
     ):
-        """Append controls and nested group boxes in MDF order."""
+        """Append controls, nested group boxes and nested tabs in MDF order."""
         if not isinstance(definitions, list):
             raise TypeError("MDF panel/group items must be a list")
         for item_number, definition in enumerate(definitions, 1):
@@ -536,9 +538,8 @@ class MdfSettings(QScrollArea):
             ):
                 raise ValueError(f"MDF item needs a nonempty type: {item_location}")
             kind = definition["type"]
-            if kind == "NodeVariableTabs":
-                raise ValueError(f"Nested MDF tabs are unsupported: {item_location}")
             if kind not in (
+                "NodeVariableTabs",
                 "NodeVariableGroup",
                 "NodeVariableSelect",
                 "NodeVariableSlider",
@@ -570,6 +571,10 @@ class MdfSettings(QScrollArea):
             conditions = parent_conditions + (
                 (condition,) if condition is not None else ()
             )
+            if kind == "NodeVariableTabs":
+                # Tabs have no displayTitle of their own; only panels are titled.
+                self.add_tabs(definition, item_location, layout, conditions, source)
+                continue
             title = definition["displayTitle"]
             if not isinstance(title, str):
                 raise TypeError("MDF displayTitle must be text")
@@ -623,6 +628,55 @@ class MdfSettings(QScrollArea):
                     self.test_buttons[control] = test
                 layout.addRow(label, field)
                 self.rows.append((definition, control, conditions))
+
+    def add_tabs(self, definition, location, layout, conditions, source):
+        """Nested tabs keep the MDF presentation as a native tab widget.
+
+        Root tabs never reach here: settings_panels() makes them navigation pages.
+        """
+        panels = definition["tabPanels"]
+        if not isinstance(panels, list):
+            raise TypeError("MDF tabPanels must be a list")
+        tabs = QTabWidget()
+        layout.addRow(tabs)
+        templates = []
+        all_children = []
+        for number, panel in enumerate(panels, 1):
+            title = panel["displayTitle"]
+            if not isinstance(title, str):
+                raise TypeError("MDF panel title must be text")
+            source_panel = source["tabPanels"][number - 1]
+            page = QWidget()
+            first_child = len(self.rows)
+            self.add_items(
+                panel["items"],
+                f"{location}/panel {number}",
+                mdf_form_layout(page),
+                conditions,
+                source_panel["items"],
+            )
+            children = [control for _, control, _ in self.rows[first_child:]]
+            if not children:
+                # As for root panels and groups, omit panels with no controls.
+                page.deleteLater()
+                continue
+            self.tab_pages.append((tabs, tabs.addTab(page, title), children))
+            templates.append(source_panel["displayTitle"])
+            all_children += children
+        trace(
+            logger,
+            "Construct nested MDF tabs page=%s location=%s tabs=%s",
+            self.page,
+            location,
+            [tabs.tabText(index) for index in range(tabs.count())],
+        )
+        if not all_children:
+            layout.removeRow(tabs)
+            return
+        # The whole tab widget hides like a group once no tab has a visible row.
+        self.group_rows.append((tabs, all_children))
+        if self.token_editor:
+            self.token_editor.bind_tabs(tabs, templates)
 
     def add_bit_array(self, definition, location, layout, conditions, source):
         """MMC v0.23.2 uses ordered, zero-based bitPosition entries on one NV."""
@@ -857,6 +911,8 @@ class MdfSettings(QScrollArea):
         for group, children in self.group_rows:
             visible = any(not child.isHidden() for child in children)
             group.parentWidget().layout().setRowVisible(group, visible)
+        for tabs, index, children in self.tab_pages:
+            tabs.setTabVisible(index, any(not child.isHidden() for child in children))
         # One summary per refresh: per-row detail would flood TRACE (#149).
         trace(
             logger,
