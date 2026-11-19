@@ -99,7 +99,7 @@ class LayoutSettingsDialog(QDialog):
         self.logical_layout_combo.setCurrentText(logical_layout)
 
         self.connection_type_combo = QComboBox()
-        self.connection_type_combo.addItems(["TCP/IP", "Serial"])
+        self.connection_type_combo.addItems(["TCP/IP", "Serial", "Simulator"])
         self.connection_type_combo.setCurrentText(connection_type)
 
         self.host_edit = QLineEdit(host)
@@ -257,7 +257,9 @@ class LayoutSettingsDialog(QDialog):
 
     def update_connection_fields(self, connection_type):
         # Unlike a stack, hidden form rows contribute neither height nor spacing.
+        # The simulator has no endpoint; the logical layout identifies its nodes.
         tcp = connection_type == "TCP/IP"
+        serial = connection_type == "Serial"
         self.connection_form.setRowVisible(self.host_edit, tcp)
         self.connection_form.setRowVisible(self.port_spin, tcp)
         for field in (
@@ -266,7 +268,7 @@ class LayoutSettingsDialog(QDialog):
             self.serial_port_edit,
             self.confirmed_label,
         ):
-            self.connection_form.setRowVisible(field, not tcp)
+            self.connection_form.setRowVisible(field, serial)
         self.adjustSize()
 
     def settings(self):

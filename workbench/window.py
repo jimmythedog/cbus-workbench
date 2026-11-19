@@ -44,6 +44,7 @@ from .send_event_dialog import SendEventDialog
 from .send_frame_dialog import SendFrameDialog
 from .serial_connection import SerialConnection
 from .serial_ports import choose_serial_device
+from .simulator_connection import SimulatorConnection
 from .tcp_connection import TcpConnection
 from .traffic import describe_frame
 from .ui_errors import ErrorReporter
@@ -77,7 +78,9 @@ class MainWindow(QMainWindow):
         self.observed_events = {}
         self.annotations = {}
         self.layout_settings = {}
-        self.connections: dict[str, TcpConnection | SerialConnection] = {}
+        self.connections: dict[
+            str, TcpConnection | SerialConnection | SimulatorConnection
+        ] = {}
         self.cbus_services: dict[str, CbusService] = {}
         # One node-number assignment at a time: SNN reaches every module in
         # setup mode, and two connections may share one physical network.
@@ -653,6 +656,9 @@ class MainWindow(QMainWindow):
 
     def _connect_layout(self, name: str) -> None:
         settings = self.layout_settings[name]
+        if settings["connection_type"] == "Simulator":
+            self._connect_simulator(name)
+            return
         serial = settings["connection_type"] == "Serial"
         endpoint = settings["serial_port"] if serial else settings["host"]
         if not endpoint and not (serial and settings["auto_select"]):
@@ -680,28 +686,9 @@ class MainWindow(QMainWindow):
 
         connection = self.connections.get(name)
         if connection is None:
-            connection = (
+            connection = self._add_connection(
                 SerialConnection(name, self) if serial else TcpConnection(name, self)
             )
-            connection.state_changed.connect(
-                lambda state, conn=connection: self.set_connection_state(
-                    conn.layout_name, state
-                )
-            )
-            connection.failed.connect(
-                lambda message, conn=connection: self.connection_failed(conn, message)
-            )
-            connection.frame_sent.connect(
-                lambda frame, conn=connection: self.record_frame(
-                    conn.layout_name, "TX", frame
-                )
-            )
-            connection.frame_received.connect(
-                lambda frame, conn=connection: self.record_frame(
-                    conn.layout_name, "RX", frame
-                )
-            )
-            self.connections[name] = connection
 
         if serial:
             connection_logger.info(
@@ -721,6 +708,44 @@ class MainWindow(QMainWindow):
                 },
             )
             connection.connect(endpoint, settings["port"])
+
+    def _connect_simulator(self, name: str) -> None:
+        connection = self.connections.get(name)
+        if connection is None:
+            connection = self._add_connection(SimulatorConnection(name, self))
+        # The connection logs its start, nodes and any skipped saved nodes.
+        connection.connect(self.layout_settings[name]["logical_layout"])
+        if connection.state == "Connected" and connection.skipped_nodes:
+            # The skipped nodes remain listed as Offline; the log names each reason.
+            numbers = ", ".join(str(number) for number in connection.skipped_nodes)
+            self.statusBar().showMessage(
+                f"Layout '{name}': simulator skipped node(s) {numbers} "
+                "(incomplete saved metadata; see log)",
+                10000,
+            )
+
+    def _add_connection(self, connection):
+        """Observe a new connection's state, failures and traffic for its layout."""
+        connection.state_changed.connect(
+            lambda state, conn=connection: self.set_connection_state(
+                conn.layout_name, state
+            )
+        )
+        connection.failed.connect(
+            lambda message, conn=connection: self.connection_failed(conn, message)
+        )
+        connection.frame_sent.connect(
+            lambda frame, conn=connection: self.record_frame(
+                conn.layout_name, "TX", frame
+            )
+        )
+        connection.frame_received.connect(
+            lambda frame, conn=connection: self.record_frame(
+                conn.layout_name, "RX", frame
+            )
+        )
+        self.connections[connection.layout_name] = connection
+        return connection
 
     def disconnect_layout(self) -> None:
         action = self.layout_group.checkedAction()
@@ -773,20 +798,23 @@ class MainWindow(QMainWindow):
                 "Wait for Save or restore to finish before sending raw frames.", 5000
             )
             return
-        if isinstance(connection, (TcpConnection, SerialConnection)):
+        if connection is not None:
             SendFrameDialog(name, connection, self).exec()
 
     def connection_failed(
-        self, connection: TcpConnection | SerialConnection, message: str
+        self,
+        connection: TcpConnection | SerialConnection | SimulatorConnection,
+        message: str,
     ) -> None:
         name = connection.layout_name
         settings = self.layout_settings[name]
         serial = settings["connection_type"] == "Serial"
-        endpoint = (
-            connection.device_path
-            if serial
-            else f"{settings['host']}:{settings['port']}"
-        )
+        if serial:
+            endpoint = connection.device_path
+        elif settings["connection_type"] == "Simulator":
+            endpoint = "the simulator"
+        else:
+            endpoint = f"{settings['host']}:{settings['port']}"
         connection_logger.error(
             "%s connection failed: %s",
             settings["connection_type"],
@@ -892,6 +920,8 @@ class MainWindow(QMainWindow):
             return True
         if isinstance(connection, SerialConnection):
             return not connection.port.isOpen()
+        if isinstance(connection, SimulatorConnection):
+            return True  # A failed simulator start leaves nothing open.
         return connection.socket.state() == QAbstractSocket.SocketState.UnconnectedState
 
     def save_layouts(

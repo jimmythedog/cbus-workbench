@@ -193,6 +193,8 @@ class LayoutView(QWidget):
         if settings["connection_type"] == "Serial":
             device = "Auto" if settings["auto_select"] else settings["serial_port"]
             endpoint = f"Device: {device}"
+        elif settings["connection_type"] == "Simulator":
+            endpoint = "Simulator"
         else:
             endpoint = f"Host: {settings['host']}  Port: {settings['port']}"
         summary = f"{name} — {endpoint}  CAN ID: {settings['can_id']}"

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from .serial_connection import SerialConnection
+from .simulator_connection import SimulatorConnection
 from .tcp_connection import TcpConnection
 
 logger = logging.getLogger("workbench.connection")
@@ -22,7 +23,7 @@ class SendFrameDialog(QDialog):
     def __init__(
         self,
         layout_name: str,
-        connection: TcpConnection | SerialConnection,
+        connection: TcpConnection | SerialConnection | SimulatorConnection,
         parent=None,
     ):
         super().__init__(parent)

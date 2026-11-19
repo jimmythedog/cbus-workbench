@@ -48,7 +48,7 @@ class AppSettingsTests(unittest.TestCase):
         )
         self.assertFalse(self.path.exists())
 
-    def test_tcp_and_serial_settings_round_trip_with_layout_names_as_keys(self):
+    def test_connection_settings_round_trip_with_layout_names_as_keys(self):
         settings = {
             "default_layout": "Home",
             "layouts": {
@@ -83,6 +83,19 @@ class AppSettingsTests(unittest.TestCase):
                         },
                     },
                 },
+                # The simulator has no endpoint; inactive TCP/serial fields are kept.
+                "Bench": {
+                    "logical_layout": "track-plan",
+                    "auto_connect": False,
+                    "node_poll_seconds": 10,
+                    "connection": {
+                        "type": "Simulator",
+                        "host": "localhost",
+                        "port": 5550,
+                        "serial_port": "",
+                        "can_id": 125,
+                    },
+                },
             },
         }
 
@@ -90,7 +103,9 @@ class AppSettingsTests(unittest.TestCase):
 
         self.assertEqual(load_settings(self.path), settings)
         self.assertEqual(yaml.safe_load(self.path.read_text()), settings)
-        self.assertEqual(set(load_settings(self.path)["layouts"]), {"Home", "Workshop"})
+        self.assertEqual(
+            set(load_settings(self.path)["layouts"]), {"Home", "Workshop", "Bench"}
+        )
 
         ui = layout_settings_for_ui(load_settings(self.path)["layouts"])
         self.assertEqual(layout_settings_for_storage(ui), settings["layouts"])

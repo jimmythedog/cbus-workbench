@@ -1109,6 +1109,119 @@ available, then emits and logs each frame at TRACE. Like TCP, serial `send` vali
 one complete printable ASCII frame, queues it with `QSerialPort.write` and logs it at
 TRACE. Both transports use the same Send GridConnect Frame dialog. Disconnecting,
 changing the device path, deleting the layout or closing the window closes the port.
+A Simulator layout gets a `SimulatorConnection` (issue #90): an in-process
+connection with the same signals and `send` contract, and no endpoint settings.
+Connect binds it to the layout's logical layout; Disconnect discards its state.
+
+#### CBUS simulator
+
+The simulator (issue #90, Stage 1) lets CW's ordinary discovery, editing,
+backup, Compare and Restore run without hardware. `cbus_simulator` is the
+Qt-independent protocol core: `CbusSimulator.handle(frame)` returns reply frames.
+`SimulatorConnection` is the transport. No workflow code knows about either.
+State is in memory only: Disconnect discards it, and each connection has its own
+nodes even when connections share a logical layout.
+
+**Nodes.** On Connect, `load_simulated_nodes()` builds one node per saved
+`metadata.yaml` that identifies it honestly: a CAN ID (1–127) and parameters 1, 3
+and 8 (the PNN fields). Other saved nodes are skipped. The log records the reason,
+the status bar names them, and they stay Offline. Saved CAN IDs are used as they
+are, even when they collide. NVs start at zero for a saved parameter 6. This is a
+simulator rule, not a firmware default. Event tables start empty. A missing
+capability parameter leaves only its own requests unanswered (P0: RQNPN(0); P4:
+new events; P5: EV requests; P6: NV requests), so CW times out as it would with
+hardware. Replies carry saved values. The one runtime exception is a VLCB-flagged
+node's learn flag in RQNPN(8), which only the EV writer reads during teaching,
+so CW's metadata merge leaves the file unchanged (unless P8 was saved with bit
+5 set; see below).
+
+**Semantics.** Every node uses legacy CBUS behaviour (Developer's Guide 6b;
+CBUSlib `FliM.c`/`events.c` at commit bec37f9), including nodes whose parameter 8
+advertises VLCB:
+
+- Event identities are `(NN, EN)` exactly as taught. Short events (NN 0) are
+  therefore distinct from long ones. Event slots are 1-based, and a new event
+  takes the lowest free slot up to P4.
+- EVs below the highest taught EV read as zero; EVs above it are absent
+  (CMDERR 5). EV 0 returns the number of EVs.
+- NNLRN for another node, simulated or not, takes a learning node out of learn
+  mode. EVLRN, REQEV and EVULN apply to every node in learn mode.
+- Any NV or EV byte is accepted. No NV or EV write changes another value, and
+  no event triggers a module action: validation and side effects are firmware
+  specific.
+
+Deliberate differences from CBUSlib:
+
+- EVANS carries the event's NN, as the VLCB Opcode specification defines and
+  CW's `EvWrite` requires for long events. CBUSlib sends the consumer's NN.
+- NNULN releases only the addressed node, as specified. CBUSlib's learn-mode
+  switch ignores the NN.
+- EVLRN checks the EV index before creating an event, so an invalid request
+  changes nothing. CBUSlib may leave an empty event behind, and reports a full
+  table before a bad index.
+- CBUSlib's FCU workarounds are firmware storage details and are not simulated:
+  it ignores a zero EVLRN for a new event and deletes events whose EVs are all
+  zero.
+
+**Known limitations.**
+
+- **VLCB:** only the learn flag is VLCB-specific. In RQNPN(8) replies, a
+  VLCB-flagged node reports P8 bit 5 from its current learn mode, as VLCB Event
+  Teach requires and CW checks. Its other bits, and the PNN flags, keep their
+  saved values. All other VLCB-specific
+  behaviour is out of scope (#89). CW reads EVs with REVAL and treats CMDERR 5
+  as absence only on legacy nodes. On a VLCB-flagged node, an event taught
+  without every EV therefore leaves EV discovery incomplete, and an Events Save
+  of such an event ends with CW's existing incomplete-refresh safety block.
+- **Saved learn flag:** if P8 was saved with bit 5 set, PNN keeps reporting it,
+  so CW treats the node as in learn mode, which blocks Refresh Node. On a legacy
+  node RQNPN(8) reports it too. A VLCB-flagged node instead reports the bit
+  clear outside learn mode, and the metadata merge then saves that cleared value.
+- **Setup mode:** simulated nodes are never in setup mode, so node-number
+  assignment (RQNP/SNN) cannot be simulated.
+- **No failures:** there is no timing, bus load or fault simulation. CW's
+  timeout and recovery paths run only for unanswered requests.
+- **Shared layout data:** the simulator never writes files, but the
+  connection shares its logical layout: backups taken from simulated nodes join
+  the layout's ordinary backups, and annotations edited while simulated are the
+  layout's own.
+
+The intended workflow is CW's ordinary Node or Layout Restore of a physical
+backup onto the simulated nodes, then experimenting with them.
+
+Callers record their outstanding request after `send()` returns, so replies are
+queued and delivered on a later event-loop turn, never inside `send()`:
+
+```text
+service -> send(frame) -> frame_sent -> CbusSimulator.handle(frame) -> replies
+        <- send returns; service starts its response timer
+zero-delay QTimer -> frame_received(reply) for each queued reply
+Disconnect -> drop simulator state and undelivered replies
+```
+
+**Opcode coverage.** This covers every opcode CW recognises (`traffic.OPCODE_NAMES`
+and the accessory events in `observed_events`). Requests addressed by NN are
+ignored for other node numbers. Frames that aren't standard frames, or whose
+length doesn't match their opcode, are ignored.
+
+| Opcode (hex) | Role | Simulator behaviour | State | Status |
+|---|---|---|---|---|
+| QNN (0D) | request to all | PNN(NN, P1, P3, saved P8) from every node, by node number | – | Implemented |
+| RQNPN (73) | request | PARAN(i) when saved (P8 bit 5 follows learn mode on VLCB-flagged nodes); i > P0: CMDERR 9; unknown value: none | – | Implemented |
+| NVRD (71) | request | NVANS for 1..P6; otherwise CMDERR 10; unknown P6: none | – | Implemented |
+| NVSET (96) | request | store, WRACK for 1..P6; otherwise CMDERR 10; unknown P6: none | NV | Implemented |
+| NNLRN (53) | request | addressed node enters learn mode; any other learning node leaves it; no reply | learn | Implemented |
+| NNULN (54) | request | addressed node leaves learn mode; no reply | learn | Implemented |
+| RQEVN (58) | request | NUMEV(stored count) | – | Implemented |
+| NERD (57) | request | ENRSP per event, in slot order | – | Implemented |
+| REVAL (9C) | request | NEVAL; ev > P5: CMDERR 6; empty slot: CMDERR 7; above highest taught: CMDERR 5; ev 0: count; unknown P5: none | – | Implemented |
+| EVLRN (D2) | learn mode | create or update, WRACK; ev 0 or > P5: CMDERR 6; table full: CMDERR 4; unknown P4 (new event) or P5: none | events | Implemented |
+| REQEV (B2) | learn mode | EVANS with the event's NN; unknown P5: none; unknown event: CMDERR 7; ev > P5: CMDERR 6; above highest taught: CMDERR 5; ev 0: count | – | Implemented |
+| EVULN (95) | learn mode | remove the event and all its EVs; no reply | events | Implemented |
+| RQNP (10), SNN (42) | setup mode | ignored: no simulated node is in setup mode | – | Limitation |
+| ACON/ACOF/ASON/ASOF, their 1–3 data-byte forms, ARON/AROF/ARSON/ARSOF families (90, 91, 98, 99, B0, B1, B8, B9, D0, D1, D8, D9, F0, F1, F8, F9, 93, 94, 9D, 9E, B3, B4, BD, BE, D4, D5, DD, DE, F3, F4, FD, FE) | event traffic | ignored: module actions are firmware-specific; nodes produce no events | – | Ignored |
+| RQNN (50), NNREL (51), NNACK (52), WRACK (59), CMDERR (6F), NUMEV (74), NVANS (97), PARAN (9B), NEVAL (B5), PNN (B6), EVANS (D3), PARAMS (EF), ENRSP (F2) | node replies | ignored: nodes do not act on other nodes' replies | – | Ignored |
+| any other opcode | – | ignored without error | – | Ignored |
 
 `workbench.serial_ports` lists ports with `QSerialPortInfo`, which reads OS
 metadata without opening a port. All ports are listed; USB ones first. Linux

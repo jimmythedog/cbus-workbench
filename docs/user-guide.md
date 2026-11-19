@@ -22,6 +22,7 @@ needing a network connection.
 - [Backup descriptions and warning icons](#backup-descriptions-and-warning-icons)
 - [Viewing and comparing backups](#viewing-and-comparing-backups)
 - [Restoring a node backup](#restoring-a-node-backup)
+- [CBUS simulator](#cbus-simulator)
 - [Diagnostics and application directories](#diagnostics-and-application-directories)
 
 ## Layouts and connections
@@ -51,6 +52,8 @@ Enter a name and a logical layout, then choose the connection type:
 
   Listing ports never opens them or sends CBUS traffic. Layouts saved before
   Auto-select existed keep using their configured device path.
+- **Simulator**: no settings. Workbench simulates the logical layout's saved
+  nodes in memory; see [CBUS simulator](#cbus-simulator).
 
 The **CAN ID** is Workbench's transmitting identifier, from 100 to 127, defaulting
 to 126. Choose an ID unique on your network. Enable **Auto-connect on startup**
@@ -765,6 +768,41 @@ warning before using **Layouts → Refresh** to reread hardware and compare
 again. Refreshing does not retry failed writes or clear safety blocks. Reconnect
 when the transport has failed; a report from a disconnected service cannot retry
 through a replacement connection. Ordinary backup Compare has no Retry.
+
+## CBUS simulator
+
+The simulator lets you try configuration changes without a CBUS network. It
+simulates the nodes Workbench has already seen on the layout's logical layout,
+using their saved identity, so you can discover, edit, back up, compare and
+restore them just as you would real nodes. Nothing is sent to hardware.
+
+1. Choose **Layouts → New…** (or **Edit…** on a disconnected layout), choose the
+   logical layout whose nodes you want and set the connection type to
+   **Simulator**. There are no endpoint settings; the CAN ID and node polling
+   work as for other connections.
+2. Choose **Connect**. Discovery finds each saved node that has a remembered CAN
+   ID and module identity. Nodes without enough saved information stay
+   **Offline**; the status bar lists them and the log gives each reason.
+3. Every simulated node starts with all NVs set to **0** and **no consumed
+   events**. These are starting values, not the module's real defaults.
+4. To work from your real configuration, restore an existing node or layout
+   backup onto the simulated nodes with the usual
+   [Restore](#restoring-a-node-backup). Then edit, compare and restore as normal.
+
+Simulated changes exist only while connected. **Disconnect discards them**, and
+the next Connect starts again from zero NVs and empty event tables. Each
+connection has its own simulated nodes, even when connections share a logical
+layout, and the simulator never changes a physical network. Saved node
+information is shared with the logical layout: names you edit while simulated
+are kept, and backups you create are saved with the layout's other backups, so
+give them a description that identifies them.
+
+The simulator follows standard CBUS behaviour only: it does not reproduce
+module-specific firmware, so events do not operate outputs and changing one value
+never changes another. Nodes that advertise VLCB are simulated with CBUS event
+behaviour; on them, an event that does not define every EV cannot be read back
+completely, so Save reports an incomplete refresh and further Saves need a
+reconnect. Assigning node numbers cannot be simulated.
 
 ## Diagnostics and application directories
 

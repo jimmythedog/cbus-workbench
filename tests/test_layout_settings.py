@@ -161,14 +161,27 @@ class LayoutSettingsTests(unittest.TestCase):
         self.assertEqual(updated["serial_port"], "/dev/ttyACM1")
         self.assertEqual(updated["can_id"], 127)
 
-    def test_can_id_is_available_for_tcp_and_serial(self):
+    def test_can_id_is_available_for_every_connection_type(self):
         dialog = LayoutSettingsDialog()
         self.addCleanup(dialog.close)
-        for connection_type in ("TCP/IP", "Serial"):
+        for connection_type in ("TCP/IP", "Serial", "Simulator"):
             with self.subTest(connection_type=connection_type):
                 dialog.connection_type_combo.setCurrentText(connection_type)
                 self.assertTrue(dialog.can_id_spin.isVisibleTo(dialog))
                 self.assertEqual(dialog.settings()["can_id"], 126)
+                self.assertEqual(dialog.settings()["connection_type"], connection_type)
+
+    def test_simulator_has_no_connection_settings(self):
+        dialog = LayoutSettingsDialog(connection_type="Simulator")
+        self.addCleanup(dialog.close)
+        for field in (
+            dialog.host_edit,
+            dialog.port_spin,
+            dialog.auto_select_check,
+            dialog.serial_port_edit,
+            dialog.confirmed_label,
+        ):
+            self.assertFalse(field.isVisibleTo(dialog))
 
     def test_dialog_keeps_labels_and_text_fields_usable_across_styles_and_fonts(self):
         previous_style = self.app.style().objectName()

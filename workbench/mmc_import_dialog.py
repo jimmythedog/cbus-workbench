@@ -191,6 +191,8 @@ class MmcImportDialog(QDialog):
             connection = plan.settings["layouts"][target.name]["connection"]
             if connection["type"] == "Serial":
                 endpoint = f"Serial — device: {connection['serial_port']}"
+            elif connection["type"] == "Simulator":
+                endpoint = "Simulator"
             else:
                 endpoint = f"TCP/IP — host: {connection['host'] or '(not set)'}; port: {connection['port']}"
             note = (

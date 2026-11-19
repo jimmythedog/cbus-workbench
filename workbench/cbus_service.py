@@ -4,6 +4,7 @@ import logging
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -24,6 +25,10 @@ from .pnn import Pnn, decode_pnn
 from .serial_connection import SerialConnection
 from .tcp_connection import TcpConnection
 from .wrack import decode_wrack
+
+if TYPE_CHECKING:
+    # Annotation only: the simulator loads saved metadata, which imports this module.
+    from .simulator_connection import SimulatorConnection
 
 logger = logging.getLogger("workbench.cbus")
 PARAMETER_READ_ORDER = (2, 4, 5, 6, 7, 8, 10, 20, 19, 9, 1, 3)
@@ -82,7 +87,11 @@ class CbusService(QObject):
     node_state_updated = Signal(int)
     event_received = Signal(object)
 
-    def __init__(self, connection: TcpConnection | SerialConnection, can_id: int):
+    def __init__(
+        self,
+        connection: TcpConnection | SerialConnection | SimulatorConnection,
+        can_id: int,
+    ):
         """Use a unique PC CAN ID (100–127) assigned for this network."""
         if not 100 <= can_id <= 127:
             raise ValueError("PC CAN ID must be between 100 and 127")

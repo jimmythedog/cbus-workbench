@@ -74,7 +74,7 @@ def _validate_layout(name: object, value: object) -> dict:
         raise SettingsError(
             f"Layout '{name}' connection needs type, host, port and serial_port"
         )
-    if connection["type"] not in ("TCP/IP", "Serial"):
+    if connection["type"] not in ("TCP/IP", "Serial", "Simulator"):
         raise SettingsError(f"Layout '{name}' has an unsupported connection type")
     if not isinstance(connection["host"], str) or not isinstance(
         connection["serial_port"], str

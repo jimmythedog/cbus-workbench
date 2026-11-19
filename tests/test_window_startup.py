@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import ClassVar
 from unittest.mock import patch
 
+import yaml
 from layout_fixture import sample_settings
 from PySide6.QtCore import QObject, Qt
 from PySide6.QtTest import QTest
@@ -455,6 +456,56 @@ class WindowStartupTests(unittest.TestCase):
             QTest.qWait(60)
             self.assertEqual(window.discovery_status.text(), "Incomplete")
             self.assert_layout_busy(view, False)
+
+    def test_simulator_layout_connects_without_endpoint_and_disconnects(self):
+        settings = sample_settings()
+        settings["layouts"]["Home"]["connection"]["type"] = "Simulator"
+        save_settings(settings, self.path)
+        window = self.open_window()
+        window.connect_layout()
+        self.assertEqual(window.connection_status.text(), "Connected")
+        self.assertEqual(window.discovery_status.text(), "Discovering…")
+        sent = []
+        window.connections["Home"].frame_sent.connect(sent.append)
+
+        QTest.mouseDClick(window.connection_status, Qt.MouseButton.LeftButton)
+        self.assertEqual(window.connection_status.text(), "Disconnected")
+        self.assertTrue(window.discovery_status.isHidden())
+
+        # Reconnecting starts ordinary discovery again on the same layout.
+        QTest.mouseDClick(window.connection_status, Qt.MouseButton.LeftButton)
+        self.assertEqual(window.connection_status.text(), "Connected")
+        self.assertEqual(sent, [b":SBFC0N0D;"])
+
+    def test_simulator_discovers_saved_nodes_without_changing_their_metadata(self):
+        from workbench.node_backup_files import backup_directory
+
+        paths = {}
+        for number, saved in (
+            (256, {"canId": 4, "parameters": [8, 165, 1, 32, 10, 4, 2, 3, 31]}),
+            (257, {"parameters": [8, 165, 1, 32, 10, 4, 2, 3, 31]}),  # No CAN ID.
+        ):
+            paths[number] = backup_directory("home", number).parent / "metadata.yaml"
+            paths[number].parent.mkdir(parents=True)
+            paths[number].write_text(yaml.safe_dump(saved, sort_keys=False))
+        before = {number: path.read_bytes() for number, path in paths.items()}
+        settings = sample_settings()
+        settings["layouts"]["Home"]["connection"]["type"] = "Simulator"
+        save_settings(settings, self.path)
+        window = self.open_window()
+
+        with patch("workbench.response_timeout.RESPONSE_TIMEOUT_MS", 30):
+            window.connect_layout()
+            self.assertIn("skipped node(s) 257", window.statusBar().currentMessage())
+            QTest.qWait(150)
+
+        service = window.cbus_services["Home"]
+        self.assertEqual(window.discovery_status.text(), "Ready")
+        self.assertEqual(service.presence, {256: True, 257: False})
+        self.assertEqual(service.node_states[256].parameters[6], 2)
+        self.assertEqual(
+            {number: path.read_bytes() for number, path in paths.items()}, before
+        )
 
     def test_status_bar_orders_separate_fields_and_shows_ready(self):
         settings = sample_settings()
