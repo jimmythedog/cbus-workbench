@@ -620,6 +620,8 @@ class MainWindow(QMainWindow):
             return
         details = self.layouts[name].node_view.details
         saving_configuration = details.saving_configuration
+        # Closing ends any discovery, which forgets its suspended selection.
+        selected = self.layouts[name].node_view.selected_number()
         service.close()
         # Closing the service completes an interrupted Save before rebuilding
         # selection. Keep its result through the resulting show_node() calls.
@@ -634,7 +636,7 @@ class MainWindow(QMainWindow):
         view.node_view.clear_identities()
         logical_layout = self.layout_settings[name]["logical_layout"]
         view.node_view.details.logical_layout = logical_layout
-        view.node_view.show_saved_nodes(logical_layout)
+        view.node_view.show_saved_nodes(logical_layout, selected)
         view.refresh_consumers()  # Without a service, every node is undetermined.
         if saving_configuration:
             details.show_configuration_result(save_result)

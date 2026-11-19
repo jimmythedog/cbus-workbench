@@ -464,8 +464,20 @@ class NodeView(QSplitter):
         self.state_lookup = None
         self.node_list.clear()
 
-    def show_saved_nodes(self, logical_layout):
-        """Load saved identification independently of live discovery and backups."""
+    def selected_number(self) -> int | None:
+        """The selected node, including a selection suspended for discovery."""
+        if self.discovering:
+            return self.selection_before_discovery
+        item = self.node_list.currentItem()
+        return node_number(item.data(Qt.ItemDataRole.UserRole)) if item else None
+
+    def show_saved_nodes(self, logical_layout, selected: int | None = None):
+        """Load saved identification independently of live discovery and backups.
+
+        A rebuild after disconnect passes its previous selection: that node stays
+        selected if it was saved, otherwise nothing is selected (#176). Without
+        a previous selection, the first node is selected as on opening.
+        """
         self.saved_metadata = {
             number: load_metadata(logical_layout, number)
             for number in saved_node_numbers(logical_layout)
@@ -488,7 +500,21 @@ class NodeView(QSplitter):
             item.setData(Qt.ItemDataRole.UserRole, number)
             self.node_list.addItem(item)
         self.refresh_annotation_names()
-        if (
+        if selected is not None:
+            item = None
+            for index in range(self.node_list.count()):
+                candidate = self.node_list.item(index)
+                if node_number(candidate.data(Qt.ItemDataRole.UserRole)) == selected:
+                    item = candidate
+                    break
+            self.node_list.setCurrentItem(item)
+            trace(
+                logger,
+                "Saved node selection %s",
+                "restored" if item else "cleared: node not saved",
+                extra={"fields": {"layout": logical_layout, "node_number": selected}},
+            )
+        elif (
             not self.discovering
             and self.node_list.currentItem() is None
             and self.node_list.count()

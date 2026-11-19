@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
 
 from workbench.cbus_service import DiscoveryProgress, NodeState
 from workbench.node_backup_files import node_backup, save_backup
+from workbench.node_details import DEFAULT_NODE_TITLE
+from workbench.node_metadata import save_metadata
 from workbench.pnn import Pnn
 from workbench.send_event_dialog import SendEventDialog, send_existing
 from workbench.send_frame_dialog import SendFrameDialog
@@ -334,8 +336,10 @@ class SendFrameDialogTests(unittest.TestCase):
             self.connect_home()
             service = self.window.cbus_services["Home"]
             done = DiscoveryProgress.COMPLETE
+            # The save target is row 1, so a rebuild selecting row 0 would show
+            # its result under node 258 (#176).
             state = NodeState(
-                Pnn(258, 13, 34, 4),
+                Pnn(259, 13, 34, 4),
                 parameters={5: 0, 6: 1},
                 nv_values={1: 7},
                 parameter_progress=done,
@@ -344,11 +348,11 @@ class SendFrameDialogTests(unittest.TestCase):
                 ev_progress=DiscoveryProgress.SKIPPED,
                 can_id=2,
             )
-            service.node_states[258] = state
-            service.nodes[258] = state.identity
+            service.node_states[259] = state
+            service.nodes[259] = state.identity
             backup = node_backup(state)
             save_backup("home", backup)
-            save_backup("home", {**backup, "node": 259})
+            save_backup("home", {**backup, "node": 258})
             view = self.window.layouts["Home"].node_view
             view.show_identity(state.identity)
             service.discovery_status_changed.emit("Configuration ready")
@@ -360,22 +364,85 @@ class SendFrameDialogTests(unittest.TestCase):
             service.nv_save.finished.connect(lambda *args: results.append(args))
             details.save_button.click()
             self.wait_for(lambda: self.peer.bytesAvailable() > 0)
-            self.assertIn(b"N9601020109", bytes(self.peer.readAll()))
+            self.assertIn(b"N9601030109", bytes(self.peer.readAll()))
             self.peer.close()  # Full window/service/selection teardown.
             self.wait_for(lambda: "Home" not in self.window.cbus_services)
             self.assertEqual(len(results), 1)
             self.assertFalse(results[0][1])
             expected = details.nv_result.text()
-            self.assertTrue(expected.startswith("Node 258: Partial Save:"))
+            self.assertTrue(expected.startswith("Node 259: Partial Save:"))
             self.assertIn("Connection ended", expected)
             self.assertEqual(details.events_result.text(), "")
-            self.assertEqual(view.node_list.currentItem().text(), "258 (Offline)")
+            self.assertEqual(view.node_list.currentItem().text(), "259 (Offline)")
             self.assertIsNone(details.desired_configuration)
             self.assertFalse(details.saving_configuration)
-            view.node_list.setCurrentRow(1)
-            self.assertEqual(view.node_list.currentItem().text(), "259 (Offline)")
+            view.node_list.setCurrentRow(0)
+            self.assertEqual(view.node_list.currentItem().text(), "258 (Offline)")
             self.assertEqual(details.nv_result.text(), "")
             self.assertEqual(details.events_result.text(), "")
+
+    def use_temporary_data(self):
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        paths = patch(
+            "workbench.node_backup_files.application_directories",
+            return_value={"Data": Path(directory.name)},
+        )
+        paths.start()
+        self.addCleanup(paths.stop)
+
+    def disconnect_home(self):
+        self.peer.close()
+        self.wait_for(lambda: "Home" not in self.window.cbus_services)
+
+    def show_live_nodes(self, saved):
+        """Discover nodes 258 and 259; only those in saved have metadata."""
+        service = self.window.cbus_services["Home"]
+        view = self.window.layouts["Home"].node_view
+        for number in (258, 259):
+            state = NodeState(Pnn(number, 13, 34, 4))
+            service.node_states[number] = state
+            if number in saved:
+                save_metadata("home", state)
+            view.show_identity(state.identity)
+        service.discovery_status_changed.emit("Configuration ready")
+        return view
+
+    def test_disconnect_keeps_selected_saved_node(self):
+        self.use_temporary_data()
+        self.connect_home()
+        view = self.show_live_nodes(saved=(258, 259))
+        self.window.layouts["Home"].select_node(259)
+        self.disconnect_home()
+        self.assertEqual(view.node_list.currentItem().text(), "259 (Offline)")
+        self.assertEqual(view.details.node, 259)
+        self.assertEqual(view.details.summary.title(), "Node 259")
+        self.assertEqual(view.details.status.text(), "Offline")
+
+    def test_disconnect_during_discovery_restores_suspended_selection(self):
+        self.use_temporary_data()
+        view = self.window.layouts["Home"].node_view
+        for number in (258, 259):
+            save_metadata("home", NodeState(Pnn(number, 13, 34, 4)))
+        view.show_saved_nodes("home")
+        self.window.layouts["Home"].select_node(259)
+        self.connect_home()
+        self.assertTrue(view.discovering)
+        self.assertIsNone(view.node_list.currentItem())
+        self.disconnect_home()
+        self.assertEqual(view.node_list.currentItem().text(), "259 (Offline)")
+        self.assertEqual(view.details.node, 259)
+
+    def test_disconnect_clears_selected_node_without_saved_metadata(self):
+        self.use_temporary_data()
+        self.connect_home()
+        view = self.show_live_nodes(saved=(258,))
+        self.window.layouts["Home"].select_node(259)
+        self.disconnect_home()
+        self.assertEqual(view.node_list.count(), 1)
+        self.assertIsNone(view.node_list.currentItem())
+        self.assertIsNone(view.details.node)
+        self.assertEqual(view.details.summary.title(), DEFAULT_NODE_TITLE)
 
     def test_menu_action_requires_connected_tcp_layout(self):
         self.assertFalse(self.window.send_frame_action.isEnabled())
