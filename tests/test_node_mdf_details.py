@@ -528,6 +528,43 @@ class NodeMdfDetailsTests(unittest.TestCase):
         self.assertEqual(self.label.text(), "None")
         self.assertFalse(self.details.edit_button.isEnabled())
 
+    def test_unsupported_mdf_leaves_raw_values_live_and_offline(self):
+        # Valid for MMC, but nested tabs are an explicit unsupported structure.
+        data = json.loads((FIXTURES / ACE).read_text())
+        data["nodeVariables"].append(
+            {
+                "type": "NodeVariableGroup",
+                "displayTitle": "Group",
+                "groupItems": [{"type": "NodeVariableTabs", "tabPanels": []}],
+            }
+        )
+        (self.system / ACE).write_text(json.dumps(data))
+        # Qt passes slot exceptions to sys.excepthook (the error dialog), not
+        # to the code that emitted the signal.
+        escaped = []
+        hook = patch("sys.excepthook", lambda *error: escaped.append(error))
+        hook.start()
+        self.addCleanup(hook.stop)
+        view = self.details.mdf_values
+        self.layout.show_live_layout("yard", list)
+        self.discover()
+        self.assertEqual(self.label.text(), f"{ACE} (System)")
+        self.assertIs(self.details.variables.currentWidget(), self.details.raw_values)
+        self.assertEqual(view.navigation.count(), 1)
+        save_metadata("yard", self.service.node_states[42])
+
+        # Disconnecting (also done when the window closes) reselects the saved node.
+        self.layout.set_connected(False)
+        self.details.cbus_service = None
+        self.view.clear_identities()
+        self.view.show_saved_nodes("yard")
+        self.assertEqual(escaped, [])
+        self.assertEqual(self.view.node_list.item(0).text(), "42 - CANACE3 (Offline)")
+        self.assertEqual(self.details.status.text(), "Offline")
+        self.assertEqual(self.details.firmware.text(), "2g")
+        self.assertIs(self.details.variables.currentWidget(), self.details.raw_values)
+        self.assertEqual(view.navigation.count(), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

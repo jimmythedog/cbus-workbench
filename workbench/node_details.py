@@ -428,18 +428,43 @@ class NodeDetails(QWidget):
             title += f" — {name}"
         self.summary.setTitle(title)
         if self.live_state is None and self.live_mdf and isinstance(self.node, int):
-            definition = substitute_tokens(self.live_mdf.data, data.get("tokens", {}))
-            self.mdf_values.set_definition(
-                definition,
-                source=self.live_mdf.data,
-                token_editor=self.token_label_editor,
-            )
+            self.present_mdf(self.node)
             # Unknown hardware bytes stay blank/read-only; the labels are local.
             self.mdf_values.show_live_values(None, {}, self.node)
-            self.variables.setCurrentIndex(
-                1 if self.mdf_values.pages.count() > 1 else 0
-            )
         self.node_events.refresh_annotations(self.annotation_number())
+
+    def present_mdf(self, node_number: int) -> dict | None:
+        """Show live_mdf's NV pages with the node's token names; return the definition.
+
+        Live and saved (offline) nodes share this so an MDF the renderer cannot
+        present is always logged and leaves Raw Values, never an error dialog (#174).
+        """
+        mdf = self.live_mdf
+        definition = None
+        try:
+            definition = (
+                substitute_tokens(
+                    mdf.data, self.annotations.load(node_number).get("tokens", {})
+                )
+                if mdf and self.annotations
+                else mdf.data
+                if mdf
+                else None
+            )
+            self.mdf_values.set_definition(
+                definition,
+                source=mdf.data if mdf else None,
+                token_editor=self.token_label_editor if self.annotations else None,
+            )
+        except ValueError, KeyError, TypeError:
+            logger.exception(
+                "Unsupported MDF presentation node=%s path=%s", node_number, mdf.path
+            )
+            self.live_mdf = None
+        self.variables.setCurrentIndex(
+            1 if self.live_mdf and self.mdf_values.pages.count() > 1 else 0
+        )
+        return definition
 
     def refresh_node_name(self):
         if self.annotations:
@@ -754,34 +779,7 @@ class NodeDetails(QWidget):
         # Freeze presentation during Edit just as we freeze its working copy.
         if self.desired_configuration is None:
             self.live_mdf = mdf
-            try:
-                definition = (
-                    substitute_tokens(
-                        mdf.data,
-                        self.annotations.load(state.identity.node_number).get(
-                            "tokens", {}
-                        ),
-                    )
-                    if mdf and self.annotations
-                    else mdf.data
-                    if mdf
-                    else None
-                )
-                self.mdf_values.set_definition(
-                    definition,
-                    source=mdf.data if mdf else None,
-                    token_editor=self.token_label_editor if self.annotations else None,
-                )
-            except ValueError, KeyError, TypeError:
-                logger.exception(
-                    "Unsupported MDF presentation node=%s path=%s",
-                    state.identity.node_number,
-                    mdf.path,
-                )
-                self.live_mdf = None
-            self.variables.setCurrentIndex(
-                1 if self.live_mdf and self.mdf_values.pages.count() > 1 else 0
-            )
+            definition = self.present_mdf(state.identity.node_number)
         self.update_connection_details()
         self.update_backup_buttons()
         self.show_parameters(state.parameters, module_name)
